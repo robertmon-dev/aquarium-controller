@@ -1,5 +1,8 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x20000, 0x600000,
-storage,  data, spiffs,  ,        0x900000,
+# Flash: 8 MiB (CONFIG_ESPTOOLPY_FLASHSIZE_8MB).
+# 0x10000 + 0x300000 + 0x4F0000 = 0x800000 = EXACT 8 MiB.
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x300000,
+storage,  data, spiffs,  0x310000, 0x4F0000,
