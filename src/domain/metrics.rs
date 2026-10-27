@@ -1,5 +1,45 @@
 use serde::{Deserialize, Serialize};
 
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct WaterTemperature(f32);
+
+impl WaterTemperature {
+    pub const MIN_SAFE_CELSIUS: f32 = 24.0;
+    pub const MAX_SAFE_CELSIUS: f32 = 31.0;
+    pub const POWER_ON_RESET_CELSIUS: f32 = 85.0;
+
+    pub fn new(celsius: f32) -> Result<Self, &'static str> {
+        if celsius.is_nan() {
+            return Err("Temperature reading is NaN");
+        }
+
+        if (celsius - Self::POWER_ON_RESET_CELSIUS).abs() < f32::EPSILON {
+            return Err("DS18B20 power-on reset value detected (85.0°C)");
+        }
+
+        if !(Self::MIN_SAFE_CELSIUS..=Self::MAX_SAFE_CELSIUS).contains(&celsius) {
+            return Err(
+                "Water temperature is outside the discus safe operating range (24.0°C - 31.0°C)",
+            );
+        }
+
+        Ok(Self(celsius))
+    }
+
+    #[inline]
+    pub fn as_celsius(&self) -> f32 {
+        self.0
+    }
+}
+
+impl fmt::Display for WaterTemperature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.2} °C", self.0)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemMode {
@@ -24,10 +64,11 @@ pub struct TankTelemetryDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TemperatureMetricsDto {
-    pub current_celsius: f32,
+    pub tank_celsius: Option<f32>,
+    pub sump_celsius: Option<f32>,
     pub target_celsius: f32,
     pub heater_active: bool,
-    pub sensor_healthy: bool,
+    pub sensors_healthy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
