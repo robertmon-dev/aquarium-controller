@@ -41,7 +41,10 @@ ESP_ENV = command -v ldproxy >/dev/null 2>&1 || . $$HOME/export-esp.sh >/dev/nul
 
 .PHONY: help
 help: ## Display this help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "$(CYAN)%-24s$(RESET) %s\n", $$1, $$2}'
+# Scan only this Makefile, not MAKEFILE_LIST: "-include .env" appends .env to
+# that list, and with more than one input file grep prefixes every match with
+# the filename, which awk then reports as the target name.
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(firstword $(MAKEFILE_LIST)) | awk 'BEGIN {FS = ":.*?## "}; {printf "$(CYAN)%-24s$(RESET) %s\n", $$1, $$2}'
 
 # ==============================================================================
 # Environment
