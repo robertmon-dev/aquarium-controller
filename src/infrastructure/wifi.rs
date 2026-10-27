@@ -5,9 +5,11 @@ use esp_idf_svc::hal::modem::WifiModemPeripheral;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::EspError;
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, AuthMethod, ClientConfiguration, Configuration, EspWifi};
+use esp_idf_svc::wifi::{AsyncWifi, ClientConfiguration, Configuration, EspWifi};
 use tokio::time::sleep;
 use tracing::{info, warn};
+
+use crate::settings::WifiSettings;
 
 const RETRY_MIN: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(60);
@@ -24,13 +26,6 @@ pub enum WifiError {
     PasswordTooLong,
 }
 
-#[derive(Debug, Clone)]
-pub struct WifiConfig {
-    pub ssid: &'static str,
-    pub password: &'static str,
-    pub auth_method: AuthMethod,
-}
-
 pub struct WifiManager {
     wifi: AsyncWifi<EspWifi<'static>>,
 }
@@ -40,7 +35,7 @@ impl WifiManager {
         modem: M,
         sys_loop: EspSystemEventLoop,
         nvs: EspDefaultNvsPartition,
-        config: &WifiConfig,
+        config: &WifiSettings,
     ) -> Result<Self, WifiError> {
         let timer_service = EspTaskTimerService::new()?;
 
@@ -54,6 +49,7 @@ impl WifiManager {
             ssid: config.ssid.try_into().map_err(|_| WifiError::SsidTooLong)?,
             password: config
                 .password
+                .expose()
                 .try_into()
                 .map_err(|_| WifiError::PasswordTooLong)?,
             auth_method: config.auth_method,
