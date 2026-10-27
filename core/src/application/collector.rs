@@ -217,11 +217,11 @@ mod tests {
         }
     }
 
-    fn collector<'s>(
+    fn collector(
         reader: FakeReader,
         clock: FakeClock,
-        sink: &'s RecordingSink,
-    ) -> TelemetryCollector<FakeReader, FakeClock, FakeHealth, &'s RecordingSink> {
+        sink: &RecordingSink,
+    ) -> TelemetryCollector<FakeReader, FakeClock, FakeHealth, &RecordingSink> {
         TelemetryCollector::new(reader, clock, FakeHealth, sink, 27.0)
     }
 
