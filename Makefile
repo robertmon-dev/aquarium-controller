@@ -12,7 +12,7 @@ ELF_RELEASE   := target/$(TARGET)/release/$(BIN)
 ELF_DEBUG     := target/$(TARGET)/debug/$(BIN)
 
 ENV_FILE ?= .env
-LOAD_ENV = if [ -f $(ENV_FILE) ]; then while IFS='=' read -r k v; do case "$$k" in ''|\#*) continue ;; *) export "$$k=$$v" ;; esac; done < $(ENV_FILE); fi;
+LOAD_ENV = if [ -f $(ENV_FILE) ]; then while IFS='=' read -r k v; do case "$$k" in ''|'\#'*) continue ;; *) export "$$k=$$v" ;; esac; done < $(ENV_FILE); fi;
 
 # ------------------------------------------------------------------------------
 # Pacman-style output
