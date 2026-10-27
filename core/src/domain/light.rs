@@ -72,3 +72,85 @@ impl Default for LightingSchedule {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::metrics::LightingProfile;
+
+    const JUNE: u8 = 6;
+
+    #[test]
+    fn before_sunrise_is_off() {
+        let m = LightingSchedule::new().evaluate(269, JUNE);
+        assert_eq!(m.profile, LightingProfile::Off);
+        assert_eq!(m.channel_white_pct, 0);
+        assert_eq!(m.channel_rgb_pct, 0);
+    }
+
+    #[test]
+    fn sunrise_ramps_from_zero() {
+        let m = LightingSchedule::new().evaluate(270, JUNE);
+        assert_eq!(m.profile, LightingProfile::Sunrise);
+        assert_eq!(m.channel_white_pct, 0);
+    }
+
+    #[test]
+    fn sunrise_midpoint_is_half_brightness() {
+        let m = LightingSchedule::new().evaluate(300, JUNE);
+        assert_eq!(m.profile, LightingProfile::Sunrise);
+        assert_eq!(m.channel_white_pct, 30);
+        assert_eq!(m.channel_rgb_pct, 20);
+    }
+
+    #[test]
+    fn daylight_is_full_declared_output() {
+        let m = LightingSchedule::new().evaluate(600, JUNE);
+        assert_eq!(m.profile, LightingProfile::Daylight);
+        assert_eq!(m.channel_white_pct, 60);
+        assert_eq!(m.channel_rgb_pct, 40);
+    }
+
+    #[test]
+    fn sunset_window_dims_toward_night() {
+        let early = LightingSchedule::new().evaluate(1191, JUNE);
+        let late = LightingSchedule::new().evaluate(1240, JUNE);
+        assert_eq!(early.profile, LightingProfile::Sunset);
+        assert_eq!(late.profile, LightingProfile::Sunset);
+        assert!(late.channel_white_pct < early.channel_white_pct);
+    }
+
+    #[test]
+    fn at_sunset_minute_lights_are_off() {
+        let m = LightingSchedule::new().evaluate(1250, JUNE);
+        assert_eq!(m.profile, LightingProfile::Off);
+    }
+
+    #[test]
+    fn minute_wraps_past_midnight() {
+        let wrapped = LightingSchedule::new().evaluate(1440 + 600, JUNE);
+        let direct = LightingSchedule::new().evaluate(600, JUNE);
+        assert_eq!(wrapped.profile, direct.profile);
+        assert_eq!(wrapped.channel_white_pct, direct.channel_white_pct);
+    }
+
+    #[test]
+    fn invalid_month_falls_back_to_default_bounds() {
+        let off = LightingSchedule::new().evaluate(419, 0);
+        let on = LightingSchedule::new().evaluate(421, 0);
+        assert_eq!(off.profile, LightingProfile::Off);
+        assert_eq!(on.profile, LightingProfile::Sunrise);
+    }
+
+    #[test]
+    fn every_month_has_sunrise_before_sunset() {
+        for month in 1..=12 {
+            let (sunrise, sunset) = LightingSchedule::get_solar_bounds(month);
+            assert!(sunrise < sunset, "month {month}: {sunrise} !< {sunset}");
+            assert!(
+                sunset - sunrise > 120,
+                "month {month}: okno krótsze niż 2 h"
+            );
+        }
+    }
+}
