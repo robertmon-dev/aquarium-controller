@@ -1,17 +1,3 @@
-//! Bit-bang 1-Wire dla DS18B20 (ESP32 / ESP-IDF).
-//!
-//! Hardware specs:
-//! - external pull-up  resistor 4,7 kOhm for 3V3
-//! - external pull-up for ESP32 in only addition in the circuit.
-//! - all sensors are powered via VDD
-//! - `Ds18b20Adapter::new`, shall return result of `TemperatureError` in case of direct powering from ESP32.
-//!
-//! Warstwa protokolu (CRC, walidacja ROM, parsowanie scratchpada) zyje
-//! w `aquarium_core::protocol::ds18b20` i tam jest testowana na
-//! hoscie. Tutaj zostaje wylacznie to, co wymaga `esp_idf_hal`.
-
-/// Reeksport, zeby `adapters::outbound::ds18b20::RomAddress` dzialalo tak
-/// jak przed podzialem - main i settings nie musza wiedziec o przeprowadzce.
 pub use aquarium_core::protocol::ds18b20::RomAddress;
 
 #[cfg(target_os = "espidf")]

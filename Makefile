@@ -7,8 +7,12 @@ HOST_TARGET   ?= x86_64-unknown-linux-gnu
 CORE_CRATE    := aquarium-core
 BIN           := aquarium-controller
 CHIP          ?= esp32s3
+PORT          ?= /dev/ttyACM0
 
 ELF_RELEASE   := target/$(TARGET)/release/$(BIN)
+
+BL_RELEASE    := target/$(TARGET)/release/bootloader.bin
+BL_DEBUG      := target/$(TARGET)/debug/bootloader.bin
 ELF_DEBUG     := target/$(TARGET)/debug/$(BIN)
 
 ENV_FILE ?= .env
@@ -102,26 +106,46 @@ check: check-env ## Type-check firmware without linking
 # Flash & Monitor
 # ==============================================================================
 
+.PHONY: check-port
+check-port: ## Fail early if the serial port is missing or held by a process
+	@test -e $(PORT) || { $(ERR) "$(PORT) does not exist - is the board plugged in?"; exit 1; }
+	@holder=""; \
+	for d in /proc/[0-9]*; do \
+		ls -l $$d/fd 2>/dev/null | grep -q "$(PORT)" || continue; \
+		pid=$${d#/proc/}; \
+		holder="$$holder  PID $$pid  $$(tr '\0' ' ' < $$d/cmdline 2>/dev/null | cut -c1-70)\n"; \
+	done; \
+	[ -z "$$holder" ] || { \
+		$(ERR) "$(PORT) is locked by another process"; \
+		printf "$$holder"; \
+		$(SUB) "a running 'make flash'/'make monitor' holds the port - Ctrl-C it first"; \
+		exit 1; \
+	}
+	@test -w $(PORT) || { $(ERR) "no write access to $(PORT) - add yourself to the 'uucp' group and re-login"; exit 1; }
+
+
 .PHONY: flash
-flash: build ## Flash release firmware and attach the monitor
+flash: check-port build ## Flash release firmware and attach the monitor
 	@$(MSG) "Flashing $(CHIP)"
-	@$(ESP_ENV) espflash flash --chip $(CHIP) --monitor $(ELF_RELEASE)
+	@test -f $(BL_RELEASE) || { $(ERR) "$(BL_RELEASE) is missing"; exit 1; }
+	@$(ESP_ENV) espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(BL_RELEASE) --monitor $(ELF_RELEASE)
 
 .PHONY: flash-debug
-flash-debug: build-debug ## Flash debug firmware and attach the monitor
+flash-debug: check-port build-debug ## Flash debug firmware and attach the monitor
 	@$(MSG) "Flashing $(CHIP) (debug)"
-	@$(ESP_ENV) espflash flash --chip $(CHIP) --monitor $(ELF_DEBUG)
+	@test -f $(BL_DEBUG) || { $(ERR) "$(BL_DEBUG) is missing"; exit 1; }
+	@$(ESP_ENV) espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(BL_DEBUG) --monitor $(ELF_DEBUG)
 
 .PHONY: monitor
-monitor: ## Attach the serial monitor without flashing
+monitor: check-port ## Attach the serial monitor without flashing
 	@$(MSG) "Serial monitor (Ctrl-C to quit)"
-	@$(ESP_ENV) espflash monitor
+	@$(ESP_ENV) espflash monitor --port $(PORT)
 
 .PHONY: erase
-erase: ## Erase the whole flash, including NVS (WiFi credentials)
+erase: check-port ## Erase the whole flash, including NVS (WiFi credentials)
 	@$(WARN) "this also wipes NVS - stored WiFi credentials will be lost"
 	@printf 'Continue? [y/N] '; read ans; [ "$$ans" = "y" ] || exit 1
-	@$(ESP_ENV) espflash erase-flash
+	@$(ESP_ENV) espflash erase-flash --port $(PORT)
 
 # ==============================================================================
 # Tests
