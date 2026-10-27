@@ -1,30 +1,30 @@
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::Context;
+use aquarium_core::adapters::inbound::http::{self, HttpConfig};
+use aquarium_core::adapters::outbound::memory::InMemoryTelemetryStore;
+use aquarium_core::application::TelemetryCollector;
+use aquarium_core::ports::outbound::{
+    Clock, SystemHealthProvider, TelemetrySink, TemperatureReader,
+};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::link_patches;
-use esp_idf_svc::wifi::AuthMethod;
+use tokio::net::TcpListener;
+use tokio::task::LocalSet;
 use tokio::time::MissedTickBehavior;
-use tracing::{info, warn};
+use tracing::info;
 
-use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus, RomAddress};
-use aquarium_controller::infrastructure::wifi::{WifiConfig, WifiManager};
-use aquarium_controller::ports::outbound::temperature::TemperatureReader;
+use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
+use aquarium_controller::infrastructure::clock::SystemClock;
+use aquarium_controller::infrastructure::system_health::EspSystemHealth;
+use aquarium_controller::infrastructure::wifi::WifiManager;
+use aquarium_controller::settings::Settings;
 
-const TANK_ROM: RomAddress = [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-const SUMP_ROM: RomAddress = [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01];
-
+const SETTINGS: Settings = Settings::from_env();
 const ROM_DISCOVERY_MODE: bool = false;
-const READ_INTERVAL: Duration = Duration::from_secs(30);
-
-const WIFI_CONFIG: WifiConfig = WifiConfig {
-    ssid: env!("WIFI_SSID"),
-    password: env!("WIFI_PASS"),
-    auth_method: AuthMethod::WPA2Personal,
-};
 
 fn main() -> anyhow::Result<()> {
     link_patches();
@@ -39,7 +39,8 @@ fn main() -> anyhow::Result<()> {
         .build()
         .context("Failed to build tokio runtime")?;
 
-    runtime.block_on(run())
+    let local = LocalSet::new();
+    runtime.block_on(local.run_until(run()))
 }
 
 fn init_logging() {
@@ -61,36 +62,59 @@ async fn run() -> anyhow::Result<()> {
         return discover_rom(&mut bus);
     }
 
-    let sensors = Ds18b20Adapter::new(bus, TANK_ROM, SUMP_ROM)
+    let sensors = Ds18b20Adapter::new(bus, SETTINGS.sensors.tank_rom, SETTINGS.sensors.sump_rom)
         .context("Failed to initialize DS18B20 sensors")?;
     info!("Temperature sensors ready");
 
     let sys_loop = EspSystemEventLoop::take().context("System event loop already taken")?;
     let nvs = EspDefaultNvsPartition::take().context("NVS partition already taken")?;
 
-    let wifi = WifiManager::new(peripherals.modem, sys_loop, nvs, &WIFI_CONFIG)
+    let wifi = WifiManager::new(peripherals.modem, sys_loop, nvs, &SETTINGS.wifi)
         .context("Failed to initialize WiFi")?;
 
-    tokio::join!(sensor_task(sensors), wifi.run());
+    let clock = SystemClock::new().context("Failed to start SNTP")?;
+    let store = Arc::new(InMemoryTelemetryStore::new());
+
+    let listener = TcpListener::bind(("0.0.0.0", SETTINGS.http.port))
+        .await
+        .context("Failed to bind HTTP listener")?;
+
+    let collector = TelemetryCollector::new(
+        sensors,
+        clock,
+        EspSystemHealth,
+        Arc::clone(&store),
+        SETTINGS.sensors.target_celsius,
+    );
+
+    let server = http::run(
+        listener,
+        store,
+        HttpConfig {
+            token: SETTINGS.http.token.expose(),
+            max_connections: SETTINGS.http.max_connections,
+            sse_keepalive: SETTINGS.http.sse_keepalive,
+        },
+    );
+
+    tokio::join!(sensor_task(collector), wifi.run(), server);
 
     Ok(())
 }
 
-async fn sensor_task(mut sensors: Ds18b20Adapter<'_>) {
-    let mut ticker = tokio::time::interval(READ_INTERVAL);
+async fn sensor_task<R, C, H, S>(mut collector: TelemetryCollector<R, C, H, S>)
+where
+    R: TemperatureReader,
+    C: Clock,
+    H: SystemHealthProvider,
+    S: TelemetrySink,
+{
+    let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
         ticker.tick().await;
-
-        match sensors.read_all().await {
-            Ok(readings) => {
-                for (role, temp) in readings {
-                    info!(?role, celsius = temp.as_celsius(), "Water temperature");
-                }
-            }
-            Err(e) => warn!(error = %e, "Temperature read failed"),
-        }
+        collector.sample().await;
     }
 }
 
