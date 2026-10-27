@@ -40,6 +40,16 @@ impl fmt::Display for WaterTemperature {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightingProfile {
+    Off,
+    Sunrise,
+    Daylight,
+    Sunset,
+    Moonlight,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemMode {
@@ -102,7 +112,7 @@ pub struct SystemHealthDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LightingMetricsDto {
-    pub current_profile: String,
+    pub profile: LightingProfile,
     pub channel_white_pct: u8,
     pub channel_rgb_pct: u8,
 }
