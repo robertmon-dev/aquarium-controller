@@ -1,9 +1,12 @@
+[workspace]
+members = ["core"]
+resolver = "2"
+
 [package]
 name = "aquarium-controller"
 version = "0.1.0"
 authors = ["Robert Moń <m0ni3v@gmail.com>"]
 edition = "2021"
-resolver = "2"
 rust-version = "1.82"
 
 [[bin]]
@@ -23,6 +26,8 @@ esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf.git" }
 esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf.git" }
 
 [dependencies]
+aquarium-core = { path = "core" }
+
 log = "0.4"
 tracing = { version = "0.1", default-features = false, features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
@@ -34,7 +39,7 @@ esp-idf-sys = { version = "0.38", default-features = false }
 tokio = { version = "1.40", default-features = false, features = ["rt", "macros", "sync", "time", "net"] }
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 
-picoserve = { version = "0.20.1", features = ["alloc"] }
+picoserve = { version = "0.20.1", features = ["alloc", "tokio", "json"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 anyhow = "1.0"
