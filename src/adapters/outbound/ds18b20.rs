@@ -6,7 +6,7 @@
 //! - all sensors are powered via VDD
 //! - `Ds18b20Adapter::new`, shall return result of `TemperatureError` in case of direct powering from ESP32.
 //!
-//!  Protocol layer (CRC, walidacja ROM, scratchpad parsing) does not depend on
+//! Protocol layer (CRC, walidacja ROM, scratchpad parsing) does not depend on
 //! `esp_idf_hal`, so unit tests runs on host (via `cargo test`).
 use crate::domain::metrics::WaterTemperature;
 use crate::ports::outbound::temperature::{TemperatureError, TemperatureSensorRole};
