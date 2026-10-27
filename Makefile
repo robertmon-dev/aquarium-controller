@@ -11,8 +11,8 @@ CHIP          ?= esp32s3
 ELF_RELEASE   := target/$(TARGET)/release/$(BIN)
 ELF_DEBUG     := target/$(TARGET)/debug/$(BIN)
 
--include .env
-export
+ENV_FILE ?= .env
+LOAD_ENV = if [ -f $(ENV_FILE) ]; then while IFS='=' read -r k v; do case "$$k" in ''|\#*) continue ;; *) export "$$k=$$v" ;; esac; done < $(ENV_FILE); fi;
 
 # ------------------------------------------------------------------------------
 # Pacman-style output
@@ -52,10 +52,18 @@ help: ## Display this help message
 
 .PHONY: check-env
 check-env: ## Verify build-time secrets are present
-	@test -n "$(WIFI_SSID)" || { $(ERR) "WIFI_SSID is missing - fill in .env (make env-example)"; exit 1; }
-	@test -n "$(WIFI_PASS)" || { $(ERR) "WIFI_PASS is missing - fill in .env (make env-example)"; exit 1; }
-	@test -n "$(API_TOKEN)" || { $(ERR) "API_TOKEN is missing - fill in .env (make token)"; exit 1; }
-	@$(SUB) "secrets present (values are never printed)"
+	@$(LOAD_ENV) \
+	for name in WIFI_SSID WIFI_PASS API_TOKEN; do \
+		eval "val=\$$$$name"; \
+		[ -n "$$val" ] || { $(ERR) "$$name is missing - see make env-example"; exit 1; }; \
+	done; \
+	$(SUB) "secrets present"
+	@$(LOAD_ENV) \
+	printf '  ->  byte lengths: '; \
+	for name in WIFI_SSID WIFI_PASS API_TOKEN; do \
+		eval "val=\$$$$name"; \
+		printf '%s=%s ' "$$name" "$$(printf '%s' "$$val" | wc -c)"; \
+	done; echo
 
 .PHONY: env-example
 env-example: ## Write a .env skeleton with a fresh API token
@@ -76,19 +84,19 @@ token: ## Print a fresh URL-safe API token
 .PHONY: build
 build: check-env ## Build firmware (release)
 	@$(MSG) "Building firmware (release)"
-	@$(ESP_ENV) cargo build --release
+	@$(LOAD_ENV) $(ESP_ENV) cargo build --release
 	@$(OK) "Built $(ELF_RELEASE)"
 
 .PHONY: build-debug
 build-debug: check-env ## Build firmware (debug)
 	@$(MSG) "Building firmware (debug)"
-	@$(ESP_ENV) cargo build
+	@$(LOAD_ENV) $(ESP_ENV) cargo build
 	@$(OK) "Built $(ELF_DEBUG)"
 
 .PHONY: check
 check: check-env ## Type-check firmware without linking
 	@$(MSG) "Checking firmware"
-	@$(ESP_ENV) cargo check --release
+	@$(LOAD_ENV) $(ESP_ENV) cargo check --release
 
 # ==============================================================================
 # Flash & Monitor
@@ -155,7 +163,7 @@ lint-core: ## Run clippy on aquarium-core (host target)
 .PHONY: lint-firmware
 lint-firmware: check-env ## Run clippy on the firmware crate
 	@$(MSG) "Clippy: firmware"
-	@$(ESP_ENV) cargo clippy --release -- -D warnings
+	@$(LOAD_ENV) $(ESP_ENV) cargo clippy --release -- -D warnings
 
 .PHONY: ci
 ci: fmt-check lint test ## Everything CI should gate on
@@ -198,7 +206,6 @@ partitions: ## Dump the partition table ESP-IDF actually generated
 .PHONY: smoke
 smoke: ## Probe a flashed device over HTTP (make smoke IP=192.168.1.50)
 	@test -n "$(IP)" || { $(ERR) "pass an address: make smoke IP=192.168.1.50"; exit 1; }
-	@test -n "$(API_TOKEN)" || { $(ERR) "API_TOKEN is missing from .env"; exit 1; }
 	@$(MSG) "Smoke test against $(IP)"
 	@$(SUB) "no token -> expecting 401"
 	@code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://$(IP)/api/telemetry); \
@@ -207,25 +214,25 @@ smoke: ## Probe a flashed device over HTTP (make smoke IP=192.168.1.50)
 	@code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Authorization: Bearer wrong' http://$(IP)/api/telemetry); \
 	[ "$$code" = "401" ] || { $(ERR) "got $$code instead of 401"; exit 1; }
 	@$(SUB) "query token outside /api/events -> expecting 401"
-	@code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$(IP)/api/telemetry?token=$(API_TOKEN)"); \
+	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$(IP)/api/telemetry?token=$$API_TOKEN"); \
 	[ "$$code" = "401" ] || { $(ERR) "the query-token fallback leaks beyond /api/events: $$code"; exit 1; }
 	@$(SUB) "valid token -> expecting 200 and a snapshot"
-	@curl -s --max-time 5 -H "Authorization: Bearer $(API_TOKEN)" http://$(IP)/api/telemetry | python3 -m json.tool
+	@$(LOAD_ENV) curl -s --max-time 5 -H "Authorization: Bearer $$API_TOKEN" http://$(IP)/api/telemetry | python3 -m json.tool
 	@$(SUB) "SSE -> expecting event:telemetry"
-	@curl -sN --max-time 5 "http://$(IP)/api/events?token=$(API_TOKEN)" | head -c 400; echo
+	@$(LOAD_ENV) curl -sN --max-time 5 "http://$(IP)/api/events?token=$$API_TOKEN" | head -c 400; echo
 	@$(OK) "Smoke test passed"
 	@$(WARN) "still manual: secrets in log, slot limit, sensor hot-unplug, 15-min heap drift"
 
 .PHONY: telemetry
 telemetry: ## Pretty-print one telemetry snapshot (make telemetry IP=...)
 	@test -n "$(IP)" || { $(ERR) "pass an address: make telemetry IP=192.168.1.50"; exit 1; }
-	@curl -s --max-time 5 -H "Authorization: Bearer $(API_TOKEN)" http://$(IP)/api/telemetry | python3 -m json.tool
+	@$(LOAD_ENV) curl -s --max-time 5 -H "Authorization: Bearer $$API_TOKEN" http://$(IP)/api/telemetry | python3 -m json.tool
 
 .PHONY: events
 events: ## Follow the SSE stream (make events IP=...)
 	@test -n "$(IP)" || { $(ERR) "pass an address: make events IP=192.168.1.50"; exit 1; }
 	@$(MSG) "SSE stream from $(IP) (Ctrl-C to quit)"
-	@curl -sN "http://$(IP)/api/events?token=$(API_TOKEN)"
+	@$(LOAD_ENV) curl -sN "http://$(IP)/api/events?token=$$API_TOKEN"
 
 # ==============================================================================
 # Clean
