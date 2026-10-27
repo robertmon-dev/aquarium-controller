@@ -24,7 +24,7 @@ pub enum TemperatureError {
     PowerOnResetValue,
 }
 
-pub trait TemperatureReader: Send + Sync {
+pub trait TemperatureReader {
     async fn trigger_conversion(&mut self) -> Result<(), TemperatureError>;
 
     async fn read_temperature(
