@@ -1,13 +1,13 @@
-//! Sterownik DS18B20 1-Wire (ESP32 / ESP-IDF).
+//! DS18B20 driver for bit-bang 1-Wire (ESP32 / ESP-IDF).
 //!
-//! Założenia sprzętowe:
-//! - zewnętrzny pull-up 4,7 kΩ do 3V3 (wewnętrzny pull-up ESP32 jest tylko dodatkiem),
-//! - wszystkie czujniki zasilane z VDD (tryb pasożytniczy jest wykrywany i odrzucany
-//!   w `Ds18b20Adapter::new`, bo ten sterownik nie realizuje strong pull-upu).
+//! Hardware specs:
+//! - external pull-up  resistor 4,7 kΩ for 3V3
+//! - external pull-up for ESP32 in only addition in the circuit.
+//! - all sensors are powered via VDD
+//! - `Ds18b20Adapter::new`, shall return result of `TemperatureError` in case of direct powering from ESP32.
 //!
-//! Część protokołowa (CRC, walidacja ROM, parsowanie scratchpada) nie zależy od
-//! `esp_idf_hal`, więc testy jednostkowe uruchamiają się na hoście (`cargo test`).
-
+//!  Protocol layer (CRC, walidacja ROM, scratchpad parsing) does not depend on
+//! `esp_idf_hal`, so unit tests runs on host (via `cargo test`).
 use crate::domain::metrics::WaterTemperature;
 use crate::ports::outbound::temperature::{TemperatureError, TemperatureSensorRole};
 
