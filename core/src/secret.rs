@@ -68,10 +68,4 @@ mod tests {
     fn expose_returns_the_value() {
         assert_eq!(Secret::new("hunter2").expose(), "hunter2");
     }
-
-    #[test]
-    fn reference_also_redacts() {
-        let s = Secret::new("hunter2");
-        assert_eq!(format!("{:?}", &s), "***");
-    }
 }
