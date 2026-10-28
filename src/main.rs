@@ -124,7 +124,7 @@ async fn run() -> anyhow::Result<()> {
         },
     );
 
-    tokio::join!(sensor_task(collector), wifi.run(), server, health_watch());
+    tokio::join!(sensor_task(collector), wifi.run(), server);
 
     Ok(())
 }
