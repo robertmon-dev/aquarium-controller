@@ -249,6 +249,31 @@ smoke: ## Probe a flashed device over HTTP (make smoke IP=192.168.1.50)
 	@$(LOAD_ENV) curl -s --max-time 5 -H "Authorization: Bearer $$API_TOKEN" http://$(IP)/api/telemetry | python3 -m json.tool
 	@$(SUB) "SSE -> expecting event:telemetry"
 	@$(LOAD_ENV) curl -sN --max-time 5 "http://$(IP)/api/events?token=$$API_TOKEN" | head -c 400; echo
+	@$(SUB) "override: no token -> expecting 401"
+	@code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X PUT \
+	  -H 'Content-Type: application/json' -d '{"target":{"profile":"off"}}' \
+	  http://$(IP)/api/lighting/override); \
+	[ "$$code" = "401" ] || { $(ERR) "got $$code instead of 401"; exit 1; }
+	@$(SUB) "override: level above 100 -> expecting 400"
+	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X PUT \
+	  -H "Authorization: Bearer $$API_TOKEN" -H 'Content-Type: application/json' \
+	  -d '{"target":{"channels":{"white_pct":150,"rgb_pct":20}}}' \
+	  http://$(IP)/api/lighting/override); \
+	[ "$$code" = "400" ] || { $(ERR) "channel validation is broken: $$code"; exit 1; }
+	@$(SUB) "override: set moonlight -> expecting 200"
+	@$(LOAD_ENV) curl -s --max-time 5 -X PUT \
+	  -H "Authorization: Bearer $$API_TOKEN" -H 'Content-Type: application/json' \
+	  -d '{"target":{"profile":"moonlight"},"duration_s":60}' \
+	  http://$(IP)/api/lighting/override | python3 -m json.tool
+	@$(SUB) "override: telemetry reports override_active -> expecting true"
+	@$(LOAD_ENV) curl -s --max-time 5 -H "Authorization: Bearer $$API_TOKEN" \
+	  http://$(IP)/api/telemetry \
+	  | python3 -c 'import json,sys; d=json.load(sys.stdin)["lighting"]; sys.exit(0 if d["override_active"] else 1)' \
+	  || { $(ERR) "the override never reached telemetry"; exit 1; }
+	@$(SUB) "override: delete -> expecting 204"
+	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X DELETE \
+	  -H "Authorization: Bearer $$API_TOKEN" http://$(IP)/api/lighting/override); \
+	[ "$$code" = "204" ] || { $(ERR) "got $$code instead of 204"; exit 1; }
 	@$(OK) "Smoke test passed"
 	@$(WARN) "still manual: secrets in log, slot limit, sensor hot-unplug, 15-min heap drift"
 
