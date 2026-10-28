@@ -1,4 +1,75 @@
+use serde::{Deserialize, Serialize};
+
 use super::metrics::{LightingMetricsDto, LightingProfile};
+
+pub const DAYLIGHT_WHITE_PCT: u8 = 60;
+pub const DAYLIGHT_RGB_PCT: u8 = 40;
+
+pub const MOONLIGHT_WHITE_PCT: u8 = 0;
+pub const MOONLIGHT_RGB_PCT: u8 = 5;
+
+pub const MAX_CHANNEL_PCT: u8 = 100;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelLevels {
+    pub white_pct: u8,
+    pub rgb_pct: u8,
+}
+
+impl ChannelLevels {
+    pub const fn new(white_pct: u8, rgb_pct: u8) -> Self {
+        Self { white_pct, rgb_pct }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.white_pct > MAX_CHANNEL_PCT || self.rgb_pct > MAX_CHANNEL_PCT {
+            return Err("channel level out of range");
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightingTarget {
+    Profile(LightingProfile),
+    Channels(ChannelLevels),
+}
+
+impl LightingTarget {
+    pub fn levels(&self) -> ChannelLevels {
+        match self {
+            Self::Profile(profile) => profile.static_levels(),
+            Self::Channels(levels) => *levels,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Profile(_) => Ok(()),
+            Self::Channels(levels) => levels.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LightingOverride {
+    pub target: LightingTarget,
+    pub expires_in_s: Option<u32>,
+}
+
+impl LightingProfile {
+    pub const fn static_levels(self) -> ChannelLevels {
+        match self {
+            Self::Off => ChannelLevels::new(0, 0),
+            Self::Sunrise | Self::Daylight | Self::Sunset => {
+                ChannelLevels::new(DAYLIGHT_WHITE_PCT, DAYLIGHT_RGB_PCT)
+            }
+            Self::Moonlight => ChannelLevels::new(MOONLIGHT_WHITE_PCT, MOONLIGHT_RGB_PCT),
+        }
+    }
+}
 
 pub struct LightingSchedule;
 
@@ -38,6 +109,7 @@ impl LightingSchedule {
                 profile: LightingProfile::Off,
                 channel_white_pct: 0,
                 channel_rgb_pct: 0,
+                override_active: false,
             }
         } else if current_minute >= sunrise_min && current_minute < daylight_start_min {
             let elapsed = current_minute - sunrise_min;
@@ -45,14 +117,16 @@ impl LightingSchedule {
 
             LightingMetricsDto {
                 profile: LightingProfile::Sunrise,
-                channel_white_pct: (progress * 60.0) as u8,
-                channel_rgb_pct: (progress * 40.0) as u8,
+                channel_white_pct: (progress * DAYLIGHT_WHITE_PCT as f32) as u8,
+                channel_rgb_pct: (progress * DAYLIGHT_RGB_PCT as f32) as u8,
+                override_active: false,
             }
         } else if current_minute >= daylight_start_min && current_minute < sunset_start_min {
             LightingMetricsDto {
                 profile: LightingProfile::Daylight,
-                channel_white_pct: 60,
-                channel_rgb_pct: 40,
+                channel_white_pct: DAYLIGHT_WHITE_PCT,
+                channel_rgb_pct: DAYLIGHT_RGB_PCT,
+                override_active: false,
             }
         } else {
             let elapsed = current_minute - sunset_start_min;
@@ -60,10 +134,32 @@ impl LightingSchedule {
 
             LightingMetricsDto {
                 profile: LightingProfile::Sunset,
-                channel_white_pct: (progress * 60.0) as u8,
-                channel_rgb_pct: (progress * 40.0) as u8,
+                channel_white_pct: (progress * DAYLIGHT_WHITE_PCT as f32) as u8,
+                channel_rgb_pct: (progress * DAYLIGHT_RGB_PCT as f32) as u8,
+                override_active: false,
             }
         }
+    }
+}
+
+pub fn resolve(
+    scheduled: LightingMetricsDto,
+    over: Option<&LightingOverride>,
+) -> LightingMetricsDto {
+    let Some(over) = over else {
+        return scheduled;
+    };
+
+    let levels = over.target.levels();
+
+    LightingMetricsDto {
+        profile: match over.target {
+            LightingTarget::Profile(profile) => profile,
+            LightingTarget::Channels(_) => scheduled.profile,
+        },
+        channel_white_pct: levels.white_pct,
+        channel_rgb_pct: levels.rgb_pct,
+        override_active: true,
     }
 }
 
@@ -152,5 +248,139 @@ mod tests {
                 "month {month}: okno krótsze niż 2 h"
             );
         }
+    }
+
+    #[test]
+    fn channel_levels_accept_the_full_legal_range() {
+        assert!(ChannelLevels::new(0, 0).validate().is_ok());
+        assert!(ChannelLevels::new(100, 100).validate().is_ok());
+        assert!(ChannelLevels::new(60, 40).validate().is_ok());
+    }
+
+    #[test]
+    fn channel_levels_reject_anything_above_one_hundred() {
+        assert!(ChannelLevels::new(101, 0).validate().is_err());
+        assert!(ChannelLevels::new(0, 101).validate().is_err());
+        assert!(ChannelLevels::new(255, 255).validate().is_err());
+    }
+
+    #[test]
+    fn every_profile_maps_to_concrete_levels() {
+        assert_eq!(
+            LightingProfile::Off.static_levels(),
+            ChannelLevels::new(0, 0)
+        );
+        assert_eq!(
+            LightingProfile::Daylight.static_levels(),
+            ChannelLevels::new(DAYLIGHT_WHITE_PCT, DAYLIGHT_RGB_PCT)
+        );
+        assert_eq!(
+            LightingProfile::Moonlight.static_levels(),
+            ChannelLevels::new(MOONLIGHT_WHITE_PCT, MOONLIGHT_RGB_PCT)
+        );
+    }
+
+    #[test]
+    fn ramps_map_to_their_endpoint_which_equals_daylight() {
+        assert_eq!(
+            LightingProfile::Sunrise.static_levels(),
+            LightingProfile::Daylight.static_levels(),
+            "sunrise as a static target is its endpoint"
+        );
+        assert_eq!(
+            LightingProfile::Sunset.static_levels(),
+            LightingProfile::Daylight.static_levels()
+        );
+    }
+
+    #[test]
+    fn target_levels_follow_the_variant() {
+        assert_eq!(
+            LightingTarget::Profile(LightingProfile::Off).levels(),
+            ChannelLevels::new(0, 0)
+        );
+        assert_eq!(
+            LightingTarget::Channels(ChannelLevels::new(80, 20)).levels(),
+            ChannelLevels::new(80, 20)
+        );
+    }
+
+    #[test]
+    fn a_profile_target_is_always_valid_but_channels_are_checked() {
+        assert!(LightingTarget::Profile(LightingProfile::Moonlight)
+            .validate()
+            .is_ok());
+        assert!(LightingTarget::Channels(ChannelLevels::new(100, 100))
+            .validate()
+            .is_ok());
+        assert!(LightingTarget::Channels(ChannelLevels::new(101, 0))
+            .validate()
+            .is_err());
+    }
+
+    fn scheduled_daylight() -> LightingMetricsDto {
+        LightingSchedule::new().evaluate(600, JUNE)
+    }
+
+    #[test]
+    fn without_an_override_the_schedule_passes_through_untouched() {
+        let scheduled = scheduled_daylight();
+        let resolved = resolve(scheduled.clone(), None);
+        assert_eq!(resolved, scheduled);
+        assert!(!resolved.override_active);
+    }
+
+    #[test]
+    fn a_profile_override_replaces_profile_and_levels() {
+        let over = LightingOverride {
+            target: LightingTarget::Profile(LightingProfile::Off),
+            expires_in_s: None,
+        };
+
+        let resolved = resolve(scheduled_daylight(), Some(&over));
+
+        assert_eq!(resolved.profile, LightingProfile::Off);
+        assert_eq!(resolved.channel_white_pct, 0);
+        assert_eq!(resolved.channel_rgb_pct, 0);
+        assert!(resolved.override_active);
+    }
+
+    #[test]
+    fn a_channels_override_keeps_the_scheduled_profile() {
+        let over = LightingOverride {
+            target: LightingTarget::Channels(ChannelLevels::new(80, 20)),
+            expires_in_s: None,
+        };
+
+        let resolved = resolve(scheduled_daylight(), Some(&over));
+
+        assert_eq!(
+            resolved.profile,
+            LightingProfile::Daylight,
+            "raw channels match no profile, so the scheduled profile stays"
+        );
+        assert_eq!(resolved.channel_white_pct, 80);
+        assert_eq!(resolved.channel_rgb_pct, 20);
+        assert!(
+            resolved.override_active,
+            "override_active is the ONLY signal that the schedule is not in charge"
+        );
+    }
+
+    #[test]
+    fn an_override_wins_even_when_the_schedule_says_off() {
+        let night = LightingSchedule::new().evaluate(60, JUNE);
+        assert_eq!(night.profile, LightingProfile::Off);
+
+        let over = LightingOverride {
+            target: LightingTarget::Profile(LightingProfile::Moonlight),
+            expires_in_s: Some(120),
+        };
+
+        let resolved = resolve(night, Some(&over));
+
+        assert_eq!(resolved.profile, LightingProfile::Moonlight);
+        assert_eq!(resolved.channel_rgb_pct, MOONLIGHT_RGB_PCT);
+        assert!(resolved.override_active);
     }
 }
