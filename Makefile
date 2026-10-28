@@ -35,7 +35,12 @@ OK   := printf '$(BOLD)$(GREEN)==>$(RESET) $(BOLD)%s$(RESET)\n'
 WARN := printf '$(BOLD)$(YELLOW)==> WARNING:$(RESET) %s\n'
 ERR  := printf '$(BOLD)$(RED)==> ERROR:$(RESET) %s\n'
 
-ESP_ENV = command -v ldproxy >/dev/null 2>&1 || . $$HOME/export-esp.sh >/dev/null 2>&1;
+IDF_TOOLCHAIN ?= esp-14.2.0_20260121
+TOOLCHAIN_BIN := $(HOME)/.espressif/tools/xtensa-esp-elf/$(IDF_TOOLCHAIN)/xtensa-esp-elf/bin
+
+ESP_ENV = command -v ldproxy >/dev/null 2>&1 || . $$HOME/export-esp.sh >/dev/null 2>&1; \
+	test -d "$(TOOLCHAIN_BIN)" || { $(ERR) "toolchain $(IDF_TOOLCHAIN) not installed - see IDF_TOOLCHAIN in the Makefile"; exit 1; }; \
+	export PATH="$(TOOLCHAIN_BIN):$$PATH";
 
 .DEFAULT_GOAL := help
 
