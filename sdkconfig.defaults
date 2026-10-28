@@ -9,8 +9,23 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+# One picoserve connection costs ~78 KiB of stack on this task: the router
+# monomorphises into a single huge future and `spawn_local` polls it here. At
+# the old 64 KiB that ran past the bottom of the stack into the Wi-Fi driver's
+# .bss, onto `g_pm`, and the next TX-done aborted in ets_timer_arm_us.
+#
+# 128 KiB is a safety margin picked from that one measurement, NOT from a
+# high-water reading - nobody has yet reported `stack_free` after exercising
+# /api/telemetry and /api/events. Size it properly from the health log, and
+# see the debug note for why moving the server off this task is the real fix.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=131072
 
+# Keep this on. It is what finally caught the bug: a hardware watchpoint on
+# the end of the running task's stack, which turned a mystery abort deep in
+# the Wi-Fi driver into a register dump naming `g_pm`. It costs one watchpoint
+# and no runtime.
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_LWIP_MAX_SOCKETS=16
-CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=n
+# CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=n was added in 554cf75 while
+# chasing the crash and removed again once it was shown to make no
+# difference. Power management was never the cause. Left at the default.
