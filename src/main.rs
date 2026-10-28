@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
-use aquarium_core::adapters::outbound::memory::InMemoryTelemetryStore;
+use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
 use aquarium_core::application::TelemetryCollector;
 use aquarium_core::ports::outbound::{
-    Clock, SystemHealthProvider, TelemetrySink, TemperatureReader,
+    Clock, LightingOverrideSource, SystemHealthProvider, TelemetrySink, TemperatureReader,
 };
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -14,6 +14,7 @@ use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::{self, link_patches};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tokio::task::LocalSet;
 use tokio::time::MissedTickBehavior;
 use tracing::{error, info};
@@ -101,6 +102,8 @@ async fn run() -> anyhow::Result<()> {
 
     let clock = SystemClock::new().context("Failed to start SNTP")?;
     let store = Arc::new(InMemoryTelemetryStore::new());
+    let lighting = Arc::new(InMemoryLightingStore::new());
+    let lighting_changed = lighting.change_signal();
 
     let listener = TcpListener::bind(("0.0.0.0", SETTINGS.http.port))
         .await
@@ -111,12 +114,14 @@ async fn run() -> anyhow::Result<()> {
         clock,
         EspSystemHealth,
         Arc::clone(&store),
+        Arc::clone(&lighting),
         SETTINGS.sensors.target_celsius,
     );
 
     let server = http::run(
         listener,
         store,
+        lighting,
         HttpConfig {
             token: SETTINGS.http.token.expose(),
             max_connections: SETTINGS.http.max_connections,
@@ -124,24 +129,29 @@ async fn run() -> anyhow::Result<()> {
         },
     );
 
-    tokio::join!(sensor_task(collector), wifi.run(), server);
+    tokio::join!(sensor_task(collector, lighting_changed), wifi.run(), server);
 
     Ok(())
 }
 
-async fn sensor_task<R, C, H, S>(mut collector: TelemetryCollector<R, C, H, S>)
-where
+async fn sensor_task<R, C, H, S, O>(
+    mut collector: TelemetryCollector<R, C, H, S, O>,
+    lighting_changed: Arc<Notify>,
+) where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
     S: TelemetrySink,
+    O: LightingOverrideSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
-        ticker.tick().await;
-        collector.sample().await;
+        tokio::select! {
+            _ = ticker.tick() => collector.sample().await,
+            _ = lighting_changed.notified() => collector.republish(),
+        }
     }
 }
 
