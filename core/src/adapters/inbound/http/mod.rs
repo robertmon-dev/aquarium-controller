@@ -63,14 +63,20 @@ where
             }
         };
 
+        let accepted_at = std::time::Instant::now();
+
         tokio::task::spawn_local(async move {
             let mut buffer = vec![0_u8; HTTP_BUFFER_BYTES];
 
-            if let Err(error) = picoserve::Server::new_tokio(router, server_config, &mut buffer)
+            let result = picoserve::Server::new_tokio(router, server_config, &mut buffer)
                 .serve(stream)
-                .await
-            {
-                warn!(%peer, ?error, "connection ended with an error");
+                .await;
+
+            let total_ms = accepted_at.elapsed().as_millis();
+
+            match result {
+                Ok(_) => info!(%peer, total_ms, "connection closed"),
+                Err(error) => info!(%peer, total_ms, ?error, "connection ended"),
             }
 
             drop(permit);
