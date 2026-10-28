@@ -115,6 +115,7 @@ impl TankTelemetryDto {
                 profile: LightingProfile::Off,
                 channel_white_pct: 0,
                 channel_rgb_pct: 0,
+                override_active: false,
             },
             leak_detected: false,
         }
@@ -164,6 +165,7 @@ pub struct LightingMetricsDto {
     pub profile: LightingProfile,
     pub channel_white_pct: u8,
     pub channel_rgb_pct: u8,
+    pub override_active: bool,
 }
 
 #[cfg(test)]
