@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
@@ -11,11 +12,11 @@ use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::sys::link_patches;
+use esp_idf_svc::sys::{self, link_patches};
 use tokio::net::TcpListener;
 use tokio::task::LocalSet;
 use tokio::time::MissedTickBehavior;
-use tracing::info;
+use tracing::{error, info};
 
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
 use aquarium_controller::infrastructure::clock::SystemClock;
@@ -25,6 +26,8 @@ use aquarium_controller::settings::Settings;
 
 const SETTINGS: Settings = Settings::from_env();
 const ROM_DISCOVERY_MODE: bool = false;
+
+const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 
 fn main() -> anyhow::Result<()> {
     link_patches();
@@ -47,9 +50,33 @@ fn init_logging() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
-        .without_time()
+        .with_timer(tracing_subscriber::fmt::time::uptime())
         .compact()
         .init();
+}
+
+fn log_health() {
+    unsafe {
+        let stack_free = sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut());
+        let internal_free = sys::heap_caps_get_free_size(sys::MALLOC_CAP_INTERNAL);
+        let internal_min_free = sys::heap_caps_get_minimum_free_size(sys::MALLOC_CAP_INTERNAL);
+
+        if stack_free < 16384 {
+            error!(stack_free, "main task stack headroom is low");
+        }
+
+        info!(stack_free, internal_free, internal_min_free, "health");
+    }
+}
+
+async fn health_watch() {
+    let mut ticker = tokio::time::interval(HEALTH_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+        log_health();
+    }
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -97,7 +124,7 @@ async fn run() -> anyhow::Result<()> {
         },
     );
 
-    tokio::join!(sensor_task(collector), wifi.run(), server);
+    tokio::join!(sensor_task(collector), wifi.run(), server, health_watch());
 
     Ok(())
 }

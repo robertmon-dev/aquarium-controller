@@ -5,7 +5,7 @@ use esp_idf_svc::hal::modem::WifiModemPeripheral;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::EspError;
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, ClientConfiguration, Configuration, EspWifi, PowerSaveMode};
+use esp_idf_svc::wifi::{AsyncWifi, ClientConfiguration, Configuration, EspWifi};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -55,8 +55,6 @@ impl WifiManager {
             auth_method: config.auth_method,
             ..Default::default()
         }))?;
-
-        wifi.wifi_mut().set_power_save(PowerSaveMode::None)?;
 
         Ok(Self { wifi })
     }
