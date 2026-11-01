@@ -5,16 +5,62 @@ use esp_idf_svc::wifi::AuthMethod;
 
 use crate::adapters::outbound::ds18b20::RomAddress;
 use crate::adapters::outbound::influx::InfluxSettings;
+use crate::adapters::outbound::ph::PhCalibration;
 use crate::adapters::outbound::xkc_y25::{FilterConfig, Polarity};
+
+/// How much of a component to bring up.
+///
+/// The three states exist because an embedded failure can come from either
+/// half: claiming a peripheral or spawning a thread can fail at construction,
+/// while stack exhaustion and bus contention only show up once the periodic
+/// task runs. Bisecting those needs them separable, and the nonsensical
+/// combination - looping without being constructed - is unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentMode {
+    /// Not constructed at all. Its peripherals stay unclaimed.
+    Off,
+    /// Constructed, so initialization failures surface, but wired into no loop.
+    Initialized,
+    /// Constructed and wired in: its task is spawned, or it is handed to the
+    /// consumer that drives it.
+    Running,
+}
+
+impl ComponentMode {
+    pub const fn is_initialized(self) -> bool {
+        !matches!(self, Self::Off)
+    }
+
+    pub const fn is_running(self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
+#[derive(Debug)]
+pub struct ComponentSettings {
+    pub wifi: ComponentMode,
+    pub http: ComponentMode,
+    pub temperature: ComponentMode,
+    pub telemetry: ComponentMode,
+    pub water_level: ComponentMode,
+    pub influx: ComponentMode,
+    pub ph: ComponentMode,
+    pub health: ComponentMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMode {
+    Normal,
+    RomDiscovery,
+}
 
 #[derive(Debug)]
 pub struct Settings {
+    pub run_mode: RunMode,
+    pub components: ComponentSettings,
     pub wifi: WifiSettings,
     pub http: HttpSettings,
     pub sensors: SensorSettings,
-    /// `None` until all four `INFLUX_*` variables are present at build time.
-    /// Export is an addition, not a requirement, so a missing endpoint must not
-    /// break the firmware build - it only switches the exporter off.
     pub influx: Option<InfluxSettings>,
 }
 
@@ -40,6 +86,14 @@ pub struct SensorSettings {
     pub sump_rom: RomAddress,
     pub target_celsius: f32,
     pub level: LevelSettings,
+    pub ph: PhSettings,
+}
+
+#[derive(Debug)]
+pub struct PhSettings {
+    pub calibration: PhCalibration,
+    pub nominal_volts_per_ph: f32,
+    pub samples_per_reading: u16,
 }
 
 #[derive(Debug)]
@@ -52,6 +106,17 @@ pub struct LevelSettings {
 impl Settings {
     pub const fn from_env() -> Self {
         Self {
+            run_mode: RunMode::Normal,
+            components: ComponentSettings {
+                wifi: ComponentMode::Running,
+                http: ComponentMode::Running,
+                temperature: ComponentMode::Running,
+                telemetry: ComponentMode::Running,
+                water_level: ComponentMode::Running,
+                influx: ComponentMode::Running,
+                ph: ComponentMode::Off,
+                health: ComponentMode::Off,
+            },
             wifi: WifiSettings {
                 ssid: env!("WIFI_SSID"),
                 password: Secret::new(env!("WIFI_PASS")),
@@ -68,6 +133,15 @@ impl Settings {
                 tank_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
                 sump_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
                 target_celsius: 27.0,
+                ph: PhSettings {
+                    calibration: PhCalibration {
+                        neutral_volts: 1.500,
+                        acid_volts: 1.67748,
+                        calibrated_at_celsius: 25.0,
+                    },
+                    nominal_volts_per_ph: 0.05916,
+                    samples_per_reading: 64,
+                },
                 level: LevelSettings {
                     poll_interval: Duration::from_millis(100),
                     polarity: Polarity::ActiveLow,
@@ -95,16 +169,10 @@ const fn influx_from_env() -> Option<InfluxSettings> {
             org,
             bucket,
             token: Secret::new(token),
-            // 1000 snapshots at the 30 s telemetry tick is roughly 8 h of
-            // tolerance for a network outage. Note these are snapshots, not
-            // Influx points - one snapshot encodes to seven lines.
             buffer_capacity: 1000,
             batch_max_snapshots: 100,
             retry_backoff: Duration::from_secs(30),
             request_timeout: Duration::from_secs(10),
-            // Sized for a TLS handshake plus the HTTP client's buffers. The
-            // main task needs 128 KiB only because picoserve monomorphises a
-            // huge future onto it; this thread does far less.
             worker_stack_size: 12 * 1024,
         }),
         _ => None,
