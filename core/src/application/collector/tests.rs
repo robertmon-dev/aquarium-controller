@@ -3,9 +3,10 @@ use std::sync::Mutex;
 use super::TelemetryCollector;
 use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{LightingProfile, TankTelemetryDto, WaterTemperature};
+use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     Clock, LightingOverrideSource, SystemHealthProvider, TelemetrySink, TemperatureError,
-    TemperatureReader, TemperatureSensorRole,
+    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
 };
 
 struct FakeReader {
@@ -114,6 +115,34 @@ impl LightingOverrideSource for FakeOverrides {
     }
 }
 
+struct FakeLevels(WaterLevelSnapshot);
+
+impl FakeLevels {
+    fn all_dry() -> Self {
+        Self(WaterLevelSnapshot::dry())
+    }
+
+    fn wet(roles: &[WaterLevelRole]) -> Self {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        for role in roles {
+            snapshot.sensors[role.index()].state = WaterLevelState::Wet;
+        }
+        Self(snapshot)
+    }
+
+    fn faulty(role: WaterLevelRole) -> Self {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        snapshot.sensors[role.index()].faulty = true;
+        Self(snapshot)
+    }
+}
+
+impl WaterLevelSource for FakeLevels {
+    fn levels(&self) -> WaterLevelSnapshot {
+        self.0.clone()
+    }
+}
+
 struct FakeHealth;
 
 impl SystemHealthProvider for FakeHealth {
@@ -149,12 +178,23 @@ impl TelemetrySink for &RecordingSink {
     }
 }
 
-fn collector(
-    reader: FakeReader,
-    clock: FakeClock,
-    sink: &RecordingSink,
-) -> TelemetryCollector<FakeReader, FakeClock, FakeHealth, &RecordingSink, FakeOverrides> {
-    with_overrides(reader, clock, sink, FakeOverrides::none())
+type Subject<'a> = TelemetryCollector<
+    FakeReader,
+    FakeClock,
+    FakeHealth,
+    &'a RecordingSink,
+    FakeOverrides,
+    FakeLevels,
+>;
+
+fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
+    build(
+        reader,
+        clock,
+        sink,
+        FakeOverrides::none(),
+        FakeLevels::all_dry(),
+    )
 }
 
 fn with_overrides(
@@ -162,8 +202,28 @@ fn with_overrides(
     clock: FakeClock,
     sink: &RecordingSink,
     overrides: FakeOverrides,
-) -> TelemetryCollector<FakeReader, FakeClock, FakeHealth, &RecordingSink, FakeOverrides> {
-    TelemetryCollector::new(reader, clock, FakeHealth, sink, overrides, 27.0)
+) -> Subject<'_> {
+    build(reader, clock, sink, overrides, FakeLevels::all_dry())
+}
+
+fn with_levels(sink: &RecordingSink, levels: FakeLevels) -> Subject<'_> {
+    build(
+        FakeReader::healthy(),
+        FakeClock::synced_at_noon_in_june(),
+        sink,
+        FakeOverrides::none(),
+        levels,
+    )
+}
+
+fn build(
+    reader: FakeReader,
+    clock: FakeClock,
+    sink: &RecordingSink,
+    overrides: FakeOverrides,
+    levels: FakeLevels,
+) -> Subject<'_> {
+    TelemetryCollector::new(reader, clock, FakeHealth, sink, overrides, levels, 27.0)
 }
 
 #[tokio::test]
@@ -359,8 +419,6 @@ async fn republish_does_not_touch_the_sensor_bus() {
     );
 
     c.sample().await;
-    // A child module can read private fields of its ancestor, so the test
-    // reaches the counter directly instead of widening the public surface.
     let after_sample = c.reader.conversions;
 
     c.republish();
@@ -405,4 +463,62 @@ async fn republish_before_any_sample_reports_no_readings() {
         "an empty cache reports no reading instead of faking data"
     );
     assert!(!s.temperature.sensors_healthy);
+}
+
+#[tokio::test]
+async fn publishes_the_water_levels_from_the_source() {
+    let sink = RecordingSink::default();
+    with_levels(
+        &sink,
+        FakeLevels::wet(&[WaterLevelRole::SumpPump, WaterLevelRole::MainTank]),
+    )
+    .sample()
+    .await;
+
+    let s = sink.last();
+    assert!(s.water_level.sump_pump.wet);
+    assert!(s.water_level.main_tank.wet);
+    assert!(!s.water_level.sump_mechanical.wet);
+    assert!(!s.water_level.sump_biological.wet);
+    assert!(s.water_level.sensors_healthy);
+}
+
+#[tokio::test]
+async fn a_faulty_level_sensor_reaches_telemetry() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::faulty(WaterLevelRole::SumpMechanical))
+        .sample()
+        .await;
+
+    let s = sink.last();
+    assert!(s.water_level.sump_mechanical.faulty);
+    assert!(!s.water_level.sensors_healthy);
+}
+
+#[tokio::test]
+async fn the_ato_section_stays_untouched_by_the_level_driver() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::wet(&[WaterLevelRole::SumpPump]))
+        .sample()
+        .await;
+
+    let s = sink.last();
+    assert!(
+        !s.ato.sump_water_low,
+        "interpreting levels into ATO state belongs to the ATO spec, not here"
+    );
+    assert!(!s.ato.reservoir_empty);
+    assert!(!s.ato.pump_active);
+}
+
+#[tokio::test]
+async fn republish_keeps_the_last_water_levels() {
+    let sink = RecordingSink::default();
+    let mut subject = with_levels(&sink, FakeLevels::wet(&[WaterLevelRole::MainTank]));
+
+    subject.sample().await;
+    subject.republish();
+
+    let s = sink.last();
+    assert!(s.water_level.main_tank.wet);
 }
