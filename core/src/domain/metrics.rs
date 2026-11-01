@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
+
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
@@ -75,6 +77,7 @@ pub struct TankTelemetryDto {
     pub co2: Co2MetricsDto,
     pub ato: AtoMetricsDto,
     pub lighting: LightingMetricsDto,
+    pub water_level: WaterLevelMetricsDto,
     pub leak_detected: bool,
 }
 
@@ -117,6 +120,13 @@ impl TankTelemetryDto {
                 channel_rgb_pct: 0,
                 override_active: false,
             },
+            water_level: WaterLevelMetricsDto {
+                sump_mechanical: WaterLevelEntryDto::UNKNOWN,
+                sump_biological: WaterLevelEntryDto::UNKNOWN,
+                sump_pump: WaterLevelEntryDto::UNKNOWN,
+                main_tank: WaterLevelEntryDto::UNKNOWN,
+                sensors_healthy: false,
+            },
             leak_detected: false,
         }
     }
@@ -158,6 +168,48 @@ pub struct SystemHealthDto {
     pub uptime_seconds: u64,
     pub wifi_rssi_dbm: i8,
     pub free_heap_kb: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaterLevelEntryDto {
+    pub wet: bool,
+    pub faulty: bool,
+}
+
+impl WaterLevelEntryDto {
+    pub const UNKNOWN: Self = Self {
+        wet: false,
+        faulty: false,
+    };
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WaterLevelMetricsDto {
+    pub sump_mechanical: WaterLevelEntryDto,
+    pub sump_biological: WaterLevelEntryDto,
+    pub sump_pump: WaterLevelEntryDto,
+    pub main_tank: WaterLevelEntryDto,
+    pub sensors_healthy: bool,
+}
+
+impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
+    fn from(snapshot: &WaterLevelSnapshot) -> Self {
+        let entry = |role: WaterLevelRole| {
+            let reading = snapshot.get(role);
+            WaterLevelEntryDto {
+                wet: reading.state == WaterLevelState::Wet,
+                faulty: reading.faulty,
+            }
+        };
+
+        Self {
+            sump_mechanical: entry(WaterLevelRole::SumpMechanical),
+            sump_biological: entry(WaterLevelRole::SumpBiological),
+            sump_pump: entry(WaterLevelRole::SumpPump),
+            main_tank: entry(WaterLevelRole::MainTank),
+            sensors_healthy: snapshot.all_healthy(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
