@@ -204,3 +204,65 @@ mod lighting {
             .expect("returning to the schedule must refresh telemetry too");
     }
 }
+
+mod water_level {
+    use std::sync::Arc;
+
+    use crate::adapters::outbound::memory::InMemoryWaterLevelStore;
+    use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
+    use crate::ports::outbound::{WaterLevelSink, WaterLevelSource};
+
+    fn snapshot_with_wet(role: WaterLevelRole) -> WaterLevelSnapshot {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        snapshot.sensors[role.index()].state = WaterLevelState::Wet;
+        snapshot
+    }
+
+    #[test]
+    fn serves_an_all_dry_snapshot_before_the_first_sample() {
+        let store = InMemoryWaterLevelStore::new();
+
+        let levels = store.levels();
+
+        for role in WaterLevelRole::ALL {
+            assert_eq!(levels.get(role).state, WaterLevelState::Dry);
+            assert!(!levels.get(role).faulty);
+        }
+    }
+
+    #[test]
+    fn publishing_replaces_the_snapshot() {
+        let store = InMemoryWaterLevelStore::new();
+
+        store.publish(snapshot_with_wet(WaterLevelRole::SumpPump));
+        assert_eq!(
+            store.levels().get(WaterLevelRole::SumpPump).state,
+            WaterLevelState::Wet
+        );
+
+        store.publish(snapshot_with_wet(WaterLevelRole::MainTank));
+        let levels = store.levels();
+        assert_eq!(
+            levels.get(WaterLevelRole::SumpPump).state,
+            WaterLevelState::Dry,
+            "publish replaces the whole snapshot rather than merging"
+        );
+        assert_eq!(
+            levels.get(WaterLevelRole::MainTank).state,
+            WaterLevelState::Wet
+        );
+    }
+
+    #[test]
+    fn the_arc_forwards_reach_the_same_store() {
+        let store = Arc::new(InMemoryWaterLevelStore::new());
+        let writer = Arc::clone(&store);
+
+        writer.publish(snapshot_with_wet(WaterLevelRole::SumpBiological));
+
+        assert_eq!(
+            store.levels().get(WaterLevelRole::SumpBiological).state,
+            WaterLevelState::Wet
+        );
+    }
+}
