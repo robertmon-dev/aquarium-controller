@@ -90,6 +90,13 @@ fn lighting(snapshot: &TankTelemetryDto) -> Fields {
     fields
 }
 
+fn co2(snapshot: &TankTelemetryDto) -> Fields {
+    let mut fields = Fields::new();
+    fields.optional_float("ph", snapshot.co2.current_ph);
+    fields.optional_float("electrode_health", snapshot.co2.ph_electrode_health);
+    fields
+}
+
 fn water_level(entry: WaterLevelEntryDto) -> Fields {
     let mut fields = Fields::new();
     fields.boolean("wet", entry.wet);
@@ -118,6 +125,7 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
     ));
     lines.extend(line("aquarium_health", health(snapshot), timestamp_s));
     lines.extend(line("aquarium_lighting", lighting(snapshot), timestamp_s));
+    lines.extend(line("aquarium_co2", co2(snapshot), timestamp_s));
 
     for (tag, entry) in sensors {
         lines.extend(line(

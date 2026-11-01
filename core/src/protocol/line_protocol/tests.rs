@@ -178,3 +178,43 @@ fn no_line_is_left_empty_or_trailing() {
         assert!(!line.trim().is_empty(), "blank line in: {encoded:?}");
     }
 }
+
+#[test]
+fn ph_and_electrode_health_are_exported() {
+    let mut dto = populated();
+    dto.co2.current_ph = Some(6.85);
+    dto.co2.ph_electrode_health = Some(0.94);
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("aquarium_co2 ph=6.85,electrode_health=0.94"),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn an_absent_ph_reading_omits_the_field() {
+    let mut dto = populated();
+    dto.co2.current_ph = None;
+    dto.co2.ph_electrode_health = Some(0.94);
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(!encoded.contains("ph="), "got: {encoded}");
+    assert!(encoded.contains("electrode_health=0.94"), "got: {encoded}");
+}
+
+#[test]
+fn an_unconfigured_co2_section_produces_no_line() {
+    let mut dto = populated();
+    dto.co2.current_ph = None;
+    dto.co2.ph_electrode_health = None;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        !encoded.contains("aquarium_co2"),
+        "with no pH probe there is nothing to report yet: {encoded}"
+    );
+}
