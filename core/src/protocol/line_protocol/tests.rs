@@ -145,22 +145,26 @@ fn a_non_finite_value_is_omitted() {
 }
 
 #[test]
-fn a_measurement_with_no_fields_left_produces_no_line() {
-    let mut dto = TankTelemetryDto::empty();
-    dto.timestamp_epoch_s = 1_750_000_000;
-    dto.temperature.tank_celsius = None;
-    dto.temperature.sump_celsius = None;
-    dto.temperature.target_celsius = f32::INFINITY;
-
-    let encoded = encode(&dto).expect("encodes");
+fn a_field_set_that_dropped_everything_produces_no_line() {
+    let mut fields = Fields::new();
+    fields.optional_float("tank_c", None);
+    fields.float("target_c", f32::INFINITY);
 
     assert!(
-        !encoded.contains("aquarium_temperature"),
-        "a line with no fields is invalid line protocol and would reject the whole batch: {encoded}"
+        line("aquarium_temperature", fields, 1_750_000_000).is_none(),
+        "a line with no fields is invalid line protocol and Influx would reject the whole batch"
     );
-    assert!(
-        encoded.contains("aquarium_health"),
-        "the other measurements must survive: {encoded}"
+}
+
+#[test]
+fn a_field_set_keeps_the_line_once_anything_survives() {
+    let mut fields = Fields::new();
+    fields.optional_float("tank_c", None);
+    fields.boolean("healthy", false);
+
+    assert_eq!(
+        line("aquarium_temperature", fields, 1_750_000_000).as_deref(),
+        Some("aquarium_temperature healthy=false 1750000000")
     );
 }
 
