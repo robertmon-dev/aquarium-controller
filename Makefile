@@ -79,7 +79,8 @@ env-example: ## Write a .env skeleton with a fresh API token
 	@test ! -f .env || { $(ERR) ".env already exists - refusing to overwrite"; exit 1; }
 	@$(MSG) "Creating .env"
 	@printf 'WIFI_SSID=\nWIFI_PASS=\nAPI_TOKEN=%s\n' "$$(head -c 24 /dev/urandom | base64 | tr -d '/+=')" > .env
-	@$(SUB) "fill in WIFI_SSID and WIFI_PASS"
+	@printf '\n# Optional: telemetry export to InfluxDB 2.x.\n# All four must be set, or export stays off and the firmware builds as before.\nINFLUX_URL=\nINFLUX_ORG=\nINFLUX_BUCKET=\nINFLUX_TOKEN=\n' >> .env
+	@$(SUB) "fill in WIFI_SSID and WIFI_PASS; INFLUX_* are optional"
 	@grep -qxF '.env' .gitignore 2>/dev/null && $(SUB) ".env is gitignored" || $(WARN) "add .env to .gitignore"
 
 .PHONY: token
