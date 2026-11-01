@@ -5,8 +5,11 @@ use tokio::time::Instant;
 
 use crate::domain::light::{LightingOverride, LightingTarget};
 use crate::domain::metrics::TankTelemetryDto;
+use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{LightingControl, TelemetryQuery};
-use crate::ports::outbound::{LightingOverrideSource, TelemetrySink};
+use crate::ports::outbound::{
+    LightingOverrideSource, TelemetrySink, WaterLevelSink, WaterLevelSource,
+};
 
 pub struct InMemoryTelemetryStore {
     tx: watch::Sender<TankTelemetryDto>,
@@ -142,6 +145,48 @@ impl LightingControl for Arc<InMemoryLightingStore> {
 impl LightingOverrideSource for Arc<InMemoryLightingStore> {
     fn active_override(&self) -> Option<LightingOverride> {
         self.as_ref().active_override()
+    }
+}
+
+pub struct InMemoryWaterLevelStore {
+    tx: watch::Sender<WaterLevelSnapshot>,
+}
+
+impl InMemoryWaterLevelStore {
+    pub fn new() -> Self {
+        Self {
+            tx: watch::channel(WaterLevelSnapshot::dry()).0,
+        }
+    }
+}
+
+impl Default for InMemoryWaterLevelStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WaterLevelSink for InMemoryWaterLevelStore {
+    fn publish(&self, snapshot: WaterLevelSnapshot) {
+        self.tx.send_replace(snapshot);
+    }
+}
+
+impl WaterLevelSource for InMemoryWaterLevelStore {
+    fn levels(&self) -> WaterLevelSnapshot {
+        self.tx.borrow().clone()
+    }
+}
+
+impl WaterLevelSink for Arc<InMemoryWaterLevelStore> {
+    fn publish(&self, snapshot: WaterLevelSnapshot) {
+        self.as_ref().publish(snapshot);
+    }
+}
+
+impl WaterLevelSource for Arc<InMemoryWaterLevelStore> {
+    fn levels(&self) -> WaterLevelSnapshot {
+        self.as_ref().levels()
     }
 }
 
