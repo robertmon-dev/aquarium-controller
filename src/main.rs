@@ -3,10 +3,15 @@ use std::time::Duration;
 
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
-use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
-use aquarium_core::application::TelemetryCollector;
+use aquarium_core::adapters::outbound::memory::{
+    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
+};
+use aquarium_core::application::{MetricsExporter, TelemetryCollector, WaterLevelSampler};
+use aquarium_core::domain::metrics::TankTelemetryDto;
+use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
-    Clock, LightingOverrideSource, SystemHealthProvider, TelemetrySink, TemperatureReader,
+    Clock, LightingOverrideSource, MetricsWriter, SystemHealthProvider, TelemetrySink,
+    TemperatureReader, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -14,12 +19,14 @@ use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::{self, link_patches};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 use tokio::task::LocalSet;
 use tokio::time::MissedTickBehavior;
 use tracing::{error, info};
 
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
+use aquarium_controller::adapters::outbound::influx::InfluxWriter;
+use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 use aquarium_controller::infrastructure::wifi::WifiManager;
@@ -90,10 +97,6 @@ async fn run() -> anyhow::Result<()> {
         return discover_rom(&mut bus);
     }
 
-    let sensors = Ds18b20Adapter::new(bus, SETTINGS.sensors.tank_rom, SETTINGS.sensors.sump_rom)
-        .context("Failed to initialize DS18B20 sensors")?;
-    info!("Temperature sensors ready");
-
     let sys_loop = EspSystemEventLoop::take().context("System event loop already taken")?;
     let nvs = EspDefaultNvsPartition::take().context("NVS partition already taken")?;
 
@@ -104,19 +107,47 @@ async fn run() -> anyhow::Result<()> {
     let store = Arc::new(InMemoryTelemetryStore::new());
     let lighting = Arc::new(InMemoryLightingStore::new());
     let lighting_changed = lighting.change_signal();
+    let levels = Arc::new(InMemoryWaterLevelStore::new());
+
+    let level_pins = Xkc25Adapter::new(
+        peripherals.pins.gpio5,
+        peripherals.pins.gpio6,
+        peripherals.pins.gpio7,
+        peripherals.pins.gpio15,
+    )
+    .context("Failed to initialize XKC-Y25 level inputs")?;
+
+    let sampler = WaterLevelSampler::new(
+        level_pins,
+        Arc::clone(&levels),
+        SETTINGS.sensors.level.polarity,
+        SETTINGS.sensors.level.filter,
+    );
+    info!("Water level sensors ready");
+
+    let exporter = match &SETTINGS.influx {
+        Some(influx) => {
+            let writer =
+                InfluxWriter::spawn(influx).context("Failed to start the Influx worker")?;
+            info!(bucket = influx.bucket, "InfluxDB export enabled");
+
+            Some(export_task(
+                MetricsExporter::new(writer, influx.buffer_capacity, influx.batch_max_snapshots),
+                store.subscribe(),
+                influx.retry_backoff,
+            ))
+        }
+        None => {
+            info!(
+                "InfluxDB export disabled: set INFLUX_URL, INFLUX_ORG, INFLUX_BUCKET, INFLUX_TOKEN"
+            );
+            None
+        }
+    };
 
     let listener = TcpListener::bind(("0.0.0.0", SETTINGS.http.port))
         .await
         .context("Failed to bind HTTP listener")?;
-
-    let collector = TelemetryCollector::new(
-        sensors,
-        clock,
-        EspSystemHealth,
-        Arc::clone(&store),
-        Arc::clone(&lighting),
-        SETTINGS.sensors.target_celsius,
-    );
 
     let server = http::run(
         listener,
@@ -129,13 +160,72 @@ async fn run() -> anyhow::Result<()> {
         },
     );
 
-    tokio::join!(sensor_task(collector, lighting_changed), wifi.run(), server);
+    tokio::join!(level_task(sampler), optional(exporter), wifi.run(), server);
 
     Ok(())
 }
 
-async fn sensor_task<R, C, H, S, O>(
-    mut collector: TelemetryCollector<R, C, H, S, O>,
+async fn optional<F: core::future::Future<Output = ()>>(task: Option<F>) {
+    match task {
+        Some(task) => task.await,
+        None => core::future::pending().await,
+    }
+}
+
+async fn export_task<W>(
+    mut exporter: MetricsExporter<W>,
+    mut rx: watch::Receiver<TankTelemetryDto>,
+    backoff: Duration,
+) where
+    W: MetricsWriter,
+{
+    loop {
+        let snapshot = if exporter.pending() > 0 {
+            match tokio::time::timeout(backoff, rx.changed()).await {
+                Ok(Ok(())) => Some(rx.borrow_and_update().clone()),
+                Ok(Err(_)) => return,
+                // Backoff elapsed; retry what is already queued.
+                Err(_) => None,
+            }
+        } else {
+            match rx.changed().await {
+                Ok(()) => Some(rx.borrow_and_update().clone()),
+                Err(_) => return,
+            }
+        };
+
+        if let Some(snapshot) = snapshot {
+            if !exporter.enqueue(&snapshot) {
+                continue;
+            }
+        }
+
+        while exporter.pending() > 0 {
+            match exporter.flush().await {
+                Ok(0) => break,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+    }
+}
+
+async fn level_task<P, S>(mut sampler: WaterLevelSampler<P, S>)
+where
+    P: WaterLevelPins,
+    S: WaterLevelSink,
+{
+    let mut ticker = tokio::time::interval(SETTINGS.sensors.level.poll_interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+        sampler.tick();
+    }
+}
+
+async fn sensor_task<R, C, H, S, O, W>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W>,
     lighting_changed: Arc<Notify>,
 ) where
     R: TemperatureReader,
@@ -143,6 +233,7 @@ async fn sensor_task<R, C, H, S, O>(
     H: SystemHealthProvider,
     S: TelemetrySink,
     O: LightingOverrideSource,
+    W: WaterLevelSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
