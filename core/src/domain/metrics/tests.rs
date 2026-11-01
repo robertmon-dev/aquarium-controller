@@ -100,3 +100,37 @@ mod water_level {
         assert!(dto.sensors_healthy);
     }
 }
+
+mod ph {
+    use crate::domain::metrics::Ph;
+
+    #[test]
+    fn accepts_the_full_measurable_range() {
+        for value in [0.0, 4.0, 7.0, 8.2, 14.0] {
+            assert!(Ph::new(value).is_ok(), "{value} must be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_values_outside_the_scale() {
+        assert!(Ph::new(-0.1).is_err());
+        assert!(Ph::new(14.1).is_err());
+    }
+
+    #[test]
+    fn rejects_nan() {
+        assert!(Ph::new(f32::NAN).is_err());
+    }
+
+    #[test]
+    fn rejects_infinity() {
+        assert!(Ph::new(f32::INFINITY).is_err());
+        assert!(Ph::new(f32::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn keeps_the_value_it_was_given() {
+        let ph = Ph::new(6.85).expect("valid");
+        assert_eq!(ph.value(), 6.85);
+    }
+}

@@ -48,6 +48,37 @@ impl fmt::Display for WaterTemperature {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Ph(f32);
+
+impl Ph {
+    pub const MIN: f32 = 0.0;
+    pub const MAX: f32 = 14.0;
+
+    pub fn new(value: f32) -> Result<Self, &'static str> {
+        if !value.is_finite() {
+            return Err("pH reading is not a finite number");
+        }
+
+        if !(Self::MIN..=Self::MAX).contains(&value) {
+            return Err("pH reading is outside the 0-14 scale");
+        }
+
+        Ok(Self(value))
+    }
+
+    #[inline]
+    pub fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+impl fmt::Display for Ph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.2} pH", self.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LightingProfile {
@@ -107,6 +138,7 @@ impl TankTelemetryDto {
                 solenoid_open: false,
                 current_ph: None,
                 drop_checker_ph_target: None,
+                ph_electrode_health: None,
             },
             ato: AtoMetricsDto {
                 sump_water_low: false,
@@ -153,6 +185,7 @@ pub struct Co2MetricsDto {
     pub solenoid_open: bool,
     pub current_ph: Option<f32>,
     pub drop_checker_ph_target: Option<f32>,
+    pub ph_electrode_health: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
