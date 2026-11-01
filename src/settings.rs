@@ -4,6 +4,7 @@ use aquarium_core::secret::Secret;
 use esp_idf_svc::wifi::AuthMethod;
 
 use crate::adapters::outbound::ds18b20::RomAddress;
+use crate::adapters::outbound::xkc_y25::{FilterConfig, Polarity};
 
 #[derive(Debug)]
 pub struct Settings {
@@ -33,6 +34,14 @@ pub struct SensorSettings {
     pub tank_rom: RomAddress,
     pub sump_rom: RomAddress,
     pub target_celsius: f32,
+    pub level: LevelSettings,
+}
+
+#[derive(Debug)]
+pub struct LevelSettings {
+    pub poll_interval: Duration,
+    pub polarity: Polarity,
+    pub filter: FilterConfig,
 }
 
 impl Settings {
@@ -54,6 +63,15 @@ impl Settings {
                 tank_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
                 sump_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
                 target_celsius: 27.0,
+                level: LevelSettings {
+                    poll_interval: Duration::from_millis(100),
+                    polarity: Polarity::ActiveLow,
+                    filter: FilterConfig {
+                        debounce_samples: 10,
+                        flap_window_samples: 300,
+                        flap_max_transitions: 60,
+                    },
+                },
             },
         }
     }
