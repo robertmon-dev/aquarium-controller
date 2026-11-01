@@ -1,36 +1,50 @@
 use crate::domain::light::{self, LightingSchedule};
-use crate::domain::metrics::{LightingMetricsDto, LightingProfile, TankTelemetryDto};
+use crate::domain::metrics::{
+    LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
+};
 use crate::ports::outbound::{
     Clock, LightingOverrideSource, SystemHealthProvider, TelemetrySink, TemperatureReader,
-    TemperatureSensorRole,
+    TemperatureSensorRole, WaterLevelSource,
 };
 
-pub struct TelemetryCollector<R, C, H, S, O> {
+pub struct TelemetryCollector<R, C, H, S, O, W> {
     reader: R,
     clock: C,
     health: H,
     sink: S,
     overrides: O,
+    levels: W,
     lighting: LightingSchedule,
     target_celsius: f32,
     last_readings: (Option<f32>, Option<f32>),
 }
 
-impl<R, C, H, S, O> TelemetryCollector<R, C, H, S, O>
+impl<R, C, H, S, O, W> TelemetryCollector<R, C, H, S, O, W>
 where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
     S: TelemetrySink,
     O: LightingOverrideSource,
+    W: WaterLevelSource,
 {
-    pub fn new(reader: R, clock: C, health: H, sink: S, overrides: O, target_celsius: f32) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        reader: R,
+        clock: C,
+        health: H,
+        sink: S,
+        overrides: O,
+        levels: W,
+        target_celsius: f32,
+    ) -> Self {
         Self {
             reader,
             clock,
             health,
             sink,
             overrides,
+            levels,
             lighting: LightingSchedule::new(),
             target_celsius,
             last_readings: (None, None),
@@ -88,6 +102,7 @@ where
         dto.temperature.sensors_healthy = tank.is_some() && sump.is_some();
 
         dto.lighting = self.evaluate_lighting();
+        dto.water_level = WaterLevelMetricsDto::from(&self.levels.levels());
 
         dto
     }
