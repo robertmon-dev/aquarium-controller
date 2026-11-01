@@ -20,7 +20,6 @@ pub use hw::InfluxWriter;
 
 #[cfg(target_os = "espidf")]
 mod hw {
-    use std::ffi::CStr;
     use std::time::Duration;
 
     use esp_idf_hal::task::thread::ThreadSpawnConfiguration;
@@ -62,7 +61,7 @@ mod hw {
             };
 
             ThreadSpawnConfiguration {
-                name: Some(CStr::from_bytes_with_nul(b"influx\0").expect("static name")),
+                name: Some(c"influx"),
                 stack_size: settings.worker_stack_size,
                 ..Default::default()
             }
