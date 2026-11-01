@@ -35,3 +35,68 @@ fn safe_range_is_inclusive_at_both_ends() {
     assert!(WaterTemperature::new(31.0).unwrap().is_within_safe_range());
     assert!(WaterTemperature::new(27.5).unwrap().is_within_safe_range());
 }
+
+mod water_level {
+    use crate::domain::metrics::{TankTelemetryDto, WaterLevelEntryDto, WaterLevelMetricsDto};
+    use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
+
+    #[test]
+    fn an_empty_snapshot_reports_no_water_and_no_health() {
+        let dto = TankTelemetryDto::empty();
+
+        for entry in [
+            dto.water_level.sump_mechanical,
+            dto.water_level.sump_biological,
+            dto.water_level.sump_pump,
+            dto.water_level.main_tank,
+        ] {
+            assert_eq!(
+                entry,
+                WaterLevelEntryDto {
+                    wet: false,
+                    faulty: false
+                }
+            );
+        }
+        assert!(
+            !dto.water_level.sensors_healthy,
+            "nothing has been sampled yet, so no sensor is known to be healthy"
+        );
+    }
+
+    #[test]
+    fn each_role_maps_to_its_own_field() {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        snapshot.sensors[WaterLevelRole::SumpPump.index()].state = WaterLevelState::Wet;
+        snapshot.sensors[WaterLevelRole::MainTank.index()].state = WaterLevelState::Wet;
+
+        let dto = WaterLevelMetricsDto::from(&snapshot);
+
+        assert!(dto.sump_pump.wet);
+        assert!(dto.main_tank.wet);
+        assert!(!dto.sump_mechanical.wet);
+        assert!(!dto.sump_biological.wet);
+    }
+
+    #[test]
+    fn a_faulty_sensor_is_reported_and_clears_the_health_flag() {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        snapshot.sensors[WaterLevelRole::SumpBiological.index()].faulty = true;
+
+        let dto = WaterLevelMetricsDto::from(&snapshot);
+
+        assert!(dto.sump_biological.faulty);
+        assert!(!dto.sump_mechanical.faulty);
+        assert!(
+            !dto.sensors_healthy,
+            "one faulty sensor makes the whole group unhealthy"
+        );
+    }
+
+    #[test]
+    fn a_fully_working_group_is_healthy() {
+        let dto = WaterLevelMetricsDto::from(&WaterLevelSnapshot::dry());
+
+        assert!(dto.sensors_healthy);
+    }
+}
