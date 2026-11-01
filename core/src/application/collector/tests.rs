@@ -1,13 +1,14 @@
 use std::sync::Mutex;
 
-use super::TelemetryCollector;
+use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{LightingProfile, TankTelemetryDto, WaterTemperature};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
-    Clock, LightingOverrideSource, SystemHealthProvider, TelemetrySink, TemperatureError,
+    Clock, LightingOverrideSource, PhReader, SystemHealthProvider, TelemetrySink, TemperatureError,
     TemperatureReader, TemperatureSensorRole, WaterLevelSource,
 };
+use crate::protocol::ph::{self, PhCalibration, PhError};
 
 struct FakeReader {
     tank: Option<f32>,
@@ -143,6 +144,41 @@ impl WaterLevelSource for FakeLevels {
     }
 }
 
+struct FakePh(Option<f32>);
+
+impl FakePh {
+    fn at(volts: f32) -> Self {
+        Self(Some(volts))
+    }
+
+    fn unavailable() -> Self {
+        Self(None)
+    }
+}
+
+impl PhReader for FakePh {
+    async fn read_volts(&mut self) -> Result<f32, PhError> {
+        self.0
+            .ok_or(PhError::Unavailable("fake: no probe attached"))
+    }
+}
+
+const CAL: PhCalibration = PhCalibration {
+    neutral_volts: 1.500,
+    acid_volts: 1.67748,
+    calibrated_at_celsius: 25.0,
+};
+
+const NOMINAL_VOLTS_PER_PH: f32 = 0.05916;
+
+fn config() -> TelemetryConfig {
+    TelemetryConfig {
+        target_celsius: 27.0,
+        ph: CAL,
+        ph_nominal_volts_per_ph: NOMINAL_VOLTS_PER_PH,
+    }
+}
+
 struct FakeHealth;
 
 impl SystemHealthProvider for FakeHealth {
@@ -185,6 +221,7 @@ type Subject<'a> = TelemetryCollector<
     &'a RecordingSink,
     FakeOverrides,
     FakeLevels,
+    FakePh,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -223,7 +260,54 @@ fn build(
     overrides: FakeOverrides,
     levels: FakeLevels,
 ) -> Subject<'_> {
-    TelemetryCollector::new(reader, clock, FakeHealth, sink, overrides, levels, 27.0)
+    with_ph(
+        reader,
+        clock,
+        sink,
+        overrides,
+        levels,
+        FakePh::unavailable(),
+    )
+}
+
+fn with_ph(
+    reader: FakeReader,
+    clock: FakeClock,
+    sink: &RecordingSink,
+    overrides: FakeOverrides,
+    levels: FakeLevels,
+    ph: FakePh,
+) -> Subject<'_> {
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: reader,
+            clock,
+            health: FakeHealth,
+            overrides,
+            levels,
+            ph,
+        },
+        sink,
+        config(),
+    )
+}
+
+fn ph_subject(sink: &RecordingSink, reader: FakeReader, ph: FakePh) -> Subject<'_> {
+    with_ph(
+        reader,
+        FakeClock::synced_at_noon_in_june(),
+        sink,
+        FakeOverrides::none(),
+        FakeLevels::all_dry(),
+        ph,
+    )
+}
+
+fn assert_close(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < 0.01,
+        "expected ~{expected}, got {actual}"
+    );
 }
 
 #[tokio::test]
@@ -419,14 +503,14 @@ async fn republish_does_not_touch_the_sensor_bus() {
     );
 
     c.sample().await;
-    let after_sample = c.reader.conversions;
+    let after_sample = c.sources.temperature.conversions;
 
     c.republish();
     c.republish();
 
     assert_eq!(sink.count(), 3, "every call publishes a snapshot");
     assert_eq!(
-        c.reader.conversions, after_sample,
+        c.sources.temperature.conversions, after_sample,
         "a burst of API requests MUST NOT hammer the 1-Wire bus"
     );
 }
@@ -521,4 +605,127 @@ async fn republish_keeps_the_last_water_levels() {
 
     let s = sink.last();
     assert!(s.water_level.main_tank.wet);
+}
+
+#[tokio::test]
+async fn publishes_ph_converted_from_the_probe_voltage() {
+    let sink = RecordingSink::default();
+    let reader = FakeReader {
+        tank: Some(25.0),
+        sump: Some(25.0),
+        trigger_fails: false,
+        conversions: 0,
+    };
+
+    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
+        .sample()
+        .await;
+
+    let expected = ph::convert(CAL.acid_volts, 25.0, &CAL)
+        .expect("valid")
+        .value();
+    assert_close(sink.last().co2.current_ph.expect("a reading"), expected);
+}
+
+#[tokio::test]
+async fn an_unavailable_probe_reports_no_ph_rather_than_a_stand_in() {
+    let sink = RecordingSink::default();
+
+    ph_subject(&sink, FakeReader::healthy(), FakePh::unavailable())
+        .sample()
+        .await;
+
+    assert_eq!(sink.last().co2.current_ph, None);
+}
+
+#[tokio::test]
+async fn compensation_uses_the_tank_temperature_not_the_sump() {
+    let sink = RecordingSink::default();
+    let reader = FakeReader {
+        tank: Some(25.0),
+        sump: Some(60.0),
+        trigger_fails: false,
+        conversions: 0,
+    };
+
+    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
+        .sample()
+        .await;
+
+    let from_tank = ph::convert(CAL.acid_volts, 25.0, &CAL)
+        .expect("valid")
+        .value();
+    let from_sump = ph::convert(CAL.acid_volts, 60.0, &CAL)
+        .expect("valid")
+        .value();
+
+    let reported = sink.last().co2.current_ph.expect("a reading");
+    assert_close(reported, from_tank);
+    assert!(
+        (reported - from_sump).abs() > 0.1,
+        "the sump temperature must not drive pH compensation"
+    );
+}
+
+#[tokio::test]
+async fn without_a_tank_reading_compensation_falls_back_to_the_target() {
+    let sink = RecordingSink::default();
+    let reader = FakeReader {
+        tank: None,
+        sump: Some(26.0),
+        trigger_fails: false,
+        conversions: 0,
+    };
+
+    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
+        .sample()
+        .await;
+
+    let expected = ph::convert(CAL.acid_volts, config().target_celsius, &CAL)
+        .expect("valid")
+        .value();
+    assert_close(sink.last().co2.current_ph.expect("a reading"), expected);
+}
+
+#[tokio::test]
+async fn reports_electrode_wear_against_the_nominal_slope() {
+    let sink = RecordingSink::default();
+
+    ph_subject(&sink, FakeReader::healthy(), FakePh::at(CAL.neutral_volts))
+        .sample()
+        .await;
+
+    let health = sink.last().co2.ph_electrode_health.expect("a ratio");
+    assert_close(health, 1.0);
+}
+
+#[tokio::test]
+async fn a_worn_electrode_reports_a_ratio_below_one() {
+    let sink = RecordingSink::default();
+    let worn = PhCalibration {
+        neutral_volts: 1.500,
+        acid_volts: 1.650,
+        calibrated_at_celsius: 25.0,
+    };
+
+    let mut subject = ph_subject(&sink, FakeReader::healthy(), FakePh::at(1.5));
+    subject.config.ph = worn;
+    subject.sample().await;
+
+    let health = sink.last().co2.ph_electrode_health.expect("a ratio");
+    assert!(
+        health > 0.8 && health < 0.9,
+        "150 mV over three pH units is about 85% of nominal, got {health}"
+    );
+}
+
+#[tokio::test]
+async fn republish_keeps_the_last_ph_reading() {
+    let sink = RecordingSink::default();
+    let mut subject = ph_subject(&sink, FakeReader::healthy(), FakePh::at(CAL.acid_volts));
+
+    subject.sample().await;
+    subject.republish();
+
+    assert!(sink.last().co2.current_ph.is_some());
 }
