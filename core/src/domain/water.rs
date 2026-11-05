@@ -10,16 +10,18 @@ pub enum WaterLevelRole {
     SumpBiological,
     SumpPump,
     MainTank,
+    SumpReserve,
 }
 
 impl WaterLevelRole {
-    pub const COUNT: usize = 4;
+    pub const COUNT: usize = 5;
 
     pub const ALL: [Self; Self::COUNT] = [
         Self::SumpMechanical,
         Self::SumpBiological,
         Self::SumpPump,
         Self::MainTank,
+        Self::SumpReserve,
     ];
 
     pub const fn index(self) -> usize {
@@ -28,6 +30,7 @@ impl WaterLevelRole {
             Self::SumpBiological => 1,
             Self::SumpPump => 2,
             Self::MainTank => 3,
+            Self::SumpReserve => 4,
         }
     }
 }
@@ -61,5 +64,11 @@ impl WaterLevelSnapshot {
 
     pub fn all_healthy(&self) -> bool {
         self.sensors.iter().all(|reading| !reading.faulty)
+    }
+
+    /// The ATO refills from the sump, so the sump counts as low once the pump
+    /// chamber, the lowest point the pump draws from, runs dry.
+    pub fn sump_water_low(&self) -> bool {
+        self.get(WaterLevelRole::SumpPump).state == WaterLevelState::Dry
     }
 }

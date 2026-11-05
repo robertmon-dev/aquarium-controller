@@ -157,6 +157,7 @@ impl TankTelemetryDto {
                 sump_biological: WaterLevelEntryDto::UNKNOWN,
                 sump_pump: WaterLevelEntryDto::UNKNOWN,
                 main_tank: WaterLevelEntryDto::UNKNOWN,
+                sump_reserve: WaterLevelEntryDto::UNKNOWN,
                 sensors_healthy: false,
             },
             leak_detected: false,
@@ -222,6 +223,7 @@ pub struct WaterLevelMetricsDto {
     pub sump_biological: WaterLevelEntryDto,
     pub sump_pump: WaterLevelEntryDto,
     pub main_tank: WaterLevelEntryDto,
+    pub sump_reserve: WaterLevelEntryDto,
     pub sensors_healthy: bool,
 }
 
@@ -240,6 +242,7 @@ impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
             sump_biological: entry(WaterLevelRole::SumpBiological),
             sump_pump: entry(WaterLevelRole::SumpPump),
             main_tank: entry(WaterLevelRole::MainTank),
+            sump_reserve: entry(WaterLevelRole::SumpReserve),
             sensors_healthy: snapshot.all_healthy(),
         }
     }

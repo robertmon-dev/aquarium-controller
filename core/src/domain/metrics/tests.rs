@@ -49,6 +49,7 @@ mod water_level {
             dto.water_level.sump_biological,
             dto.water_level.sump_pump,
             dto.water_level.main_tank,
+            dto.water_level.sump_reserve,
         ] {
             assert_eq!(
                 entry,
@@ -69,13 +70,24 @@ mod water_level {
         let mut snapshot = WaterLevelSnapshot::dry();
         snapshot.sensors[WaterLevelRole::SumpPump.index()].state = WaterLevelState::Wet;
         snapshot.sensors[WaterLevelRole::MainTank.index()].state = WaterLevelState::Wet;
+        snapshot.sensors[WaterLevelRole::SumpReserve.index()].state = WaterLevelState::Wet;
 
         let dto = WaterLevelMetricsDto::from(&snapshot);
 
         assert!(dto.sump_pump.wet);
         assert!(dto.main_tank.wet);
+        assert!(dto.sump_reserve.wet);
         assert!(!dto.sump_mechanical.wet);
         assert!(!dto.sump_biological.wet);
+    }
+
+    #[test]
+    fn the_ato_reads_low_only_from_the_pump_chamber() {
+        let mut snapshot = WaterLevelSnapshot::dry();
+        assert!(snapshot.sump_water_low());
+
+        snapshot.sensors[WaterLevelRole::SumpPump.index()].state = WaterLevelState::Wet;
+        assert!(!snapshot.sump_water_low());
     }
 
     #[test]
