@@ -133,7 +133,9 @@ where
         dto.co2.ph_electrode_health = self.electrode_health();
 
         dto.lighting = self.evaluate_lighting();
-        dto.water_level = WaterLevelMetricsDto::from(&self.sources.levels.levels());
+        let levels = self.sources.levels.levels();
+        dto.water_level = WaterLevelMetricsDto::from(&levels);
+        dto.ato.sump_water_low = levels.sump_water_low();
 
         dto
     }
