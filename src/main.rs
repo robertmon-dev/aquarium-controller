@@ -149,6 +149,7 @@ async fn run() -> anyhow::Result<()> {
             peripherals.pins.gpio12,
             peripherals.pins.gpio13,
             peripherals.pins.gpio14,
+            peripherals.pins.gpio15,
         )
         .context("Failed to initialize XKC-Y25 level inputs")?;
 
