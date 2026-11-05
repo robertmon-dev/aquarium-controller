@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use super::*;
 
 const CONFIG_12_BIT: u8 = 0x7F;
@@ -129,6 +131,7 @@ struct FakeBus {
     pending_complement: Option<bool>,
     command_bits: Vec<bool>,
     commands: Vec<u8>,
+    responses: VecDeque<bool>,
 }
 
 impl FakeBus {
@@ -140,6 +143,15 @@ impl FakeBus {
             pending_complement: None,
             command_bits: Vec::new(),
             commands: Vec::new(),
+            responses: VecDeque::new(),
+        }
+    }
+
+    fn queue_response(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            for index in 0..8 {
+                self.responses.push_back(byte & (1 << index) != 0);
+            }
         }
     }
 
@@ -176,6 +188,10 @@ impl OneWireLine for FakeBus {
     fn read_bit(&mut self) -> bool {
         if let Some(complement) = self.pending_complement.take() {
             return complement;
+        }
+
+        if !self.searching {
+            return self.responses.pop_front().unwrap_or(true);
         }
 
         let candidates = self.candidates();
@@ -223,4 +239,202 @@ fn rom_search_finds_a_single_device() {
 
     assert_eq!(search.next(&mut bus).unwrap(), Some(rom));
     assert_eq!(search.next(&mut bus).unwrap(), None);
+}
+
+fn drain_search(devices: &[RomAddress]) -> Vec<RomAddress> {
+    let mut bus = FakeBus::new(devices);
+    let mut search = RomSearch::new();
+    let mut found = Vec::new();
+
+    while let Some(rom) = search.next(&mut bus).unwrap() {
+        found.push(rom);
+        assert!(
+            found.len() <= devices.len() + 1,
+            "search does not terminate"
+        );
+    }
+
+    found.sort_unstable();
+    found
+}
+
+#[test]
+fn rom_search_enumerates_two_devices_sharing_a_bus() {
+    let tank = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let sump = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02]);
+
+    let mut expected = vec![tank, sump];
+    expected.sort_unstable();
+
+    assert_eq!(drain_search(&[tank, sump]), expected);
+}
+
+#[test]
+fn rom_search_enumerates_devices_differing_in_the_first_byte() {
+    let early = rom_with_crc([0x28, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    let late = rom_with_crc([0x28, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+
+    let mut expected = vec![early, late];
+    expected.sort_unstable();
+
+    assert_eq!(drain_search(&[early, late]), expected);
+}
+
+#[test]
+fn rom_search_enumerates_four_devices_without_duplicates() {
+    let devices = [
+        rom_with_crc([0x28, 0x11, 0x22, 0x33, 0x44, 0x55, 0x01]),
+        rom_with_crc([0x28, 0x11, 0x22, 0x33, 0x44, 0x55, 0x02]),
+        rom_with_crc([0x28, 0x91, 0x22, 0x33, 0x44, 0x55, 0x01]),
+        rom_with_crc([0x28, 0xF1, 0xA2, 0xB3, 0xC4, 0xD5, 0xE6]),
+    ];
+
+    let found = drain_search(&devices);
+    let mut expected = devices.to_vec();
+    expected.sort_unstable();
+
+    assert_eq!(found, expected);
+}
+
+#[test]
+fn rom_search_reports_a_bus_with_no_presence_pulse() {
+    let mut bus = FakeBus::new(&[]);
+    let mut search = RomSearch::new();
+
+    assert!(matches!(
+        search.next(&mut bus),
+        Err(TemperatureError::BusError(_))
+    ));
+}
+
+#[test]
+fn rom_search_rejects_a_device_with_a_broken_rom_crc() {
+    let mut corrupted = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    corrupted[7] ^= 0xFF;
+
+    let mut bus = FakeBus::new(&[corrupted]);
+    let mut search = RomSearch::new();
+
+    assert!(matches!(
+        search.next(&mut bus),
+        Err(TemperatureError::BusError("ROM CRC check failed"))
+    ));
+}
+
+#[test]
+fn rom_search_rejects_a_device_from_another_family() {
+    let other = rom_with_crc([0x10, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+
+    let mut bus = FakeBus::new(&[other]);
+    let mut search = RomSearch::new();
+
+    assert!(matches!(
+        search.next(&mut bus),
+        Err(TemperatureError::BusError(_))
+    ));
+}
+
+#[test]
+fn rom_search_issues_the_search_command_lsb_first() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let mut bus = FakeBus::new(&[rom]);
+    let mut search = RomSearch::new();
+
+    search.next(&mut bus).unwrap();
+
+    assert_eq!(bus.commands, vec![0xF0]);
+}
+
+#[test]
+fn search_roms_reports_how_many_devices_it_stored() {
+    let devices = [
+        rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]),
+        rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02]),
+    ];
+
+    let mut bus = FakeBus::new(&devices);
+    let mut found = [[0u8; 8]; 4];
+
+    let count = search_roms(&mut bus, &mut found).unwrap();
+
+    let mut stored = found[..count].to_vec();
+    stored.sort_unstable();
+    let mut expected = devices.to_vec();
+    expected.sort_unstable();
+
+    assert_eq!(count, 2);
+    assert_eq!(stored, expected);
+}
+
+#[test]
+fn search_roms_stops_once_the_buffer_is_full() {
+    let devices = [
+        rom_with_crc([0x28, 0x11, 0x22, 0x33, 0x44, 0x55, 0x01]),
+        rom_with_crc([0x28, 0x11, 0x22, 0x33, 0x44, 0x55, 0x02]),
+        rom_with_crc([0x28, 0x91, 0x22, 0x33, 0x44, 0x55, 0x01]),
+    ];
+
+    let mut bus = FakeBus::new(&devices);
+    let mut found = [[0u8; 8]; 2];
+
+    assert_eq!(search_roms(&mut bus, &mut found).unwrap(), 2);
+}
+
+#[test]
+fn convert_all_issues_skip_rom_then_convert() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let mut bus = FakeBus::new(&[rom]);
+
+    convert_all(&mut bus).unwrap();
+
+    assert_eq!(bus.commands, vec![0xCC, 0x44]);
+}
+
+#[test]
+fn read_scratchpad_addresses_one_sensor_and_returns_its_bytes() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let expected_scratchpad = scratchpad(0xC8, 0x01, CONFIG_12_BIT);
+
+    let mut bus = FakeBus::new(&[rom]);
+    bus.queue_response(&expected_scratchpad);
+
+    assert_eq!(
+        read_scratchpad(&mut bus, &rom).unwrap(),
+        expected_scratchpad
+    );
+
+    let mut expected_commands = vec![0x55];
+    expected_commands.extend_from_slice(&rom);
+    expected_commands.push(0xBE);
+
+    assert_eq!(bus.commands, expected_commands);
+}
+
+#[test]
+fn temperature_from_scratchpad_parses_without_a_sensor_role() {
+    let sp = scratchpad(0xC8, 0x01, CONFIG_12_BIT);
+    let temperature = temperature_from_scratchpad(&sp).unwrap();
+
+    assert!(approx_eq(temperature.as_celsius(), 28.5));
+}
+
+#[test]
+fn temperature_from_scratchpad_reports_a_bad_crc_without_a_role() {
+    let mut sp = scratchpad(0xC8, 0x01, CONFIG_12_BIT);
+    sp[0] ^= 0x04;
+
+    assert!(matches!(
+        temperature_from_scratchpad(&sp),
+        Err(TemperatureError::BusError(_))
+    ));
+}
+
+#[test]
+fn temperature_from_scratchpad_still_detects_power_on_reset() {
+    let sp = scratchpad(0x50, 0x05, CONFIG_12_BIT);
+
+    assert!(matches!(
+        temperature_from_scratchpad(&sp),
+        Err(TemperatureError::PowerOnResetValue)
+    ));
 }
