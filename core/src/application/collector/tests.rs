@@ -580,19 +580,35 @@ async fn a_faulty_level_sensor_reaches_telemetry() {
 }
 
 #[tokio::test]
-async fn the_ato_section_stays_untouched_by_the_level_driver() {
+async fn the_sump_is_low_for_the_ato_when_the_pump_chamber_is_dry() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::all_dry()).sample().await;
+
+    assert!(sink.last().ato.sump_water_low);
+}
+
+#[tokio::test]
+async fn the_sump_is_not_low_for_the_ato_while_the_pump_chamber_is_wet() {
     let sink = RecordingSink::default();
     with_levels(&sink, FakeLevels::wet(&[WaterLevelRole::SumpPump]))
         .sample()
         .await;
 
     let s = sink.last();
-    assert!(
-        !s.ato.sump_water_low,
-        "interpreting levels into ATO state belongs to the ATO spec, not here"
-    );
+    assert!(!s.ato.sump_water_low);
     assert!(!s.ato.reservoir_empty);
     assert!(!s.ato.pump_active);
+}
+
+#[tokio::test]
+async fn the_reserve_chamber_does_not_drive_the_ato_low_flag() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::wet(&[WaterLevelRole::SumpPump]))
+        .sample()
+        .await;
+
+    assert!(!sink.last().ato.sump_water_low);
+    assert!(!sink.last().water_level.sump_reserve.wet);
 }
 
 #[tokio::test]
