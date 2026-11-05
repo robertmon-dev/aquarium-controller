@@ -15,13 +15,11 @@ mod hw {
     use aquarium_core::ports::outbound::temperature::{
         TemperatureError, TemperatureReader, TemperatureSensorRole,
     };
-    use aquarium_core::protocol::ds18b20::{parse_scratchpad, validate_rom, RomAddress};
+    use aquarium_core::protocol::ds18b20::{
+        convert_all, parse_scratchpad, read_scratchpad, validate_rom, OneWireLine, RomAddress,
+    };
 
-    const CMD_READ_ROM: u8 = 0x33;
-    const CMD_MATCH_ROM: u8 = 0x55;
     const CMD_SKIP_ROM: u8 = 0xCC;
-    const CMD_CONVERT_T: u8 = 0x44;
-    const CMD_READ_SCRATCHPAD: u8 = 0xBE;
     const CMD_READ_POWER_SUPPLY: u8 = 0xB4;
 
     const CONVERSION_TIMEOUT: Duration = Duration::from_millis(800);
@@ -44,7 +42,16 @@ mod hw {
             Ok(Self { pin: driver })
         }
 
-        pub fn reset(&mut self) -> Result<(), TemperatureError> {
+        pub fn has_parasite_powered_device(&mut self) -> Result<bool, TemperatureError> {
+            self.reset()?;
+            self.write_byte(CMD_SKIP_ROM);
+            self.write_byte(CMD_READ_POWER_SUPPLY);
+            Ok(!self.read_bit())
+        }
+    }
+
+    impl OneWireLine for OneWireBus<'_> {
+        fn reset(&mut self) -> Result<(), TemperatureError> {
             if self.pin.is_low() {
                 return Err(TemperatureError::BusError(
                     "1-Wire line stuck LOW before reset (short to GND?)",
@@ -79,7 +86,7 @@ mod hw {
             }
         }
 
-        pub fn write_bit(&mut self, bit: bool) {
+        fn write_bit(&mut self, bit: bool) {
             if bit {
                 interrupt::free(|| {
                     let _ = self.pin.set_low();
@@ -97,7 +104,7 @@ mod hw {
             }
         }
 
-        pub fn read_bit(&mut self) -> bool {
+        fn read_bit(&mut self) -> bool {
             let bit = interrupt::free(|| {
                 let _ = self.pin.set_low();
                 Ets::delay_us(3);
@@ -108,43 +115,6 @@ mod hw {
 
             Ets::delay_us(55);
             bit
-        }
-
-        pub fn write_byte(&mut self, mut byte: u8) {
-            for _ in 0..8 {
-                self.write_bit((byte & 0x01) != 0);
-                byte >>= 1;
-            }
-        }
-
-        pub fn read_byte(&mut self) -> u8 {
-            let mut byte = 0u8;
-            for i in 0..8 {
-                if self.read_bit() {
-                    byte |= 1 << i;
-                }
-            }
-            byte
-        }
-
-        pub fn read_single_rom(&mut self) -> Result<RomAddress, TemperatureError> {
-            self.reset()?;
-            self.write_byte(CMD_READ_ROM);
-
-            let mut rom = [0u8; 8];
-            for byte in &mut rom {
-                *byte = self.read_byte();
-            }
-
-            validate_rom(&rom)?;
-            Ok(rom)
-        }
-
-        pub fn has_parasite_powered_device(&mut self) -> Result<bool, TemperatureError> {
-            self.reset()?;
-            self.write_byte(CMD_SKIP_ROM);
-            self.write_byte(CMD_READ_POWER_SUPPLY);
-            Ok(!self.read_bit())
         }
     }
 
@@ -190,27 +160,11 @@ mod hw {
                 .map(|(_, rom)| *rom)
                 .ok_or(TemperatureError::SensorNotFound(role))
         }
-
-        async fn write_bytes(&mut self, bytes: &[u8]) {
-            for &byte in bytes {
-                self.bus.write_byte(byte);
-                yield_now().await;
-            }
-        }
-
-        async fn read_bytes(&mut self, buf: &mut [u8]) {
-            for byte in buf.iter_mut() {
-                *byte = self.bus.read_byte();
-                yield_now().await;
-            }
-        }
     }
 
     impl<'d> TemperatureReader for Ds18b20Adapter<'d> {
         async fn trigger_conversion(&mut self) -> Result<(), TemperatureError> {
-            self.bus.reset()?;
-            self.bus.write_byte(CMD_SKIP_ROM);
-            self.bus.write_byte(CMD_CONVERT_T);
+            convert_all(&mut self.bus)?;
 
             let deadline = Instant::now() + CONVERSION_TIMEOUT;
             loop {
@@ -232,14 +186,8 @@ mod hw {
             role: TemperatureSensorRole,
         ) -> Result<WaterTemperature, TemperatureError> {
             let rom = self.rom_for(role)?;
-
-            self.bus.reset()?;
-            self.bus.write_byte(CMD_MATCH_ROM);
-            self.write_bytes(&rom).await;
-            self.bus.write_byte(CMD_READ_SCRATCHPAD);
-
-            let mut scratchpad = [0u8; 9];
-            self.read_bytes(&mut scratchpad).await;
+            let scratchpad = read_scratchpad(&mut self.bus, &rom)?;
+            yield_now().await;
 
             parse_scratchpad(&scratchpad, role)
         }
