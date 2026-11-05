@@ -117,3 +117,110 @@ fn parses_valid_discus_temperature_28_5c() {
     let temp = parse_scratchpad(&sp, TemperatureSensorRole::MainTank).unwrap();
     assert!(approx_eq(temp.as_celsius(), 28.5));
 }
+
+fn rom_bit(rom: &RomAddress, index: usize) -> bool {
+    rom[index / 8] & (1 << (index % 8)) != 0
+}
+
+struct FakeBus {
+    devices: Vec<RomAddress>,
+    path: Vec<bool>,
+    searching: bool,
+    pending_complement: Option<bool>,
+    command_bits: Vec<bool>,
+    commands: Vec<u8>,
+}
+
+impl FakeBus {
+    fn new(devices: &[RomAddress]) -> Self {
+        Self {
+            devices: devices.to_vec(),
+            path: Vec::new(),
+            searching: false,
+            pending_complement: None,
+            command_bits: Vec::new(),
+            commands: Vec::new(),
+        }
+    }
+
+    fn candidates(&self) -> Vec<RomAddress> {
+        self.devices
+            .iter()
+            .copied()
+            .filter(|rom| {
+                self.path
+                    .iter()
+                    .enumerate()
+                    .all(|(index, &bit)| rom_bit(rom, index) == bit)
+            })
+            .collect()
+    }
+}
+
+impl OneWireLine for FakeBus {
+    fn reset(&mut self) -> Result<(), TemperatureError> {
+        self.path.clear();
+        self.searching = false;
+        self.pending_complement = None;
+        self.command_bits.clear();
+
+        if self.devices.is_empty() {
+            return Err(TemperatureError::BusError(
+                "No presence pulse detected on 1-Wire bus",
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn read_bit(&mut self) -> bool {
+        if let Some(complement) = self.pending_complement.take() {
+            return complement;
+        }
+
+        let candidates = self.candidates();
+        let index = self.path.len();
+        let id_bit = candidates.iter().all(|rom| rom_bit(rom, index));
+        let complement = candidates.iter().all(|rom| !rom_bit(rom, index));
+
+        self.pending_complement = Some(complement);
+        id_bit
+    }
+
+    fn write_bit(&mut self, bit: bool) {
+        if self.searching {
+            self.pending_complement = None;
+            self.path.push(bit);
+            return;
+        }
+
+        self.command_bits.push(bit);
+        if self.command_bits.len() < 8 {
+            return;
+        }
+
+        let byte = self
+            .command_bits
+            .iter()
+            .enumerate()
+            .fold(0u8, |acc, (index, &bit)| acc | (u8::from(bit) << index));
+
+        self.command_bits.clear();
+        self.commands.push(byte);
+
+        if byte == 0xF0 {
+            self.searching = true;
+            self.path.clear();
+        }
+    }
+}
+
+#[test]
+fn rom_search_finds_a_single_device() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let mut bus = FakeBus::new(&[rom]);
+    let mut search = RomSearch::new();
+
+    assert_eq!(search.next(&mut bus).unwrap(), Some(rom));
+    assert_eq!(search.next(&mut bus).unwrap(), None);
+}
