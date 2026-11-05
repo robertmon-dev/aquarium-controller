@@ -8,21 +8,10 @@ use crate::adapters::outbound::influx::InfluxSettings;
 use crate::adapters::outbound::ph::PhCalibration;
 use crate::adapters::outbound::xkc_y25::{FilterConfig, Polarity};
 
-/// How much of a component to bring up.
-///
-/// The three states exist because an embedded failure can come from either
-/// half: claiming a peripheral or spawning a thread can fail at construction,
-/// while stack exhaustion and bus contention only show up once the periodic
-/// task runs. Bisecting those needs them separable, and the nonsensical
-/// combination - looping without being constructed - is unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentMode {
-    /// Not constructed at all. Its peripherals stay unclaimed.
     Off,
-    /// Constructed, so initialization failures surface, but wired into no loop.
     Initialized,
-    /// Constructed and wired in: its task is spawned, or it is handed to the
-    /// consumer that drives it.
     Running,
 }
 
