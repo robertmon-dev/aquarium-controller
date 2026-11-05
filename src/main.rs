@@ -15,6 +15,9 @@ use aquarium_core::ports::outbound::{
     Clock, LightingOverrideSource, MetricsWriter, PhReader, SystemHealthProvider, TelemetrySink,
     TemperatureReader, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
+use aquarium_core::protocol::ds18b20::{
+    convert_all, read_scratchpad, search_roms, temperature_from_scratchpad, RomAddress,
+};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
@@ -23,7 +26,7 @@ use esp_idf_svc::sys::{self, link_patches};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Notify};
 use tokio::task::LocalSet;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{sleep, MissedTickBehavior};
 use tracing::{error, info};
 
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
@@ -39,6 +42,10 @@ use aquarium_controller::settings::{RunMode, Settings};
 const SETTINGS: Settings = Settings::from_env();
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+const DISCOVERY_SENSOR_LIMIT: usize = 8;
+const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
+const DISCOVERY_CONVERSION_WAIT: Duration = Duration::from_millis(800);
 
 fn main() -> anyhow::Result<()> {
     link_patches();
@@ -97,7 +104,7 @@ async fn run() -> anyhow::Result<()> {
     if matches!(SETTINGS.run_mode, RunMode::RomDiscovery) {
         let mut bus =
             OneWireBus::new(peripherals.pins.gpio4).context("Failed to initialize 1-Wire bus")?;
-        return discover_rom(&mut bus);
+        return discover_roms(&mut bus).await;
     }
 
     let temperature = if components.temperature.is_initialized() {
@@ -381,17 +388,46 @@ async fn sensor_task<R, C, H, S, O, W, P>(
     }
 }
 
-fn discover_rom(bus: &mut OneWireBus<'_>) -> anyhow::Result<()> {
-    let rom = bus
-        .read_single_rom()
-        .context("ROM discovery failed; connect exactly ONE sensor")?;
-
-    let formatted = rom
-        .iter()
+fn format_rom(rom: &RomAddress) -> String {
+    rom.iter()
         .map(|b| format!("0x{b:02X}"))
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(", ")
+}
 
-    info!("Sensor ROM: [{formatted}]");
-    Ok(())
+async fn discover_roms(bus: &mut OneWireBus<'_>) -> anyhow::Result<()> {
+    let mut found = [[0u8; 8]; DISCOVERY_SENSOR_LIMIT];
+    let count = search_roms(bus, &mut found).context("SEARCH ROM failed")?;
+
+    if count == 0 {
+        anyhow::bail!("No DS18B20 responded on the 1-Wire bus");
+    }
+
+    for rom in &found[..count] {
+        info!("Sensor ROM: [{}]", format_rom(rom));
+    }
+
+    info!(
+        count,
+        "Hold one probe in your hand; the ROM whose reading climbs is that sensor"
+    );
+
+    let mut ticker = tokio::time::interval(DISCOVERY_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+
+        convert_all(bus).context("Failed to start a temperature conversion")?;
+        sleep(DISCOVERY_CONVERSION_WAIT).await;
+
+        for rom in &found[..count] {
+            match read_scratchpad(bus, rom).and_then(|sp| temperature_from_scratchpad(&sp)) {
+                Ok(temperature) => {
+                    info!(celsius = temperature.as_celsius(), "[{}]", format_rom(rom))
+                }
+                Err(error) => error!(%error, "[{}]", format_rom(rom)),
+            }
+        }
+    }
 }

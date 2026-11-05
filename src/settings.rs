@@ -101,8 +101,8 @@ impl Settings {
                 http: ComponentMode::Running,
                 temperature: ComponentMode::Running,
                 telemetry: ComponentMode::Running,
-                water_level: ComponentMode::Running,
-                influx: ComponentMode::Running,
+                water_level: ComponentMode::Off,
+                influx: ComponentMode::Off,
                 ph: ComponentMode::Off,
                 health: ComponentMode::Off,
             },
@@ -119,8 +119,8 @@ impl Settings {
             },
             sensors: SensorSettings {
                 read_interval: Duration::from_secs(30),
-                tank_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-                sump_rom: [0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01],
+                tank_rom: [0x28, 0x50, 0x31, 0x83, 0x7C, 0x25, 0x0B, 0x62],
+                sump_rom: [0x28, 0x9D, 0x32, 0x08, 0x7D, 0x25, 0x0B, 0x1F],
                 target_celsius: 27.0,
                 ph: PhSettings {
                     calibration: PhCalibration {
