@@ -115,6 +115,7 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
         ("sump_biological", snapshot.water_level.sump_biological),
         ("sump_pump", snapshot.water_level.sump_pump),
         ("main_tank", snapshot.water_level.main_tank),
+        ("sump_reserve", snapshot.water_level.sump_reserve),
     ];
 
     let mut lines = Vec::new();

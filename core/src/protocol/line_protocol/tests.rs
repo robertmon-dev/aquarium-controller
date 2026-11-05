@@ -102,6 +102,7 @@ fn each_water_level_sensor_gets_its_own_tagged_line() {
         "sump_biological",
         "sump_pump",
         "main_tank",
+        "sump_reserve",
     ] {
         assert!(
             encoded.contains(&format!("aquarium_water_level,sensor={sensor} ")),
