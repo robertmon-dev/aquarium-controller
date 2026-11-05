@@ -23,6 +23,7 @@ mod hw {
             biological: impl InputPin + 'd,
             pump: impl InputPin + 'd,
             tank: impl InputPin + 'd,
+            reserve: impl InputPin + 'd,
         ) -> Result<Self, EspError> {
             Ok(Self {
                 pins: [
@@ -36,6 +37,10 @@ mod hw {
                     ),
                     (WaterLevelRole::SumpPump, PinDriver::input(pump, Pull::Up)?),
                     (WaterLevelRole::MainTank, PinDriver::input(tank, Pull::Up)?),
+                    (
+                        WaterLevelRole::SumpReserve,
+                        PinDriver::input(reserve, Pull::Up)?,
+                    ),
                 ],
             })
         }
