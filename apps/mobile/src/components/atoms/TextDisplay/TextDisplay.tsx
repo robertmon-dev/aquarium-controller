@@ -1,0 +1,40 @@
+import { Text, View } from "react-native";
+import {
+  textDisplayHelperStyle,
+  textDisplayLabelStyle,
+  textDisplayValueStyle,
+} from "./styles";
+import type { TextDisplayProps } from "./types";
+
+export type { TextDisplayProps, TextDisplayState } from "./types";
+
+export function TextDisplay({
+  label,
+  children,
+  state = "default",
+  helperText,
+  fullWidth = false,
+  maxHeight,
+  style,
+}: TextDisplayProps) {
+  return (
+    <View
+      style={[
+        { gap: 2 },
+        fullWidth ? { width: "100%" } : null,
+        maxHeight === undefined ? null : { maxHeight },
+        style,
+      ]}
+    >
+      {label ? <Text style={textDisplayLabelStyle}>{label}</Text> : null}
+      {typeof children === "string" ? (
+        <Text style={textDisplayValueStyle(state)}>{children}</Text>
+      ) : (
+        children
+      )}
+      {helperText ? (
+        <Text style={textDisplayHelperStyle}>{helperText}</Text>
+      ) : null}
+    </View>
+  );
+}
