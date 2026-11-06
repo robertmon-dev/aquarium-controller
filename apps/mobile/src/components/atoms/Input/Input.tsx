@@ -32,6 +32,7 @@ export function Input({
           inputStyles.field,
           focused ? inputStyles.fieldFocused : null,
           hasError ? inputStyles.fieldError : null,
+          hasError && focused ? inputStyles.fieldErrorFocused : null,
         ]}
       >
         {leftIcon}
