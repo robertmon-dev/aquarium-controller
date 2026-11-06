@@ -1,6 +1,6 @@
 import { cardStyles, sliderStyles } from "@aquarium/theme";
 import CommunitySlider from "@react-native-community/slider";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Text, View } from "react-native";
 import { formatPercent } from "@/components/utility/format";
 import type { SliderProps } from "./types";
@@ -17,10 +17,12 @@ export function Slider({
   disabled = false,
 }: SliderProps) {
   const [dragging, setDragging] = useState(value);
+  const [seen, setSeen] = useState(value);
 
-  useEffect(() => {
+  if (value !== seen) {
+    setSeen(value);
     setDragging(value);
-  }, [value]);
+  }
 
   return (
     <View>
