@@ -1,6 +1,6 @@
 import { colors, screenStyles, typography } from "@aquarium/theme";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { Redirect, Tabs } from "expo-router";
+import { Tabs } from "expo-router";
 import type { ColorValue } from "react-native";
 import { Badge } from "@/components/atoms";
 import { ScreenMessage } from "@/components/molecules";
@@ -13,12 +13,11 @@ function iconColor(color: ColorValue | undefined): string {
 }
 
 export default function TabsLayout() {
-  const { device, transport, loading } = useDevice();
+  const { transport, loading } = useDevice();
   const streamState = useTelemetryStream(transport);
   const badge = streamBadge(streamState);
 
   if (loading) return <ScreenMessage loading>loading…</ScreenMessage>;
-  if (!device) return <Redirect href="/settings" />;
 
   return (
     <Tabs
