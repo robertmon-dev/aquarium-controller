@@ -1,17 +1,8 @@
 import type { ReactNode } from "react";
 import type { PressableProps, StyleProp, ViewStyle } from "react-native";
+import type { ButtonSize, ButtonVariant } from "@aquarium/theme";
 
-export type ButtonVariant =
-  | "primary"
-  | "secondary"
-  | "outline"
-  | "ghost"
-  | "danger"
-  | "success"
-  | "purple"
-  | "select";
-
-export type ButtonSize = "sm" | "md" | "lg";
+export type { ButtonSize, ButtonVariant };
 
 export interface ButtonProps extends Omit<
   PressableProps,
