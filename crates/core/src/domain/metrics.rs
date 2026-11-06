@@ -81,6 +81,8 @@ impl fmt::Display for Ph {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export, rename_all = "snake_case"))]
 pub enum LightingProfile {
     Off,
     Sunrise,
@@ -91,6 +93,8 @@ pub enum LightingProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export, rename_all = "snake_case"))]
 pub enum SystemMode {
     Normal,
     Maintenance,
@@ -98,6 +102,8 @@ pub enum SystemMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct TankTelemetryDto {
     pub timestamp_epoch_s: u64,
     pub system_mode: SystemMode,
@@ -166,6 +172,8 @@ impl TankTelemetryDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct TemperatureMetricsDto {
     pub tank_celsius: Option<f32>,
     pub sump_celsius: Option<f32>,
@@ -175,6 +183,8 @@ pub struct TemperatureMetricsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct FiltrationMetricsDto {
     pub flow_rate_lph: Option<f32>,
     pub flow_ok: bool,
@@ -182,6 +192,8 @@ pub struct FiltrationMetricsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct Co2MetricsDto {
     pub solenoid_open: bool,
     pub current_ph: Option<f32>,
@@ -190,6 +202,8 @@ pub struct Co2MetricsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct AtoMetricsDto {
     pub sump_water_low: bool,
     pub reservoir_empty: bool,
@@ -198,6 +212,8 @@ pub struct AtoMetricsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct SystemHealthDto {
     pub uptime_seconds: u64,
     pub wifi_rssi_dbm: i8,
@@ -205,6 +221,8 @@ pub struct SystemHealthDto {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct WaterLevelEntryDto {
     pub wet: bool,
     pub faulty: bool,
@@ -218,6 +236,8 @@ impl WaterLevelEntryDto {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct WaterLevelMetricsDto {
     pub sump_mechanical: WaterLevelEntryDto,
     pub sump_biological: WaterLevelEntryDto,
@@ -249,6 +269,8 @@ impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct LightingMetricsDto {
     pub profile: LightingProfile,
     pub channel_white_pct: u8,
