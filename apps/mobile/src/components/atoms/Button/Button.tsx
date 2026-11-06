@@ -1,3 +1,8 @@
+import {
+  buttonContainerStyle,
+  buttonGradient,
+  buttonLabelStyle,
+} from "@aquarium/theme";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   ActivityIndicator,
@@ -6,11 +11,6 @@ import {
   Text,
   View,
 } from "react-native";
-import {
-  buttonContainerStyle,
-  buttonGradient,
-  buttonLabelStyle,
-} from "./styles";
 import type { ButtonProps } from "./types";
 
 export type { ButtonProps, ButtonSize, ButtonVariant } from "./types";
@@ -45,7 +45,6 @@ export function Button({
           pressed,
           disabled: inert,
         }),
-        { overflow: "hidden" },
         style,
       ]}
       {...rest}
