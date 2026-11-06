@@ -10,6 +10,10 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function asApiError(error: unknown): ApiError {
+  return error as ApiError;
+}
+
 describe("request", () => {
   it("sends the token as a bearer header", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
@@ -38,7 +42,7 @@ describe("request", () => {
       .mockResolvedValue(new Response("unauthorized\n", { status: 401 }));
 
     const error = await request({ device, fetchImpl }, "/api/health").catch(
-      (e) => e,
+      asApiError,
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -51,7 +55,7 @@ describe("request", () => {
       .mockRejectedValue(new TypeError("Network request failed"));
 
     const error = await request({ device, fetchImpl }, "/api/health").catch(
-      (e) => e,
+      asApiError,
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -64,7 +68,7 @@ describe("request", () => {
       .mockResolvedValue(new Response("<html>nope", { status: 200 }));
 
     const error = await request({ device, fetchImpl }, "/api/health").catch(
-      (e) => e,
+      asApiError,
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -81,7 +85,7 @@ describe("request", () => {
     const error = await request(
       { device, fetchImpl },
       "/api/lighting/override",
-    ).catch((e) => e);
+    ).catch(asApiError);
 
     expect(error.kind).toBe("status");
     expect(error.status).toBe(400);
