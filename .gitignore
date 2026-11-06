@@ -4,3 +4,13 @@
 /Cargo.lock
 
 .env
+
+node_modules/
+dist/
+.expo/
+
+.yarn/*
+!.yarn/releases
+!.yarn/patches
+
+packages/api-client/src/generated/
