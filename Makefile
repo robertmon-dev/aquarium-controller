@@ -3,11 +3,11 @@
 # ==============================================================================
 
 TARGET        := xtensa-esp32s3-espidf
-HOST_TARGET   ?= x86_64-unknown-linux-gnu
 CORE_CRATE    := aquarium-core
 BIN           := aquarium-controller
 CHIP          ?= esp32s3
 PORT          ?= /dev/ttyACM0
+FW_DIR        := crates/firmware
 
 ELF_RELEASE   := target/$(TARGET)/release/$(BIN)
 
@@ -94,19 +94,19 @@ token: ## Print a fresh URL-safe API token
 .PHONY: build
 build: check-env ## Build firmware (release)
 	@$(MSG) "Building firmware (release)"
-	@$(LOAD_ENV) $(ESP_ENV) cargo build --release
+	@$(LOAD_ENV) $(ESP_ENV) cd $(FW_DIR) && cargo build --release
 	@$(OK) "Built $(ELF_RELEASE)"
 
 .PHONY: build-debug
 build-debug: check-env ## Build firmware (debug)
 	@$(MSG) "Building firmware (debug)"
-	@$(LOAD_ENV) $(ESP_ENV) cargo build
+	@$(LOAD_ENV) $(ESP_ENV) cd $(FW_DIR) && cargo build
 	@$(OK) "Built $(ELF_DEBUG)"
 
 .PHONY: check
 check: check-env ## Type-check firmware without linking
 	@$(MSG) "Checking firmware"
-	@$(LOAD_ENV) $(ESP_ENV) cargo check --release
+	@$(LOAD_ENV) $(ESP_ENV) cd $(FW_DIR) && cargo check --release
 
 # ==============================================================================
 # Flash & Monitor
@@ -160,12 +160,12 @@ erase: check-port ## Erase the whole flash, including NVS (WiFi credentials)
 .PHONY: test
 test: ## Run host tests for aquarium-core
 	@$(MSG) "Host tests ($(CORE_CRATE))"
-	@cargo test -p $(CORE_CRATE) --target $(HOST_TARGET)
+	@cargo test -p $(CORE_CRATE)
 
 .PHONY: test-watch
 test-watch: ## Re-run host tests on file changes (needs cargo-watch)
 	@command -v cargo-watch >/dev/null 2>&1 || { $(ERR) "cargo-watch is missing: cargo install cargo-watch"; exit 1; }
-	@cargo watch -x 'test -p $(CORE_CRATE) --target $(HOST_TARGET)'
+	@cargo watch -x 'test -p $(CORE_CRATE)'
 
 # ==============================================================================
 # Quality
@@ -188,12 +188,12 @@ lint: lint-core lint-firmware ## Run clippy on core and firmware
 .PHONY: lint-core
 lint-core: ## Run clippy on aquarium-core (host target)
 	@$(MSG) "Clippy: $(CORE_CRATE)"
-	@cargo clippy -p $(CORE_CRATE) --target $(HOST_TARGET) --all-targets -- -D warnings
+	@cargo clippy -p $(CORE_CRATE) --all-targets -- -D warnings
 
 .PHONY: lint-firmware
 lint-firmware: check-env ## Run clippy on the firmware crate
 	@$(MSG) "Clippy: firmware"
-	@$(LOAD_ENV) $(ESP_ENV) cargo clippy --release -- -D warnings
+	@$(LOAD_ENV) $(ESP_ENV) cd $(FW_DIR) && cargo clippy --release -- -D warnings
 
 .PHONY: ci
 ci: fmt-check lint test ## Everything CI should gate on
@@ -210,7 +210,7 @@ size: ## Report real flash image size against the factory partition
 	@sz=$$(find $$HOME/.espressif/tools -name 'xtensa-esp32s3-elf-size' 2>/dev/null | head -1); \
 	test -n "$$sz" || { $(ERR) "xtensa-esp32s3-elf-size not found"; exit 1; }; \
 	img=$$("$$sz" $(ELF_RELEASE) | awk 'NR==2 {print $$1 + $$2}'); \
-	part=$$(awk -F',' '/^factory/ { gsub(/ /, "", $$5); print strtonum($$5) }' partitions.csv); \
+	part=$$(awk -F',' '/^factory/ { gsub(/ /, "", $$5); print strtonum($$5) }' $(FW_DIR)/partitions.csv); \
 	awk -v i="$$img" -v p="$$part" 'BEGIN { \
 		printf "  image   %10.2f MiB\n", i/1048576; \
 		printf "  factory %10.2f MiB\n", p/1048576; \
@@ -227,7 +227,7 @@ partitions: ## Dump the partition table ESP-IDF actually generated
 	d=open(sys.argv[1],'rb').read(); \
 	t={0:'app',1:'data'}; \
 	[print('  {:10} {:5} {:>9} {:>9}  {:6.2f} MiB'.format(e[12:28].rstrip(b'\0').decode(), t.get(e[2],e[2]), hex(struct.unpack('<I',e[4:8])[0]), hex(struct.unpack('<I',e[8:12])[0]), struct.unpack('<I',e[8:12])[0]/1048576)) for e in (d[i:i+32] for i in range(0,len(d),32)) if e[:2]==b'\xaaP']" "$$bin"
-	@$(SUB) "espflash writes the table from partitions.csv - these two must agree"
+	@$(SUB) "espflash writes the table from $(FW_DIR)/partitions.csv - these two must agree"
 
 # ==============================================================================
 # Device smoke test
