@@ -9,7 +9,7 @@
   },
   "scripts": {
     "lint": "eslint src",
-    "test": "echo \"no tests\"",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
