@@ -18,14 +18,14 @@ export type ApiErrorKind =
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
-  readonly status?: number;
-  readonly detail?: string;
+  readonly status?: number | undefined;
+  readonly detail?: string | undefined;
 
   constructor(
     kind: ApiErrorKind,
     message: string,
-    status?: number,
-    detail?: string,
+    status?: number | undefined,
+    detail?: string | undefined,
   ) {
     super(message);
     this.name = "ApiError";
