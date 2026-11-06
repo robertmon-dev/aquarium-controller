@@ -35,7 +35,7 @@ impl ChannelLevels {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-export", ts(export, rename_all = "snake_case"))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub enum LightingTarget {
     Profile(LightingProfile),
     Channels(ChannelLevels),
