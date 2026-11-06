@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useFocusReset } from "@/components/utility/focus-reset";
 import { deviceFetch } from "@/device/transport";
 import { loadDevice, saveDevice } from "@/device/store";
 
@@ -25,6 +26,8 @@ const DeviceContext = createContext<DeviceContextValue | null>(null);
 export function AppProviders({ children }: { children: ReactNode }) {
   const [device, setDeviceState] = useState<DeviceConfig | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useFocusReset();
 
   useEffect(() => {
     loadDevice()
