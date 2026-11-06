@@ -1,9 +1,10 @@
-import { Text, View } from "react-native";
 import {
+  spacing,
   textDisplayHelperStyle,
   textDisplayLabelStyle,
   textDisplayValueStyle,
-} from "./styles";
+} from "@aquarium/theme";
+import { Text, View } from "react-native";
 import type { TextDisplayProps } from "./types";
 
 export type { TextDisplayProps, TextDisplayState } from "./types";
@@ -20,7 +21,7 @@ export function TextDisplay({
   return (
     <View
       style={[
-        { gap: 2 },
+        { gap: spacing.xxs },
         fullWidth ? { width: "100%" } : null,
         maxHeight === undefined ? null : { maxHeight },
         style,

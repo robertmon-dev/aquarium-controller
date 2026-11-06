@@ -1,12 +1,8 @@
 import type { ReactNode } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
+import type { TextDisplayState } from "@aquarium/theme";
 
-export type TextDisplayState =
-  | "default"
-  | "error"
-  | "success"
-  | "warning"
-  | "info";
+export type { TextDisplayState };
 
 export interface TextDisplayProps {
   label?: string;
