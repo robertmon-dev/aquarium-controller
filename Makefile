@@ -252,7 +252,7 @@ types: ## Regenerate the TypeScript contract from the Rust DTOs
 .PHONY: types-check
 types-check: types ## Verify the generated contract still type-checks against the client
 	@$(MSG) "Checking contract against the client"
-	@yarn workspaces foreach --all --parallel run typecheck
+	@yarn typecheck
 	@$(OK) "Contract and client agree"
 
 .PHONY: app-install
@@ -268,12 +268,12 @@ app-start: types ## Start the Expo dev server
 .PHONY: js-lint
 js-lint: ## Lint every yarn workspace
 	@$(MSG) "Lint (JavaScript)"
-	@yarn workspaces foreach --all --parallel run lint
+	@yarn lint
 
 .PHONY: js-test
 js-test: ## Run JavaScript unit tests
 	@$(MSG) "JavaScript tests"
-	@yarn workspaces foreach --all run test
+	@yarn test
 
 # ==============================================================================
 # Device smoke test
