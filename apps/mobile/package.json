@@ -6,6 +6,7 @@
     "@aquarium/api-client": "workspace:*",
     "@aquarium/theme": "workspace:*",
     "@expo/ui": "~58.0.27",
+    "@expo/vector-icons": "^15.0.2",
     "@hookform/resolvers": "7.0.3",
     "@react-native-community/slider": "5.2.1",
     "@tanstack/react-query": "5.106.1",
