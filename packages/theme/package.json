@@ -1,0 +1,24 @@
+{
+  "name": "@aquarium/theme",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "echo \"no tests\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "react-native": "0.88.1",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "8.72.1"
+  }
+}
