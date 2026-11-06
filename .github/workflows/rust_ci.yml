@@ -4,9 +4,19 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - "**/README.md"
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust_ci.yml"
   pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust_ci.yml"
   workflow_dispatch:
 
 env:
@@ -17,16 +27,6 @@ jobs:
   rust-checks:
     name: Rust Checks
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        action:
-          - command: build
-            args: --release
-          - command: fmt
-            args: --all -- --check --color always
-          - command: clippy
-            args: --all-targets --all-features --workspace -- -D warnings
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,5 +38,23 @@ jobs:
           ldproxy: true
       - name: Enable caching
         uses: Swatinem/rust-cache@v2
-      - name: Run command
-        run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
+
+      - name: Format
+        run: cargo fmt --all -- --check --color always
+
+      - name: Clippy (core, host)
+        run: cargo clippy -p aquarium-core --all-targets -- -D warnings
+
+      - name: Host tests
+        run: cargo test -p aquarium-core
+
+      - name: Contract generates
+        run: make types
+
+      - name: Clippy (firmware)
+        working-directory: crates/firmware
+        run: cargo clippy --release -- -D warnings
+
+      - name: Build firmware
+        working-directory: crates/firmware
+        run: cargo build --release
