@@ -2,8 +2,11 @@ export { Alert } from "./Alert/Alert";
 export { Badge } from "./Badge/Badge";
 export { Button } from "./Button/Button";
 export { Card } from "./Card/Card";
+export { Chip } from "./Chip/Chip";
 export { Input } from "./Input/Input";
 export { Spinner } from "./Spinner/Spinner";
+export { Slider } from "./Slider/Slider";
+export { StatusDot } from "./StatusDot/StatusDot";
 export { TextDisplay } from "./TextDisplay/TextDisplay";
 export type { AlertProps, AlertVariant } from "./Alert/types";
 export type { BadgeProps, BadgeSize, BadgeVariant } from "./Badge/types";
@@ -17,3 +20,6 @@ export type {
 export type { InputProps } from "./Input/types";
 export type { SpinnerProps, SpinnerVariant } from "./Spinner/types";
 export type { TextDisplayProps, TextDisplayState } from "./TextDisplay/types";
+export type { ChipProps, ChipVariant } from "./Chip/types";
+export type { SliderProps } from "./Slider/types";
+export type { StatusDotProps, StatusTone } from "./StatusDot/types";
