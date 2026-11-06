@@ -1,7 +1,7 @@
 import { router } from "expo-router";
 import { ScrollView } from "react-native";
 import { DeviceForm } from "@/components/organisms";
-import { colors, spacing } from "@/components/utility/theme";
+import { screenStyles, spacing } from "@aquarium/theme";
 import { useDevice } from "@/components/utility/app-providers";
 
 export function DeviceSettingsPage() {
@@ -9,7 +9,7 @@ export function DeviceSettingsPage() {
 
   return (
     <ScrollView
-      style={{ backgroundColor: colors.bgApp }}
+      style={screenStyles.page}
       contentContainerStyle={{ padding: spacing.sm }}
     >
       <DeviceForm
