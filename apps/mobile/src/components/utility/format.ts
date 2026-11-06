@@ -34,10 +34,10 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours}h ${String(minutes).padStart(2, "0")}m`;
 }
 
-export function formatHeap(kilobytes: number): string {
-  return kilobytes < 1000
-    ? `${kilobytes} kB`
-    : `${(kilobytes / 1024).toFixed(1)} MB`;
+export function formatHeap(kibibytes: number): string {
+  return kibibytes < 1024
+    ? `${kibibytes} KiB`
+    : `${(kibibytes / 1024).toFixed(1)} MiB`;
 }
 
 export function formatRssi(dbm: number): string {
