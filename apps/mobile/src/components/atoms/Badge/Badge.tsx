@@ -1,5 +1,5 @@
+import { badgeContainerStyle, badgeLabelStyle } from "@aquarium/theme";
 import { Text, View } from "react-native";
-import { badgeContainerStyle, badgeLabelStyle } from "./styles";
 import type { BadgeProps } from "./types";
 
 export type { BadgeProps, BadgeSize, BadgeVariant } from "./types";

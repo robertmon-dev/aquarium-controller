@@ -1,16 +1,8 @@
 import type { ReactNode } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
+import type { BadgeSize, BadgeVariant } from "@aquarium/theme";
 
-export type BadgeVariant =
-  | "primary"
-  | "secondary"
-  | "warning"
-  | "success"
-  | "danger"
-  | "info"
-  | "outline";
-
-export type BadgeSize = "sm" | "md";
+export type { BadgeSize, BadgeVariant };
 
 export interface BadgeProps {
   variant?: BadgeVariant;
