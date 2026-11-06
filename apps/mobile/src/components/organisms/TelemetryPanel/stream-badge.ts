@@ -1,4 +1,4 @@
-import type { BadgeVariant } from "@/components/atoms";
+import type { BadgeVariant } from "@aquarium/theme";
 import type { StreamState } from "@/device/use-telemetry-stream";
 
 const BADGES: Record<StreamState, { label: string; variant: BadgeVariant }> = {
