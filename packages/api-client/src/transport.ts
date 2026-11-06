@@ -5,10 +5,10 @@ export type FetchImpl = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-export type Transport = {
+export interface Transport {
   device: DeviceConfig;
   fetchImpl: FetchImpl;
-};
+}
 
 export type ApiErrorKind =
   | "unauthorized"
