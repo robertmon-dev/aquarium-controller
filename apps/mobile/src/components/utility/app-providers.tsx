@@ -8,8 +8,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { deviceFetch } from "./device/transport";
-import { loadDevice, saveDevice } from "./device/store";
+import { deviceFetch } from "@/device/transport";
+import { loadDevice, saveDevice } from "@/device/store";
 
 const queryClient = new QueryClient();
 
