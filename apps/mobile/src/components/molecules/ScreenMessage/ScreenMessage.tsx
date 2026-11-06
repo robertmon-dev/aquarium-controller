@@ -1,6 +1,6 @@
+import { screenStyles } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import { Spinner } from "@/components/atoms";
-import { colors, spacing, typography } from "@/components/utility/theme";
 import type { ScreenMessageProps } from "./types";
 
 export type { ScreenMessageProps } from "./types";
@@ -10,20 +10,10 @@ export function ScreenMessage({
   loading = false,
 }: ScreenMessageProps) {
   return (
-    <View
-      style={{
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        gap: spacing.xs,
-        backgroundColor: colors.bgApp,
-      }}
-    >
+    <View style={screenStyles.centered}>
       {loading ? <Spinner /> : null}
       {typeof children === "string" ? (
-        <Text style={{ color: colors.textMain, fontSize: typography.size.md }}>
-          {children}
-        </Text>
+        <Text style={screenStyles.bodyText}>{children}</Text>
       ) : (
         children
       )}
