@@ -31,7 +31,7 @@ export default function TabsLayout() {
           </Badge>
         ),
         sceneStyle: screenStyles.page,
-        tabBarStyle: screenStyles.navigation.header,
+        tabBarStyle: screenStyles.navigation.tabBar,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
       }}
