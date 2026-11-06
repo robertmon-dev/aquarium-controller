@@ -7,6 +7,8 @@ use crate::domain::light::{LightingOverride, LightingTarget};
 use crate::ports::inbound::LightingControl;
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct SetOverrideRequest {
     pub target: LightingTarget,
     pub duration_s: Option<u32>,

@@ -11,6 +11,8 @@ pub const MOONLIGHT_RGB_PCT: u8 = 5;
 pub const MAX_CHANNEL_PCT: u8 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct ChannelLevels {
     pub white_pct: u8,
     pub rgb_pct: u8,
@@ -32,6 +34,8 @@ impl ChannelLevels {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export, rename_all = "snake_case"))]
 pub enum LightingTarget {
     Profile(LightingProfile),
     Channels(ChannelLevels),
@@ -54,6 +58,8 @@ impl LightingTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub struct LightingOverride {
     pub target: LightingTarget,
     pub expires_in_s: Option<u32>,
