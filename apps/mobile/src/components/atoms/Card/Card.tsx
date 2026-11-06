@@ -1,5 +1,5 @@
+import { cardStyle } from "@aquarium/theme";
 import { View } from "react-native";
-import { cardStyle } from "./styles";
 import type { CardProps } from "./types";
 
 export type { CardPadding, CardProps, CardVariant, CardWidth } from "./types";

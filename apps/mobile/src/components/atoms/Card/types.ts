@@ -1,18 +1,8 @@
 import type { ReactNode } from "react";
 import type { StyleProp, ViewProps, ViewStyle } from "react-native";
+import type { CardPadding, CardVariant, CardWidth } from "@aquarium/theme";
 
-export type CardVariant =
-  | "elevated"
-  | "outlined"
-  | "flat"
-  | "transparent"
-  | "levitating"
-  | "levitating-transparent"
-  | "floating"
-  | "contact";
-
-export type CardPadding = "none" | "sm" | "md" | "lg";
-export type CardWidth = "auto" | "wide" | "full";
+export type { CardPadding, CardVariant, CardWidth };
 
 export interface CardProps extends Omit<ViewProps, "style"> {
   children: ReactNode;
