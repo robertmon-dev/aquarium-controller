@@ -282,6 +282,7 @@ async fn run() -> anyhow::Result<()> {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
                 sse_keepalive: SETTINGS.http.sse_keepalive,
+                cors_origin: SETTINGS.http.cors_origin,
             },
         )),
         (Some(_), false) => {
