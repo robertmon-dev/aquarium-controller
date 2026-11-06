@@ -11,7 +11,6 @@ import {
   colors,
   inputStyles,
   radius,
-  typography,
 } from "./index";
 
 const TINTED_BADGES = [

@@ -1,4 +1,7 @@
 import type { TextStyle, ViewStyle } from "react-native";
+import { withAlpha } from "./color";
+
+export { withAlpha } from "./color";
 
 export const palette = {
   red: "#f7768e",
@@ -46,26 +49,20 @@ export const colors = {
   textOnAccent: "#15161e",
   textLink: palette.cyanPale,
 
-  border: "rgba(86, 95, 137, 0.4)",
+  bgField: "#2c3148",
+  border: withAlpha(palette.slate, 0.4),
 } as const;
 
-export const alpha = {
-  primary15: "rgba(122, 162, 247, 0.15)",
-  slate25: "rgba(86, 95, 137, 0.25)",
-  slate30: "rgba(86, 95, 137, 0.3)",
-  danger10: "rgba(247, 118, 142, 0.1)",
-  danger12: "rgba(247, 118, 142, 0.12)",
-  danger15: "rgba(247, 118, 142, 0.15)",
-  danger50: "rgba(247, 118, 142, 0.5)",
-  success12: "rgba(158, 206, 106, 0.12)",
-  success15: "rgba(158, 206, 106, 0.15)",
-  warning12: "rgba(255, 158, 100, 0.12)",
-  warning15: "rgba(255, 158, 100, 0.15)",
-  info12: "rgba(224, 175, 104, 0.12)",
-  info15: "rgba(224, 175, 104, 0.15)",
-  white10: "rgba(255, 255, 255, 0.1)",
-  white20: "rgba(255, 255, 255, 0.2)",
-} as const;
+const TINT_FILL = 0.1;
+const TINT_BORDER = 0.2;
+
+export function tintedSurface(accent: string): ViewStyle {
+  return {
+    backgroundColor: withAlpha(accent, TINT_FILL),
+    borderWidth: 1,
+    borderColor: withAlpha(accent, TINT_BORDER),
+  };
+}
 
 export const spacing = {
   none: 0,
@@ -83,10 +80,20 @@ export const radius = { sm: 6, md: 12, mdL: 16, lg: 40 } as const;
 export const typography = {
   fontFamily: "JetBrains Mono",
   size: { xs: 10, sm: 12, md: 14, lg: 18, xl: 24 },
-  weight: { regular: "400", medium: "500", bold: "700" },
+  weight: { regular: "400", medium: "500", semibold: "600", bold: "700" },
+} as const;
+
+const GLOW_RIM_TOP = {
+  offsetX: 0,
+  offsetY: 1,
+  blurRadius: 0,
+  spreadDistance: 0,
+  color: withAlpha(palette.blue, 0.15),
+  inset: true,
 } as const;
 
 export const shadows = {
+  glowRimTop: [GLOW_RIM_TOP],
   primarySm: [
     {
       offsetX: 0,
@@ -118,14 +125,7 @@ export const shadows = {
       spreadDistance: -1,
       color: "rgba(0, 0, 0, 0.3)",
     },
-    {
-      offsetX: 0,
-      offsetY: 1,
-      blurRadius: 0,
-      spreadDistance: 0,
-      color: alpha.primary15,
-      inset: true,
-    },
+    GLOW_RIM_TOP,
   ],
   surfaceMd: [
     {
@@ -142,21 +142,26 @@ export const shadows = {
       spreadDistance: -6,
       color: "rgba(0, 0, 0, 0.4)",
     },
-    {
-      offsetX: 0,
-      offsetY: 1,
-      blurRadius: 0,
-      spreadDistance: 0,
-      color: alpha.primary15,
-      inset: true,
-    },
+    GLOW_RIM_TOP,
   ],
 } as const;
+
+function liftShadow(accent: string) {
+  return [
+    {
+      offsetX: 0,
+      offsetY: 4,
+      blurRadius: 8,
+      spreadDistance: -4,
+      color: withAlpha(accent, 0.5),
+    },
+    GLOW_RIM_TOP,
+  ];
+}
 
 export const theme = {
   palette,
   colors,
-  alpha,
   spacing,
   radius,
   typography,
@@ -177,6 +182,8 @@ export type ButtonSize = "sm" | "md" | "lg";
 
 const BUTTON_HEIGHT: Record<ButtonSize, number> = { sm: 32, md: 40, lg: 48 };
 
+const BUTTON_PADDING: Record<ButtonSize, number> = { sm: 12, md: 20, lg: 28 };
+
 const BUTTON_FONT: Record<ButtonSize, number> = {
   sm: typography.size.sm,
   md: typography.size.md,
@@ -189,17 +196,27 @@ const BUTTON_VARIANTS: Record<
 > = {
   primary: {
     container: {
-      backgroundColor: colors.primary,
-      borderColor: alpha.white10,
+      backgroundColor: colors.primaryHover,
+      borderColor: withAlpha("#ffffff", 0.1),
       borderWidth: 1,
+      boxShadow: liftShadow(colors.primary),
     },
     label: { color: "#ffffff" },
   },
   secondary: {
     container: {
       backgroundColor: colors.bgSurface,
-      borderColor: alpha.slate30,
+      borderColor: withAlpha(colors.textMuted, 0.3),
       borderWidth: 2,
+      boxShadow: [
+        {
+          offsetX: 0,
+          offsetY: 2,
+          blurRadius: 4,
+          spreadDistance: 0,
+          color: withAlpha("#000000", 0.2),
+        },
+      ],
     },
     label: { color: colors.primary },
   },
@@ -221,8 +238,8 @@ const BUTTON_VARIANTS: Record<
   },
   danger: {
     container: {
-      backgroundColor: alpha.danger10,
-      borderColor: alpha.danger50,
+      backgroundColor: withAlpha(colors.danger, 0.1),
+      borderColor: withAlpha(colors.danger, 0.5),
       borderWidth: 2.5,
     },
     label: { color: colors.danger },
@@ -230,16 +247,18 @@ const BUTTON_VARIANTS: Record<
   success: {
     container: {
       backgroundColor: colors.success,
-      borderColor: alpha.white20,
+      borderColor: withAlpha("#ffffff", 0.2),
       borderWidth: 1,
+      boxShadow: liftShadow(colors.success),
     },
     label: { color: colors.textOnAccent },
   },
   purple: {
     container: {
       backgroundColor: palette.purple,
-      borderColor: alpha.white10,
+      borderColor: withAlpha("#ffffff", 0.1),
       borderWidth: 1,
+      boxShadow: liftShadow(palette.purple),
     },
     label: { color: "#ffffff" },
   },
@@ -258,8 +277,8 @@ const BUTTON_GRADIENTS: Partial<
   Record<ButtonVariant, readonly [string, string]>
 > = {
   primary: [colors.primaryHover, colors.primaryHover],
-  success: ["#9ece6a", "#92c857"],
-  purple: ["#bb9af7", "#9b6bf3"],
+  success: [colors.success, "#92c857"],
+  purple: [palette.purple, "#9b6bf3"],
 };
 
 export function buttonGradient(
@@ -291,7 +310,7 @@ export function buttonContainerStyle({
     justifyContent: "center",
     gap: spacing.xs,
     height,
-    paddingHorizontal: isIcon ? 0 : spacing.sm,
+    paddingHorizontal: isIcon ? 0 : BUTTON_PADDING[size],
     width: isIcon ? height : fullWidth ? "100%" : undefined,
     borderRadius: isIcon ? height / 2 : radius.mdL,
     opacity: disabled ? 0.5 : pressed ? 0.85 : 1,
@@ -306,7 +325,7 @@ export function buttonLabelStyle(
 ): TextStyle {
   return {
     fontSize: BUTTON_FONT[size],
-    fontWeight: typography.weight.medium,
+    fontWeight: typography.weight.semibold,
     ...BUTTON_VARIANTS[variant].label,
   };
 }
@@ -317,20 +336,35 @@ export const inputStyles = {
     color: colors.textMain,
     fontSize: typography.size.sm,
     fontWeight: typography.weight.medium,
+    marginLeft: spacing.sm,
   } satisfies TextStyle,
   field: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    minHeight: 40,
-    paddingHorizontal: spacing.sm,
-    backgroundColor: colors.bgInput,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.sm,
+    minHeight: 44,
+    paddingHorizontal: 20,
+    backgroundColor: colors.bgField,
+    borderWidth: 2,
+    borderColor: withAlpha(colors.primary, 0),
+    borderRadius: radius.mdL,
   } satisfies ViewStyle,
-  fieldFocused: { borderColor: colors.primary } satisfies ViewStyle,
+  fieldFocused: {
+    borderColor: withAlpha(colors.primary, 0.3),
+  } satisfies ViewStyle,
   fieldError: { borderColor: colors.danger } satisfies ViewStyle,
+  fieldErrorFocused: {
+    borderColor: colors.danger,
+    boxShadow: [
+      {
+        offsetX: 0,
+        offsetY: 0,
+        blurRadius: 0,
+        spreadDistance: 1.56,
+        color: withAlpha(colors.danger, 0.25),
+      },
+    ],
+  } satisfies ViewStyle,
   control: {
     flex: 1,
     color: colors.textMain,
@@ -340,10 +374,13 @@ export const inputStyles = {
   helper: {
     color: colors.textMuted,
     fontSize: typography.size.sm,
+    marginLeft: radius.mdL,
   } satisfies TextStyle,
   error: {
     color: colors.danger,
     fontSize: typography.size.sm,
+    fontWeight: typography.weight.medium,
+    marginLeft: radius.mdL,
   } satisfies TextStyle,
 } as const;
 
@@ -374,13 +411,19 @@ const CARD_WIDTH: Record<CardWidth, ViewStyle> = {
 };
 
 const CARD_VARIANTS: Record<CardVariant, ViewStyle> = {
-  elevated: { backgroundColor: colors.bgSurface, boxShadow: shadows.surfaceSm },
-  outlined: {
+  elevated: {
     backgroundColor: colors.bgSurface,
-    borderWidth: 1,
+    borderColor: withAlpha(palette.slate, 0.5),
+    boxShadow: shadows.surfaceSm,
+  },
+  outlined: {
+    backgroundColor: "transparent",
     borderColor: colors.border,
   },
-  flat: { backgroundColor: colors.bgSurface },
+  flat: {
+    backgroundColor: colors.bgSidebar,
+    borderColor: withAlpha(palette.slate, 0.3),
+  },
   transparent: { backgroundColor: "transparent" },
   levitating: {
     backgroundColor: colors.bgSurface,
@@ -410,6 +453,8 @@ export function cardStyle({
 }): ViewStyle {
   return {
     borderRadius: radius.md,
+    borderWidth: 2,
+    borderColor: "transparent",
     padding: CARD_PADDING[padding],
     ...CARD_WIDTH[width],
     ...CARD_VARIANTS[variant],
@@ -425,27 +470,31 @@ const ALERT_ACCENT: Record<AlertVariant, string> = {
   danger: colors.danger,
 };
 
-const ALERT_TINT: Record<AlertVariant, string> = {
-  info: alpha.info12,
-  success: alpha.success12,
-  warning: alpha.warning12,
-  danger: alpha.danger12,
-};
-
 export function alertAccent(variant: AlertVariant): string {
   return ALERT_ACCENT[variant];
 }
 
 export function alertStyle(variant: AlertVariant): ViewStyle {
+  const accent = ALERT_ACCENT[variant];
+
   return {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: spacing.xs,
-    padding: spacing.sm,
-    borderRadius: radius.sm,
-    borderLeftWidth: 3,
-    borderLeftColor: ALERT_ACCENT[variant],
-    backgroundColor: ALERT_TINT[variant],
+    gap: spacing.sm,
+    minHeight: 48,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    ...tintedSurface(accent),
+    boxShadow: [
+      {
+        offsetX: 0,
+        offsetY: 0,
+        blurRadius: 15,
+        spreadDistance: 0,
+        color: withAlpha(accent, 0.05),
+      },
+    ],
   };
 }
 
@@ -459,7 +508,8 @@ export function alertTitleStyle(variant: AlertVariant): TextStyle {
 
 export const alertBodyStyle: TextStyle = {
   color: colors.textMain,
-  fontSize: typography.size.md,
+  fontSize: typography.size.sm,
+  opacity: 0.85,
 };
 
 export const alertCloseStyle: TextStyle = {
@@ -483,27 +533,27 @@ const BADGE_VARIANTS: Record<
   { container: ViewStyle; label: TextStyle }
 > = {
   primary: {
-    container: { backgroundColor: alpha.primary15 },
+    container: tintedSurface(colors.primary),
     label: { color: colors.primary },
   },
   secondary: {
-    container: { backgroundColor: alpha.slate25 },
-    label: { color: colors.textMain },
+    container: tintedSurface(colors.textMuted),
+    label: { color: colors.textMuted },
   },
   warning: {
-    container: { backgroundColor: alpha.warning15 },
+    container: tintedSurface(colors.warning),
     label: { color: colors.warning },
   },
   success: {
-    container: { backgroundColor: alpha.success15 },
+    container: tintedSurface(colors.success),
     label: { color: colors.success },
   },
   danger: {
-    container: { backgroundColor: alpha.danger15 },
+    container: tintedSurface(colors.danger),
     label: { color: colors.danger },
   },
   info: {
-    container: { backgroundColor: alpha.info15 },
+    container: tintedSurface(colors.info),
     label: { color: colors.info },
   },
   outline: {
@@ -512,13 +562,31 @@ const BADGE_VARIANTS: Record<
       borderWidth: 1,
       borderColor: colors.border,
     },
-    label: { color: colors.textMuted },
+    label: { color: colors.textMain },
   },
 };
 
-const BADGE_SIZES: Record<BadgeSize, { height: number; font: number }> = {
-  sm: { height: 18, font: typography.size.xs },
-  md: { height: 22, font: typography.size.sm },
+const BADGE_SIZES: Record<
+  BadgeSize,
+  {
+    paddingVertical: number;
+    paddingHorizontal: number;
+    font: number;
+    tracking: number;
+  }
+> = {
+  sm: {
+    paddingVertical: 2,
+    paddingHorizontal: spacing.xs,
+    font: typography.size.xs,
+    tracking: 0.2,
+  },
+  md: {
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+    font: typography.size.sm,
+    tracking: 0.4,
+  },
 };
 
 export function badgeContainerStyle(
@@ -529,8 +597,8 @@ export function badgeContainerStyle(
     alignSelf: "flex-start",
     alignItems: "center",
     justifyContent: "center",
-    height: BADGE_SIZES[size].height,
-    paddingHorizontal: spacing.xs,
+    paddingVertical: BADGE_SIZES[size].paddingVertical,
+    paddingHorizontal: BADGE_SIZES[size].paddingHorizontal,
     borderRadius: radius.sm,
     ...BADGE_VARIANTS[variant].container,
   };
@@ -542,7 +610,8 @@ export function badgeLabelStyle(
 ): TextStyle {
   return {
     fontSize: BADGE_SIZES[size].font,
-    fontWeight: typography.weight.medium,
+    fontWeight: typography.weight.semibold,
+    letterSpacing: BADGE_SIZES[size].tracking,
     ...BADGE_VARIANTS[variant].label,
   };
 }
@@ -569,6 +638,9 @@ export function textDisplayValueStyle(state: TextDisplayState): TextStyle {
 export const textDisplayLabelStyle: TextStyle = {
   color: colors.textMuted,
   fontSize: typography.size.sm,
+  fontWeight: typography.weight.semibold,
+  letterSpacing: 0.6,
+  textTransform: "uppercase",
 };
 
 export const textDisplayHelperStyle: TextStyle = {
@@ -578,19 +650,33 @@ export const textDisplayHelperStyle: TextStyle = {
 
 export type ChipVariant = "default" | "wet" | "dry" | "faulty";
 
+function tagSurface(accent: string): ViewStyle {
+  return {
+    backgroundColor: withAlpha(accent, 0.15),
+    borderColor: withAlpha(accent, 0.3),
+    boxShadow: [
+      {
+        offsetX: 0,
+        offsetY: 1,
+        blurRadius: 0,
+        spreadDistance: 0,
+        color: withAlpha("#ffffff", 0.05),
+        inset: true,
+      },
+    ],
+  };
+}
+
 const CHIP_VARIANTS: Record<
   ChipVariant,
   { container: ViewStyle; label: TextStyle }
 > = {
   default: {
-    container: { backgroundColor: colors.bgInput, borderColor: colors.border },
+    container: tagSurface(colors.textMuted),
     label: { color: colors.textMain },
   },
   wet: {
-    container: {
-      backgroundColor: alpha.primary15,
-      borderColor: colors.primary,
-    },
+    container: tagSurface(colors.primary),
     label: { color: colors.primary },
   },
   dry: {
@@ -598,7 +684,7 @@ const CHIP_VARIANTS: Record<
     label: { color: colors.textMuted },
   },
   faulty: {
-    container: { backgroundColor: alpha.danger15, borderColor: colors.danger },
+    container: tagSurface(colors.danger),
     label: { color: colors.danger },
   },
 };
@@ -616,7 +702,10 @@ export function chipContainerStyle(
     borderWidth: selected ? 2 : 1,
     ...CHIP_VARIANTS[variant].container,
     ...(selected
-      ? { backgroundColor: alpha.primary15, borderColor: colors.primary }
+      ? {
+          backgroundColor: withAlpha(colors.primary, 0.15),
+          borderColor: colors.primary,
+        }
       : {}),
   };
 }
@@ -732,7 +821,18 @@ export const screenStyles = {
     gap: spacing.sm,
   } satisfies ViewStyle,
   navigation: {
-    header: { backgroundColor: colors.bgSurface } satisfies ViewStyle,
+    header: {
+      backgroundColor: colors.bgSurface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      boxShadow: "none",
+    } satisfies ViewStyle,
+    tabBar: {
+      backgroundColor: colors.bgSurface,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      boxShadow: "none",
+    } satisfies ViewStyle,
     headerTitle: { fontWeight: typography.weight.bold } satisfies TextStyle,
   },
 } as const;
