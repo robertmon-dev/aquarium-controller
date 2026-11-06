@@ -7,8 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "lint": "yarn workspaces foreach --all --parallel run lint",
-    "typecheck": "yarn workspaces foreach --all --parallel run typecheck",
-    "test": "yarn workspaces foreach --all run test"
+    "lint": "yarn workspaces foreach --all --exclude aquarium-controller-monorepo --parallel run lint",
+    "typecheck": "yarn workspaces foreach --all --exclude aquarium-controller-monorepo --parallel run typecheck",
+    "test": "yarn workspaces foreach --all --exclude aquarium-controller-monorepo run test"
   }
 }
