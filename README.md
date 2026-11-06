@@ -44,7 +44,7 @@ Board configuration lives in `sdkconfig.defaults`: 240 MHz, 8 MiB flash, octal P
 
 ### Identifying the probes
 
-The firmware addresses each DS18B20 by its ROM, so both ROMs must be known. Flip `run_mode` to `RunMode::RomDiscovery` in `src/settings.rs`, flash, and watch the serial monitor: it runs a SEARCH ROM, prints every address it finds, and then loops printing a live reading per ROM. Hold one probe in your hand — the ROM whose temperature climbs is that probe. Paste the two addresses into `sensors.tank_rom` / `sensors.sump_rom` and switch `run_mode` back to `RunMode::Normal`.
+The firmware addresses each DS18B20 by its ROM, so both ROMs must be known. Flip `run_mode` to `RunMode::RomDiscovery` in `crates/firmware/src/settings.rs`, flash, and watch the serial monitor: it runs a SEARCH ROM, prints every address it finds, and then loops printing a live reading per ROM. Hold one probe in your hand — the ROM whose temperature climbs is that probe. Paste the two addresses into `sensors.tank_rom` / `sensors.sump_rom` and switch `run_mode` back to `RunMode::Normal`.
 
 ## Key Features
 
@@ -65,6 +65,7 @@ The firmware addresses each DS18B20 by its ROM, so both ROMs must be known. Flip
 * `ldproxy` and `espflash` (`cargo install ldproxy espflash`)
 * `python3` and `make`
 * An ESP32-S3 with 8 MiB flash and PSRAM, on `/dev/ttyACM0` (override with `PORT=`)
+* Node 22+ with `corepack enable`, for the mobile client (yarn 4 is pinned in `package.json`)
 
 A ready-made environment is also provided in `.devcontainer/` if you would rather not install the toolchain locally.
 
@@ -90,6 +91,10 @@ make flash         # build release, flash the board, attach the serial monitor
 * `make telemetry IP=...` / `make events IP=...` — pretty-print one snapshot, or follow the SSE stream
 * `make erase` — wipe the whole flash, NVS included
 * `make clean` / `make clean-idf` — drop cargo artifacts, or also the ESP-IDF build tree
+* `make types` — regenerate the TypeScript contract from the Rust DTOs
+* `make types-check` — regenerate it and verify the mobile client still type-checks against it
+* `make app-install` / `make app-start` — install JavaScript dependencies, start the Expo dev server
+* `make js-lint` / `make js-test` — lint and test the JavaScript workspaces
 
 ## Configuration
 
@@ -112,7 +117,7 @@ INFLUX_TOKEN="<influx api token>"
 
 ### Firmware settings
 
-Everything that is not a secret is a `const` in `src/settings.rs`, evaluated at compile time: per-component modes, the HTTP port (`80`), connection limit and SSE keepalive, sampling intervals, the two DS18B20 ROM addresses, the target temperature, pH calibration points, and the water-level polarity and debounce/flap windows.
+Everything that is not a secret is a `const` in `crates/firmware/src/settings.rs`, evaluated at compile time: per-component modes, the HTTP port (`80`), connection limit and SSE keepalive, sampling intervals, the two DS18B20 ROM addresses, the target temperature, pH calibration points, and the water-level polarity and debounce/flap windows.
 
 ## HTTP API
 
@@ -141,41 +146,99 @@ curl -X PUT http://192.168.1.50/api/lighting/override \
 
 A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank/sump/target, heater state, sensor health), `filtration`, `co2` (including the current pH), `ato`, `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`.
 
+The same contract is available to TypeScript clients as `packages/api-client`,
+generated from these Rust types — see [The HTTP contract](#the-http-contract).
+
 ## Project Structure
 
 ```text
-├── core/                        # aquarium-core — hardware-free, host-testable
-│   ├── src/
-│   │   ├── domain/              # light, water, metrics (DTOs + invariants)
-│   │   ├── protocol/            # ds18b20, xkc_y25, ph, influx line protocol
-│   │   ├── ports/               # inbound (telemetry, lighting) / outbound traits
-│   │   ├── application/         # collector, water_level sampler, metrics_export
-│   │   ├── adapters/
-│   │   │   ├── inbound/http/    # picoserve router, auth layer, SSE, handlers
-│   │   │   └── outbound/        # in-memory stores
-│   │   └── secret.rs            # redacting Secret<T> newtype
-│   └── tests/                   # http_auth, http_telemetry, http_lighting, http_events
-├── src/                         # aquarium-controller — ESP32-S3 firmware
-│   ├── adapters/outbound/       # ds18b20, xkc_y25, ph, temperature, influx
-│   ├── infrastructure/          # wifi, clock (SNTP), system_health
-│   ├── settings.rs              # compile-time configuration
-│   └── main.rs                  # peripheral wiring, task graph, ROM discovery mode
+├── crates/
+│   ├── core/                    # aquarium-core — hardware-free, host-testable
+│   │   ├── src/
+│   │   │   ├── domain/          # light, water, metrics (DTOs + invariants)
+│   │   │   ├── protocol/        # ds18b20, xkc_y25, ph, influx line protocol
+│   │   │   ├── ports/           # inbound (telemetry, lighting) / outbound traits
+│   │   │   ├── application/     # collector, water_level sampler, metrics_export
+│   │   │   ├── adapters/
+│   │   │   │   ├── inbound/http/  # picoserve router, auth layer, SSE, handlers
+│   │   │   │   └── outbound/    # in-memory stores
+│   │   │   └── secret.rs        # redacting Secret<T> newtype
+│   │   └── tests/               # http_auth, http_telemetry, http_lighting, http_events
+│   └── firmware/                # aquarium-controller — ESP32-S3 firmware
+│       ├── .cargo/config.toml   # xtensa target, linker, ESP-IDF env
+│       ├── src/
+│       │   ├── adapters/outbound/  # ds18b20, xkc_y25, ph, temperature, influx
+│       │   ├── infrastructure/  # wifi, clock (SNTP), system_health
+│       │   ├── settings.rs      # compile-time configuration
+│       │   └── main.rs          # peripheral wiring, task graph, ROM discovery mode
+│       ├── partitions.csv       # 8 MiB layout (3 MiB factory app + SPIFFS)
+│       └── sdkconfig.defaults   # CPU/PSRAM/stack/socket tuning
+├── packages/
+│   └── api-client/              # typed HTTP + SSE client, generated from the Rust DTOs
+│       └── src/generated/       # ts-rs output — not committed, run `make types`
+├── apps/
+│   └── mobile/                  # Expo client (expo-router, TanStack Query, react-hook-form)
+│       └── src/
+│           ├── app/             # routes only, one screen each
+│           ├── components/      # atoms / molecules / organisms / pages / utility
+│           └── device/          # config schema, secure storage, fetch seam, SSE hook
 ├── docs/                        # design specs and implementation plans
-├── Makefile                     # build, flash, monitor, test, lint, size, smoke
-├── partitions.csv               # 8 MiB layout (3 MiB factory app + SPIFFS)
-└── sdkconfig.defaults           # CPU/PSRAM/stack/socket tuning
+├── Makefile                     # build, flash, monitor, test, lint, size, smoke, types
+└── package.json                 # yarn 4 workspace root
 ```
 
 ## Development and Testing
 
-The core crate is built for the host, so tests run without hardware:
+The core crate is built for the host, so tests run without hardware. The xtensa
+target lives in `crates/firmware/.cargo/config.toml` rather than at the root, so
+host commands need no `--target` override:
 
 * **Run tests:** `make test` (or `make test-watch` with `cargo-watch`)
 * **Run clippy:** `make lint` — core on the host target, firmware on `xtensa-esp32s3-espidf`, both `-D warnings`
 * **Check formatting:** `make fmt-check` (`make fmt` to apply)
+* **JavaScript:** `make js-lint`, `make js-test`
 * **Everything CI gates on:** `make ci`
 
-GitHub Actions runs `build --release`, `fmt --check` and `clippy -D warnings` via the `esp-rs/xtensa-toolchain` action on pushes to `main` and on every pull request.
+Firmware commands run from `crates/firmware`, which the Makefile handles — run
+`make`, not bare `cargo`, or the ESP-IDF environment will not be picked up.
+
+### The HTTP contract
+
+`packages/api-client/src/generated/` is produced from the serializable types in
+`crates/core/src/domain/` by `ts-rs`, and is **not** committed — the Rust types
+are the only source of truth. After changing a DTO:
+
+```bash
+make types         # regenerate
+make types-check   # regenerate, then type-check the client against it
+```
+
+A fresh checkout has to run `make types` once before the mobile client will
+type-check or bundle.
+
+### Mobile client
+
+```bash
+make app-install
+make types
+make app-start     # Expo dev server
+```
+
+Enter the controller's host and port in the settings screen, plus the `API_TOKEN`
+from `.env`. The screen probes `GET /api/health` before saving, so a wrong
+address or token fails at entry. The token is kept in `expo-secure-store`. The
+telemetry screen subscribes to `/api/events` over `expo/fetch`, which is the one
+`fetch` on React Native that can stream a response body.
+
+Device discovery is out of scope: the firmware does not advertise mDNS, so the
+address is entered by hand.
+
+### Continuous integration
+
+Two workflows, split by toolchain and by path:
+
+* `rust_ci.yml` — formatting, clippy (core on host, firmware on xtensa), host tests, contract generation, and a release firmware build, via `esp-rs/xtensa-toolchain`.
+* `js_ci.yml` — installs stable Rust only to run `make types`, then lints, type-checks and tests the yarn workspaces.
 
 ## Support
 
