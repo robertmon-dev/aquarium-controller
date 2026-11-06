@@ -66,7 +66,6 @@ pub struct HttpSettings {
     pub max_connections: usize,
     pub sse_keepalive: Duration,
     pub token: Secret<&'static str>,
-    pub cors_origin: &'static str,
 }
 
 #[derive(Debug)]
@@ -117,7 +116,6 @@ impl Settings {
                 max_connections: 4,
                 sse_keepalive: Duration::from_secs(15),
                 token: Secret::new(env!("API_TOKEN")),
-                cors_origin: "*",
             },
             sensors: SensorSettings {
                 read_interval: Duration::from_secs(2),
