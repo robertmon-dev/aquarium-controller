@@ -11,6 +11,7 @@ use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
 
 pub const TOKEN: &str = "test-token";
+pub const ORIGIN: &str = "http://localhost:8081";
 pub const OVERRIDE_PATH: &str = "/api/lighting/override";
 
 pub fn config() -> HttpConfig {
@@ -18,6 +19,7 @@ pub fn config() -> HttpConfig {
         token: TOKEN,
         max_connections: 4,
         sse_keepalive: Duration::from_secs(15),
+        cors_origin: ORIGIN,
     }
 }
 
@@ -68,4 +70,13 @@ pub async fn raw(addr: SocketAddr, request: &str) -> String {
     let _ = tokio::time::timeout(Duration::from_millis(500), stream.read_to_end(&mut buf)).await;
 
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+pub fn preflight(path: &str, method: &str) -> String {
+    format!(
+        "OPTIONS {path} HTTP/1.1\r\nHost: localhost\r\nOrigin: {ORIGIN}\r\n\
+         Access-Control-Request-Method: {method}\r\n\
+         Access-Control-Request-Headers: authorization\r\n\
+         Connection: close\r\n\r\n"
+    )
 }
