@@ -99,7 +99,7 @@ impl Settings {
             components: ComponentSettings {
                 wifi: ComponentMode::Running,
                 http: ComponentMode::Running,
-                temperature: ComponentMode::Running,
+                temperature: ComponentMode::Off,
                 telemetry: ComponentMode::Running,
                 water_level: ComponentMode::Off,
                 influx: ComponentMode::Off,
@@ -118,7 +118,7 @@ impl Settings {
                 token: Secret::new(env!("API_TOKEN")),
             },
             sensors: SensorSettings {
-                read_interval: Duration::from_secs(30),
+                read_interval: Duration::from_secs(2),
                 tank_rom: [0x28, 0x50, 0x31, 0x83, 0x7C, 0x25, 0x0B, 0x62],
                 sump_rom: [0x28, 0x9D, 0x32, 0x08, 0x7D, 0x25, 0x0B, 0x1F],
                 target_celsius: 27.0,
