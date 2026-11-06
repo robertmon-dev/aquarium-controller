@@ -105,6 +105,7 @@ pub enum SystemMode {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub struct TankTelemetryDto {
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
     pub timestamp_epoch_s: u64,
     pub system_mode: SystemMode,
     pub system_health: SystemHealthDto,
@@ -215,6 +216,7 @@ pub struct AtoMetricsDto {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub struct SystemHealthDto {
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
     pub uptime_seconds: u64,
     pub wifi_rssi_dbm: i8,
     pub free_heap_kb: u32,
