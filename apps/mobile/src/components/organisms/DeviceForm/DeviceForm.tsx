@@ -9,7 +9,7 @@ import { useForm } from "react-hook-form";
 import { View } from "react-native";
 import { Alert, Button, Card } from "@/components/atoms";
 import { FormField } from "@/components/molecules";
-import { spacing } from "@/components/utility/theme";
+import { spacing } from "@aquarium/theme";
 import {
   deviceFormSchema,
   toDeviceConfig,
