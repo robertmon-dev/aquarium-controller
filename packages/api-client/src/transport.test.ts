@@ -10,8 +10,14 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function asApiError(error: unknown): ApiError {
-  return error as ApiError;
+async function rejection(promise: Promise<unknown>): Promise<ApiError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as ApiError;
+  }
+
+  throw new Error("expected the request to reject, but it resolved");
 }
 
 describe("request", () => {
@@ -41,8 +47,8 @@ describe("request", () => {
       .fn()
       .mockResolvedValue(new Response("unauthorized\n", { status: 401 }));
 
-    const error = await request({ device, fetchImpl }, "/api/health").catch(
-      asApiError,
+    const error = await rejection(
+      request({ device, fetchImpl }, "/api/health"),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -54,8 +60,8 @@ describe("request", () => {
       .fn()
       .mockRejectedValue(new TypeError("Network request failed"));
 
-    const error = await request({ device, fetchImpl }, "/api/health").catch(
-      asApiError,
+    const error = await rejection(
+      request({ device, fetchImpl }, "/api/health"),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -67,8 +73,8 @@ describe("request", () => {
       .fn()
       .mockResolvedValue(new Response("<html>nope", { status: 200 }));
 
-    const error = await request({ device, fetchImpl }, "/api/health").catch(
-      asApiError,
+    const error = await rejection(
+      request({ device, fetchImpl }, "/api/health"),
     );
 
     expect(error).toBeInstanceOf(ApiError);
@@ -82,10 +88,9 @@ describe("request", () => {
         new Response("channel level out of range", { status: 400 }),
       );
 
-    const error = await request(
-      { device, fetchImpl },
-      "/api/lighting/override",
-    ).catch(asApiError);
+    const error = await rejection(
+      request({ device, fetchImpl }, "/api/lighting/override"),
+    );
 
     expect(error.kind).toBe("status");
     expect(error.status).toBe(400);
