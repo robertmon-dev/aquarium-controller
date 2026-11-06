@@ -196,7 +196,7 @@ lint-firmware: check-env ## Run clippy on the firmware crate
 	@$(LOAD_ENV) $(ESP_ENV) cd $(FW_DIR) && cargo clippy --release -- -D warnings
 
 .PHONY: ci
-ci: fmt-check lint test ## Everything CI should gate on
+ci: fmt-check lint test types-check js-lint js-test ## Everything CI should gate on
 	@$(OK) "CI passed"
 
 # ==============================================================================
@@ -228,6 +228,52 @@ partitions: ## Dump the partition table ESP-IDF actually generated
 	t={0:'app',1:'data'}; \
 	[print('  {:10} {:5} {:>9} {:>9}  {:6.2f} MiB'.format(e[12:28].rstrip(b'\0').decode(), t.get(e[2],e[2]), hex(struct.unpack('<I',e[4:8])[0]), hex(struct.unpack('<I',e[8:12])[0]), struct.unpack('<I',e[8:12])[0]/1048576)) for e in (d[i:i+32] for i in range(0,len(d),32)) if e[:2]==b'\xaaP']" "$$bin"
 	@$(SUB) "espflash writes the table from $(FW_DIR)/partitions.csv - these two must agree"
+
+# ==============================================================================
+# Mobile client
+# ==============================================================================
+
+GEN_DIR    := packages/api-client/src/generated
+GEN_CARGO  ?= cargo
+
+.PHONY: types
+types: ## Regenerate the TypeScript contract from the Rust DTOs
+	@$(MSG) "Generating TypeScript contract"
+	@rm -rf $(GEN_DIR)
+	@log=$$(mktemp); cd crates/core && TS_RS_EXPORT_DIR=../../$(GEN_DIR) \
+		$(GEN_CARGO) test -p $(CORE_CRATE) --features ts-export >"$$log" 2>&1 \
+		|| { cat "$$log"; rm -f "$$log"; exit 1; }; rm -f "$$log"
+	@cd $(GEN_DIR) && for f in *.ts; do \
+		n="$${f%.ts}"; printf 'export type { %s } from "./%s";\n' "$$n" "$$n"; \
+		done | sort > index.ts
+	@$(SUB) "$$(ls $(GEN_DIR)/*.ts | wc -l) files in $(GEN_DIR)"
+	@$(OK) "Contract generated"
+
+.PHONY: types-check
+types-check: types ## Verify the generated contract still type-checks against the client
+	@$(MSG) "Checking contract against the client"
+	@yarn workspaces foreach --all --parallel run typecheck
+	@$(OK) "Contract and client agree"
+
+.PHONY: app-install
+app-install: ## Install JavaScript dependencies
+	@$(MSG) "yarn install"
+	@yarn install --immutable
+
+.PHONY: app-start
+app-start: types ## Start the Expo dev server
+	@$(MSG) "Expo dev server"
+	@yarn workspace mobile run start
+
+.PHONY: js-lint
+js-lint: ## Lint every yarn workspace
+	@$(MSG) "Lint (JavaScript)"
+	@yarn workspaces foreach --all --parallel run lint
+
+.PHONY: js-test
+js-test: ## Run JavaScript unit tests
+	@$(MSG) "JavaScript tests"
+	@yarn workspaces foreach --all run test
 
 # ==============================================================================
 # Device smoke test

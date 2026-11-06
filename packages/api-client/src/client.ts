@@ -6,13 +6,13 @@ import type {
 } from "./generated";
 import { request, type Transport } from "./transport";
 
-export type DeviceClient = {
+export interface DeviceClient {
   telemetry: () => Promise<TankTelemetryDto>;
   health: () => Promise<SystemHealthDto>;
   lightingOverride: () => Promise<LightingOverride | null>;
   setLightingOverride: (body: SetOverrideRequest) => Promise<LightingOverride>;
   clearLightingOverride: () => Promise<void>;
-};
+}
 
 export function createClient(transport: Transport): DeviceClient {
   return {
