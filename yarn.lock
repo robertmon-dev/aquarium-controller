@@ -2092,6 +2092,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@react-native-community/slider@npm:5.2.1":
+  version: 5.2.1
+  resolution: "@react-native-community/slider@npm:5.2.1"
+  checksum: 10c0/10be48249573540d90a2b6f0bba2bdadd58043767236492211eb836dc96b6fe875e430b870f331e65473c36c92aed812cd31a6627e01c97ddd5b2bd5bfee570f
+  languageName: node
+  linkType: hard
+
 "@react-native-masked-view/masked-view@npm:^0.3.2":
   version: 0.3.2
   resolution: "@react-native-masked-view/masked-view@npm:0.3.2"
@@ -6691,6 +6698,7 @@ __metadata:
     "@aquarium/theme": "workspace:*"
     "@expo/ui": "npm:~58.0.27"
     "@hookform/resolvers": "npm:7.0.3"
+    "@react-native-community/slider": "npm:5.2.1"
     "@tanstack/react-query": "npm:5.106.1"
     "@types/react": "npm:~19.3.0"
     eslint: "npm:^9.0.0"
