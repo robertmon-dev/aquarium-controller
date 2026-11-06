@@ -233,6 +233,34 @@ telemetry screen subscribes to `/api/events` over `expo/fetch`, which is the one
 Device discovery is out of scope: the firmware does not advertise mDNS, so the
 address is entered by hand.
 
+#### Component architecture
+
+Atomic Design, mirroring the conventions of the portfolio design system — each
+component is a PascalCase directory holding `types.ts`, `styles.ts` and the
+component:
+
+```text
+src/app/                  # route files only, each mounting one page
+src/components/
+├── atoms/                # Button, Input, Card, Alert, Badge, Spinner, TextDisplay
+├── molecules/            # FormField, MetricList, ScreenMessage
+├── organisms/            # DeviceForm, TelemetryPanel
+├── pages/                # TelemetryPage, DeviceSettingsPage
+└── utility/              # theme, providers, formatters
+src/device/               # form schema, secure storage, fetch seam, SSE hook
+```
+
+`components/utility/theme.ts` is the Tokyo Night palette from the portfolio's
+`styles/palette.scss`, ported to TypeScript: `rem` spacing resolved to px, Sass
+colour functions evaluated to literals, and shadows expressed as React Native
+`boxShadow` arrays. Gradient button variants use `expo-linear-gradient`.
+
+The portfolio's components themselves are not reusable here — they are DOM
+components using `className` and imported `.scss`, which React Native has no
+equivalent for. The atoms are reimplemented on RN primitives with the same prop
+vocabulary, so `Button`, `Card`, `Input` and friends take the same variants and
+sizes as on the web.
+
 ### Continuous integration
 
 Two workflows, split by toolchain and by path:
