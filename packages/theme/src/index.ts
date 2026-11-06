@@ -576,6 +576,138 @@ export const textDisplayHelperStyle: TextStyle = {
   fontSize: typography.size.sm,
 };
 
+export type ChipVariant = "default" | "wet" | "dry" | "faulty";
+
+const CHIP_VARIANTS: Record<
+  ChipVariant,
+  { container: ViewStyle; label: TextStyle }
+> = {
+  default: {
+    container: { backgroundColor: colors.bgInput, borderColor: colors.border },
+    label: { color: colors.textMain },
+  },
+  wet: {
+    container: {
+      backgroundColor: alpha.primary15,
+      borderColor: colors.primary,
+    },
+    label: { color: colors.primary },
+  },
+  dry: {
+    container: { backgroundColor: "transparent", borderColor: colors.border },
+    label: { color: colors.textMuted },
+  },
+  faulty: {
+    container: { backgroundColor: alpha.danger15, borderColor: colors.danger },
+    label: { color: colors.danger },
+  },
+};
+
+export function chipContainerStyle(
+  variant: ChipVariant,
+  selected: boolean,
+): ViewStyle {
+  return {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 34,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.mdL,
+    borderWidth: selected ? 2 : 1,
+    ...CHIP_VARIANTS[variant].container,
+    ...(selected
+      ? { backgroundColor: alpha.primary15, borderColor: colors.primary }
+      : {}),
+  };
+}
+
+export function chipLabelStyle(
+  variant: ChipVariant,
+  selected: boolean,
+): TextStyle {
+  return {
+    fontSize: typography.size.sm,
+    fontWeight: selected ? typography.weight.bold : typography.weight.medium,
+    ...CHIP_VARIANTS[variant].label,
+    ...(selected ? { color: colors.primary } : {}),
+  };
+}
+
+export type StatusTone = "ok" | "degraded" | "off";
+
+const STATUS_COLOR: Record<StatusTone, string> = {
+  ok: colors.success,
+  degraded: colors.warning,
+  off: colors.textMuted,
+};
+
+export function statusDotStyle(tone: StatusTone): ViewStyle {
+  return {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: STATUS_COLOR[tone],
+  };
+}
+
+export function statusLabelStyle(tone: StatusTone): TextStyle {
+  return { color: STATUS_COLOR[tone], fontSize: typography.size.sm };
+}
+
+export const sliderStyles = {
+  track: { width: "100%", height: 40 } satisfies ViewStyle,
+  minimumTrackTintColor: colors.primary,
+  maximumTrackTintColor: colors.border,
+  thumbTintColor: colors.primary,
+  label: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  } satisfies ViewStyle,
+} as const;
+
+export const cardStyles = {
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.xs,
+  } satisfies ViewStyle,
+  title: {
+    color: colors.textMain,
+    fontSize: typography.size.md,
+    fontWeight: typography.weight.bold,
+  } satisfies TextStyle,
+  status: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xxs * 2,
+  } satisfies ViewStyle,
+  heroValue: {
+    color: colors.textMain,
+    fontSize: 44,
+    fontWeight: typography.weight.bold,
+  } satisfies TextStyle,
+  heroUnit: {
+    color: colors.textMuted,
+    fontSize: typography.size.lg,
+  } satisfies TextStyle,
+  heroRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: spacing.xs,
+  } satisfies ViewStyle,
+  chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  } satisfies ViewStyle,
+  sectionLabel: {
+    color: colors.textMuted,
+    fontSize: typography.size.sm,
+    fontWeight: typography.weight.medium,
+  } satisfies TextStyle,
+} as const;
+
 export const screenStyles = {
   centered: {
     flex: 1,
