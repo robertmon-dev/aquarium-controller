@@ -6,12 +6,17 @@ export function useCountdown(
   onElapsed?: () => void,
 ): number | null {
   const [remaining, setRemaining] = useState<number | null>(seconds);
+  const [seen, setSeen] = useState<number | null>(seconds);
   const elapsedCallback = useRef(onElapsed);
-  elapsedCallback.current = onElapsed;
 
   useEffect(() => {
+    elapsedCallback.current = onElapsed;
+  }, [onElapsed]);
+
+  if (seconds !== seen) {
+    setSeen(seconds);
     setRemaining(seconds);
-  }, [seconds]);
+  }
 
   const idle = remaining === null || remaining <= 0;
 
