@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
+import type { AlertVariant } from "@aquarium/theme";
 
-export type AlertVariant = "info" | "success" | "warning" | "danger";
+export type { AlertVariant };
 
 export interface AlertProps {
   variant?: AlertVariant;
