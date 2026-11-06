@@ -2,7 +2,7 @@ import { useTelemetry, type Transport } from "@aquarium/api-client";
 import { View } from "react-native";
 import { Alert, Badge, Card } from "@/components/atoms";
 import { MetricList, ScreenMessage } from "@/components/molecules";
-import { spacing } from "@/components/utility/theme";
+import { spacing } from "@aquarium/theme";
 import { telemetryMetrics } from "@/components/utility/telemetry-metrics";
 import type { StreamState } from "@/device/use-telemetry-stream";
 import { streamBadge } from "./stream-badge";
