@@ -1,5 +1,5 @@
+import { colors } from "@aquarium/theme";
 import { ActivityIndicator } from "react-native";
-import { colors } from "@/components/utility/theme";
 import type { SpinnerProps } from "./types";
 
 export type { SpinnerProps, SpinnerVariant } from "./types";
