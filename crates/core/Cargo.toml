@@ -10,6 +10,10 @@ thiserror = { version = "2.0.21", default-features = false }
 tokio = { version = "1.40", default-features = false, features = ["sync", "net", "rt", "time"] }
 tracing = { version = "0.1", default-features = false }
 picoserve = { version = "0.20.1", features = ["alloc", "tokio", "json"] }
+ts-rs = { version = "12.0.1", optional = true }
+
+[features]
+ts-export = ["dep:ts-rs"]
 
 [dev-dependencies]
 tokio = { version = "1.40", features = ["rt", "macros", "time", "net", "io-util", "sync", "test-util"] }
