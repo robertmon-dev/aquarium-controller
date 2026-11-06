@@ -8,6 +8,7 @@ BIN           := aquarium-controller
 CHIP          ?= esp32s3
 PORT          ?= /dev/ttyACM0
 FW_DIR        := crates/firmware
+FW_TO_ROOT    := ../..
 
 ELF_RELEASE   := target/$(TARGET)/release/$(BIN)
 
@@ -134,24 +135,24 @@ check-port: ## Fail early if the serial port is missing or held by a process
 flash: check-port build ## Flash release firmware and attach the monitor
 	@$(MSG) "Flashing $(CHIP)"
 	@test -f $(BL_RELEASE) || { $(ERR) "$(BL_RELEASE) is missing"; exit 1; }
-	@$(ESP_ENV) espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(BL_RELEASE) --monitor $(ELF_RELEASE)
+	@$(ESP_ENV) cd $(FW_DIR) && espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(FW_TO_ROOT)/$(BL_RELEASE) --monitor $(FW_TO_ROOT)/$(ELF_RELEASE)
 
 .PHONY: flash-debug
 flash-debug: check-port build-debug ## Flash debug firmware and attach the monitor
 	@$(MSG) "Flashing $(CHIP) (debug)"
 	@test -f $(BL_DEBUG) || { $(ERR) "$(BL_DEBUG) is missing"; exit 1; }
-	@$(ESP_ENV) espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(BL_DEBUG) --monitor $(ELF_DEBUG)
+	@$(ESP_ENV) cd $(FW_DIR) && espflash flash --chip $(CHIP) --port $(PORT) --bootloader $(FW_TO_ROOT)/$(BL_DEBUG) --monitor $(FW_TO_ROOT)/$(ELF_DEBUG)
 
 .PHONY: monitor
 monitor: check-port ## Attach the serial monitor without flashing
 	@$(MSG) "Serial monitor (Ctrl-C to quit)"
-	@$(ESP_ENV) espflash monitor --port $(PORT)
+	@$(ESP_ENV) cd $(FW_DIR) && espflash monitor --port $(PORT)
 
 .PHONY: erase
 erase: check-port ## Erase the whole flash, including NVS (WiFi credentials)
 	@$(WARN) "this also wipes NVS - stored WiFi credentials will be lost"
 	@printf 'Continue? [y/N] '; read ans; [ "$$ans" = "y" ] || exit 1
-	@$(ESP_ENV) espflash erase-flash --port $(PORT)
+	@$(ESP_ENV) cd $(FW_DIR) && espflash erase-flash --port $(PORT)
 
 # ==============================================================================
 # Tests
