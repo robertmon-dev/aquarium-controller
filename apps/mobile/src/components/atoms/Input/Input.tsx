@@ -1,7 +1,6 @@
+import { colors, inputStyles } from "@aquarium/theme";
 import { useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { colors } from "@/components/utility/theme";
-import { inputStyles } from "./styles";
 import type { InputProps } from "./types";
 
 export type { InputProps } from "./types";
