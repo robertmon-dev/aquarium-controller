@@ -1,4 +1,4 @@
-export { DeviceForm } from "./DeviceForm/DeviceForm";
-export { TelemetryPanel } from "./TelemetryPanel/TelemetryPanel";
 export type { DeviceFormProps } from "./DeviceForm/DeviceForm";
-export type { TelemetryPanelProps } from "./TelemetryPanel/TelemetryPanel";
+export { DeviceForm } from "./DeviceForm/DeviceForm";
+export { TelemetryDashboard } from "./TelemetryDashboard/TelemetryDashboard";
+export { LightingControl } from "./LightingControl/LightingControl";
