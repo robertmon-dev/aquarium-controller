@@ -76,12 +76,12 @@ describe("formatDuration", () => {
 });
 
 describe("formatHeap", () => {
-  it("renders kilobytes below a megabyte", () => {
-    expect(formatHeap(512)).toBe("512 kB");
+  it("renders kibibytes below a mebibyte", () => {
+    expect(formatHeap(512)).toBe("512 KiB");
   });
 
-  it("switches to megabytes above a thousand", () => {
-    expect(formatHeap(8302)).toBe("8.3 MB");
+  it("switches to mebibytes at 1024, matching the firmware bytes/1024", () => {
+    expect(formatHeap(8302)).toBe("8.1 MiB");
   });
 });
 
