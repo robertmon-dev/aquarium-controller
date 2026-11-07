@@ -3,7 +3,10 @@
 mod common;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::task::LocalSet;
 
 use aquarium_core::adapters::outbound::memory::InMemoryTelemetryStore;
@@ -93,6 +96,39 @@ async fn a_rejected_response_also_carries_the_allowed_origin() {
                     .contains("access-control-allow-origin"),
                 "without the header on the 401 the browser hands the app an opaque failure \
                  instead of a readable rejection, got: {response}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn the_event_stream_carries_the_allowed_origin() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+
+            let mut stream = TcpStream::connect(addr).await.expect("connect");
+            stream
+                .write_all(
+                    format!("GET /api/events?token={TOKEN} HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .expect("write");
+
+            let mut buf = [0_u8; 2048];
+            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+                .await
+                .expect("SSE did not answer within 2 s")
+                .expect("read");
+
+            let response = String::from_utf8_lossy(&buf[..read]).to_lowercase();
+
+            assert!(response.starts_with("http/1.1 200"), "got: {response}");
+            assert!(
+                response.contains(&format!("access-control-allow-origin: {ORIGIN}")),
+                "EventSource is cross-origin like any other fetch - without the header the \
+                 browser never delivers an event, got: {response}"
             );
         })
         .await;
