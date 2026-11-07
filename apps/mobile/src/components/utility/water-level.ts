@@ -3,6 +3,7 @@ import type {
   WaterLevelMetricsDto,
 } from "@aquarium/api-client";
 import type { ChipVariant, StatusTone } from "@aquarium/theme";
+import type { Translate, TranslationKey } from "@/i18n";
 
 export interface WaterLevelChip {
   label: string;
@@ -16,12 +17,12 @@ export interface WaterLevelCardData {
   chips: WaterLevelChip[];
 }
 
-const SENSORS: [string, keyof WaterLevelMetricsDto][] = [
-  ["main tank", "main_tank"],
-  ["mechanical", "sump_mechanical"],
-  ["biological", "sump_biological"],
-  ["pump", "sump_pump"],
-  ["reserve", "sump_reserve"],
+const SENSORS: [TranslationKey, keyof WaterLevelMetricsDto][] = [
+  ["water.mainTank", "main_tank"],
+  ["water.mechanical", "sump_mechanical"],
+  ["water.biological", "sump_biological"],
+  ["water.pump", "sump_pump"],
+  ["water.reserve", "sump_reserve"],
 ];
 
 function variantOf(entry: WaterLevelEntryDto): ChipVariant {
@@ -31,27 +32,33 @@ function variantOf(entry: WaterLevelEntryDto): ChipVariant {
 
 export function waterLevelCard(
   levels: WaterLevelMetricsDto,
+  t: Translate,
 ): WaterLevelCardData {
-  const chips = SENSORS.map(([label, key]) => ({
-    label,
-    variant: variantOf(levels[key] as WaterLevelEntryDto),
+  const chips = SENSORS.map(([key, field]) => ({
+    label: t(key),
+    variant: variantOf(levels[field] as WaterLevelEntryDto),
   }));
 
   const faulty = chips.filter((chip) => chip.variant === "faulty").length;
 
   if (faulty > 0) {
     return {
-      title: "water level",
+      title: t("water.title"),
       status: "degraded",
-      statusLabel: `${faulty} ${faulty === 1 ? "sensor" : "sensors"} faulty`,
+      statusLabel:
+        faulty === 1
+          ? t("water.faultyOne")
+          : t("water.faultyMany", { count: faulty }),
       chips,
     };
   }
 
   return {
-    title: "water level",
+    title: t("water.title"),
     status: levels.sensors_healthy ? "ok" : "off",
-    statusLabel: levels.sensors_healthy ? "healthy" : "sensors off",
+    statusLabel: levels.sensors_healthy
+      ? t("common.healthy")
+      : t("common.sensorsOff"),
     chips,
   };
 }
