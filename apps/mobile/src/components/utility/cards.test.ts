@@ -8,6 +8,9 @@ import {
   systemCard,
   temperatureCard,
 } from "./cards";
+import { translator } from "../../i18n";
+
+const t = translator("en");
 
 const snapshot: TankTelemetryDto = {
   timestamp_epoch_s: 1,
@@ -56,7 +59,7 @@ const snapshot: TankTelemetryDto = {
 
 describe("temperatureCard", () => {
   it("puts the tank reading in the hero slot", () => {
-    const card = temperatureCard(snapshot);
+    const card = temperatureCard(snapshot, t);
 
     expect(card.heroValue).toBe("25.50");
     expect(card.heroUnit).toBe("°C");
@@ -64,15 +67,18 @@ describe("temperatureCard", () => {
   });
 
   it("reads as off when the sensors are disabled, not as zero", () => {
-    const card = temperatureCard({
-      ...snapshot,
-      temperature: {
-        ...snapshot.temperature,
-        tank_celsius: null,
-        sump_celsius: null,
-        sensors_healthy: false,
+    const card = temperatureCard(
+      {
+        ...snapshot,
+        temperature: {
+          ...snapshot.temperature,
+          tank_celsius: null,
+          sump_celsius: null,
+          sensors_healthy: false,
+        },
       },
-    });
+      t,
+    );
 
     expect(card.heroValue).toBe("—");
     expect(card.status).toBe("off");
@@ -80,7 +86,7 @@ describe("temperatureCard", () => {
   });
 
   it("lists target, heater and sump as metrics", () => {
-    const labels = temperatureCard(snapshot).metrics.map((m) => m.label);
+    const labels = temperatureCard(snapshot, t).metrics.map((m) => m.label);
 
     expect(labels).toEqual(["target", "heater", "sump"]);
   });
@@ -88,32 +94,38 @@ describe("temperatureCard", () => {
 
 describe("filtrationCard", () => {
   it("is ok when flow is ok", () => {
-    expect(filtrationCard(snapshot).status).toBe("ok");
+    expect(filtrationCard(snapshot, t).status).toBe("ok");
   });
 
   it("is degraded when flow is not ok but the pump relay is on", () => {
-    const card = filtrationCard({
-      ...snapshot,
-      filtration: {
-        flow_rate_lph: 0,
-        flow_ok: false,
-        filter_relay_active: true,
+    const card = filtrationCard(
+      {
+        ...snapshot,
+        filtration: {
+          flow_rate_lph: 0,
+          flow_ok: false,
+          filter_relay_active: true,
+        },
       },
-    });
+      t,
+    );
 
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("no flow");
   });
 
   it("is off when there is no reading at all", () => {
-    const card = filtrationCard({
-      ...snapshot,
-      filtration: {
-        flow_rate_lph: null,
-        flow_ok: false,
-        filter_relay_active: false,
+    const card = filtrationCard(
+      {
+        ...snapshot,
+        filtration: {
+          flow_rate_lph: null,
+          flow_ok: false,
+          filter_relay_active: false,
+        },
       },
-    });
+      t,
+    );
 
     expect(card.status).toBe("off");
   });
@@ -121,17 +133,20 @@ describe("filtrationCard", () => {
 
 describe("co2Card", () => {
   it("shows pH against the drop checker target", () => {
-    const card = co2Card(snapshot);
+    const card = co2Card(snapshot, t);
 
     expect(card.metrics.find((m) => m.label === "pH")?.value).toBe("6.80");
     expect(card.metrics.find((m) => m.label === "target")?.value).toBe("6.80");
   });
 
   it("is off with no pH reading", () => {
-    const card = co2Card({
-      ...snapshot,
-      co2: { ...snapshot.co2, current_ph: null, ph_electrode_health: null },
-    });
+    const card = co2Card(
+      {
+        ...snapshot,
+        co2: { ...snapshot.co2, current_ph: null, ph_electrode_health: null },
+      },
+      t,
+    );
 
     expect(card.status).toBe("off");
   });
@@ -139,17 +154,20 @@ describe("co2Card", () => {
 
 describe("atoCard", () => {
   it("is degraded when the reservoir is empty", () => {
-    const card = atoCard({
-      ...snapshot,
-      ato: { ...snapshot.ato, reservoir_empty: true },
-    });
+    const card = atoCard(
+      {
+        ...snapshot,
+        ato: { ...snapshot.ato, reservoir_empty: true },
+      },
+      t,
+    );
 
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("reservoir empty");
   });
 
   it("formats the last fill from milliseconds", () => {
-    const value = atoCard(snapshot).metrics.find(
+    const value = atoCard(snapshot, t).metrics.find(
       (m) => m.label === "last fill",
     )?.value;
 
@@ -159,7 +177,7 @@ describe("atoCard", () => {
 
 describe("lightingCard", () => {
   it("reports the profile and both channels", () => {
-    const card = lightingCard(snapshot);
+    const card = lightingCard(snapshot, t);
 
     expect(card.statusLabel).toBe("daylight");
     expect(card.metrics.find((m) => m.label === "white / rgb")?.value).toBe(
@@ -168,10 +186,13 @@ describe("lightingCard", () => {
   });
 
   it("is degraded while an override is active, so it reads as not on schedule", () => {
-    const card = lightingCard({
-      ...snapshot,
-      lighting: { ...snapshot.lighting, override_active: true },
-    });
+    const card = lightingCard(
+      {
+        ...snapshot,
+        lighting: { ...snapshot.lighting, override_active: true },
+      },
+      t,
+    );
 
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("override");
@@ -180,7 +201,7 @@ describe("lightingCard", () => {
 
 describe("systemCard", () => {
   it("formats heap in mebibytes once PSRAM is live", () => {
-    const value = systemCard(snapshot).metrics.find(
+    const value = systemCard(snapshot, t).metrics.find(
       (m) => m.label === "free heap",
     )?.value;
 
@@ -188,8 +209,8 @@ describe("systemCard", () => {
   });
 
   it("is degraded outside normal mode", () => {
-    expect(systemCard({ ...snapshot, system_mode: "maintenance" }).status).toBe(
-      "degraded",
-    );
+    expect(
+      systemCard({ ...snapshot, system_mode: "maintenance" }, t).status,
+    ).toBe("degraded");
   });
 });
