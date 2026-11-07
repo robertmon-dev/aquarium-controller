@@ -11,6 +11,7 @@ import {
 import { useFocusReset } from "@/components/utility/focus-reset";
 import { deviceFetch } from "@/device/transport";
 import { loadDevice, saveDevice } from "@/device/store";
+import { LocaleProvider } from "@/i18n/use-locale";
 
 const queryClient = new QueryClient();
 
@@ -50,7 +51,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>
+      <LocaleProvider>
+        <DeviceContext.Provider value={value}>
+          {children}
+        </DeviceContext.Provider>
+      </LocaleProvider>
     </QueryClientProvider>
   );
 }
