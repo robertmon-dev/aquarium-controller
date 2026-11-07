@@ -162,3 +162,38 @@ async fn deleting_a_nonexistent_override_is_idempotent() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn an_absent_override_sends_no_body() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+            let response = raw(addr, &get(OVERRIDE_PATH, Some(TOKEN))).await;
+
+            let (_, body) = response.split_once("\r\n\r\n").expect("headers end");
+
+            assert!(
+                body.is_empty(),
+                "a 204 must not carry a body - a client on a keep-alive connection reads \
+                 these bytes as the start of the next response, got: {body:?}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn deleting_an_override_sends_no_body() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+            let response = raw(addr, &body("DELETE", OVERRIDE_PATH, Some(TOKEN), "")).await;
+
+            let (_, payload) = response.split_once("\r\n\r\n").expect("headers end");
+
+            assert!(
+                payload.is_empty(),
+                "a 204 must not carry a body, got: {payload:?}"
+            );
+        })
+        .await;
+}
