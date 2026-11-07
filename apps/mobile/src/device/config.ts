@@ -1,27 +1,27 @@
 import type { DeviceConfig } from "@aquarium/api-client";
 import { z } from "zod";
+import type { Translate } from "@/i18n";
 
-export const deviceFormSchema = z.object({
-  host: z
-    .string()
-    .trim()
-    .min(1, "enter the device address")
-    .refine(
-      (value) => !value.includes("://"),
-      "drop the scheme, just the host or ip",
-    ),
-  port: z
-    .string()
-    .trim()
-    .transform((value) => (value === "" ? "80" : value))
-    .refine((value) => /^\d+$/.test(value), "port must be a number")
-    .transform(Number)
-    .refine(
-      (value) => value >= 1 && value <= 65535,
-      "port must be between 1 and 65535",
-    ),
-  token: z.string().trim().min(1, "enter the api token"),
-});
+export function deviceFormSchema(t: Translate) {
+  return z.object({
+    host: z
+      .string()
+      .trim()
+      .min(1, t("validation.hostRequired"))
+      .refine((value) => !value.includes("://"), t("validation.hostNoScheme")),
+    port: z
+      .string()
+      .trim()
+      .transform((value) => (value === "" ? "80" : value))
+      .refine((value) => /^\d+$/.test(value), t("validation.portNumber"))
+      .transform(Number)
+      .refine(
+        (value) => value >= 1 && value <= 65535,
+        t("validation.portRange"),
+      ),
+    token: z.string().trim().min(1, t("validation.tokenRequired")),
+  });
+}
 
 export interface DeviceFormValues {
   host: string;
@@ -29,7 +29,7 @@ export interface DeviceFormValues {
   token: string;
 }
 
-export type ParsedDeviceForm = z.output<typeof deviceFormSchema>;
+export type ParsedDeviceForm = z.output<ReturnType<typeof deviceFormSchema>>;
 
 export function toDeviceConfig(parsed: ParsedDeviceForm): DeviceConfig {
   return {
