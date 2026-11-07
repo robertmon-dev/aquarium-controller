@@ -5,7 +5,7 @@ use picoserve::extract::{FromRef, State};
 use picoserve::routing::{get, PathRouter};
 use picoserve::Router;
 
-use crate::adapters::inbound::http::auth::ApiTokenLayer;
+use crate::adapters::inbound::http::api::ApiLayer;
 use crate::adapters::inbound::http::handlers;
 use crate::ports::inbound::{LightingControl, TelemetryQuery};
 
@@ -33,6 +33,7 @@ pub fn router<Q, L>(
     lighting: Arc<L>,
     token: &'static str,
     sse_keepalive: Duration,
+    cors_origin: &'static str,
 ) -> Router<impl PathRouter>
 where
     Q: TelemetryQuery + 'static,
@@ -53,7 +54,7 @@ where
                 .put(handlers::lighting::set::<L>)
                 .delete(handlers::lighting::clear::<L>),
         )
-        .layer(ApiTokenLayer::new(token))
+        .layer(ApiLayer::new(token, cors_origin))
         .with_state(AppState {
             telemetry,
             lighting,
