@@ -6,6 +6,7 @@ import { Badge } from "@/components/atoms";
 import { ScreenMessage } from "@/components/molecules";
 import { useDevice } from "@/components/utility/app-providers";
 import { streamBadge } from "@/components/utility/stream-badge";
+import { useT } from "@/i18n/use-locale";
 import { useTelemetryStream } from "@/device/use-telemetry-stream";
 
 function iconColor(color: ColorValue | undefined): string {
@@ -13,11 +14,13 @@ function iconColor(color: ColorValue | undefined): string {
 }
 
 export default function TabsLayout() {
+  const t = useT();
   const { transport, loading } = useDevice();
   const streamState = useTelemetryStream(transport);
-  const badge = streamBadge(streamState);
+  const badge = streamBadge(streamState, t);
 
-  if (loading) return <ScreenMessage loading>loading…</ScreenMessage>;
+  if (loading)
+    return <ScreenMessage loading>{t("stream.connecting")}</ScreenMessage>;
 
   return (
     <Tabs
@@ -42,7 +45,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Telemetry",
+          title: t("tabs.telemetry"),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="pulse" color={iconColor(color)} size={size} />
           ),
@@ -51,7 +54,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="lighting"
         options={{
-          title: "Lighting",
+          title: t("tabs.lighting"),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="sunny" color={iconColor(color)} size={size} />
           ),
@@ -60,7 +63,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: "Device",
+          title: t("tabs.device"),
           tabBarIcon: ({ color, size }) => (
             <Ionicons
               name="hardware-chip"
