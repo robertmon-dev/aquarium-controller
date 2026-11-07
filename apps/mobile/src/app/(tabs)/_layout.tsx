@@ -26,7 +26,10 @@ export default function TabsLayout() {
         headerTintColor: colors.textMain,
         headerTitleStyle: { fontWeight: typography.weight.bold },
         headerRight: () => (
-          <Badge variant={badge.variant} style={{ marginRight: 12 }}>
+          <Badge
+            variant={badge.variant}
+            style={{ marginRight: 12, alignSelf: "center" }}
+          >
             {badge.label}
           </Badge>
         ),
