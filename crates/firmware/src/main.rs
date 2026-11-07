@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +43,7 @@ use aquarium_controller::settings::{RunMode, Settings};
 
 const SETTINGS: Settings = Settings::from_env();
 
-const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
 
 const DISCOVERY_SENSOR_LIMIT: usize = 8;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
@@ -282,6 +284,7 @@ async fn run() -> anyhow::Result<()> {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
                 sse_keepalive: SETTINGS.http.sse_keepalive,
+                cors_origin: SETTINGS.http.cors_origin,
             },
         )),
         (Some(_), false) => {

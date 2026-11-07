@@ -1,5 +1,4 @@
 pub mod auth;
-pub mod cors;
 pub mod handlers;
 pub mod routes;
 pub mod sse;
@@ -20,7 +19,6 @@ pub struct HttpConfig {
     pub token: &'static str,
     pub max_connections: usize,
     pub sse_keepalive: Duration,
-    pub cors_origin: &'static str,
 }
 
 pub async fn run<Q, L>(
@@ -38,7 +36,6 @@ where
         lighting,
         config.token,
         config.sse_keepalive,
-        config.cors_origin,
     )));
 
     let server_config: &'static _ = Box::leak(Box::new(
