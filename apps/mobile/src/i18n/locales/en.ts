@@ -1,0 +1,164 @@
+export const en = {
+  tabs: {
+    telemetry: "Telemetry",
+    lighting: "Lighting",
+    device: "Device",
+  },
+
+  stream: {
+    idle: "not connected",
+    connecting: "connecting…",
+    live: "live",
+    reconnecting: "reconnecting…",
+    unauthorized: "token rejected",
+  },
+
+  common: {
+    on: "on",
+    off: "off",
+    yes: "yes",
+    no: "no",
+    ok: "ok",
+    idle: "idle",
+    healthy: "healthy",
+    sensorsOff: "sensors off",
+    noDevice: "no device configured",
+    noData: "no data",
+  },
+
+  deviceForm: {
+    host: "host",
+    port: "port",
+    token: "token",
+    portHelper: "defaults to 80",
+    submit: "save and connect",
+    cannotConnect: "cannot connect",
+    tokenRejected: "the device rejected that token",
+    unreachable: "could not reach {{host}}:{{port}}",
+  },
+
+  validation: {
+    hostRequired: "enter the device address",
+    hostNoScheme: "drop the scheme, just the host or ip",
+    portNumber: "port must be a number",
+    portRange: "port must be between 1 and 65535",
+    tokenRequired: "enter the api token",
+  },
+
+  language: {
+    label: "language",
+    en: "English",
+    pl: "Polski",
+  },
+
+  telemetry: {
+    loading: "fetching snapshot…",
+    failedTitle: "telemetry failed",
+    unauthorizedTitle: "token rejected",
+    unauthorizedBody:
+      "the device refused the api token — open the Device tab and re-enter it",
+    unreachableTitle: "device unreachable",
+    unreachableBody:
+      "no answer from the controller — it may be off, or on another network",
+    malformedTitle: "unexpected telemetry",
+    errorTitle: "device returned an error",
+    leakTitle: "leak detected",
+    leakBody: "water outside the tank — check the sump and the floor",
+  },
+
+  lighting: {
+    loading: "reading lighting…",
+    now: "now",
+    override: "override",
+    onSchedule: "on schedule",
+    sending: "sending…",
+    ready: "ready",
+    schedulePaused: "an override is active — the schedule is paused",
+    scheduleRunning: "the schedule is running",
+    restore: "restore schedule",
+    refused: "the device refused that",
+    duration: "duration",
+    profile: "profile",
+    manualChannels: "manual channels",
+    white: "white",
+    rgb: "rgb",
+    whiteRgb: "white / rgb",
+    expiresIn: "expires in",
+  },
+
+  durations: {
+    m5: "5 min",
+    m15: "15 min",
+    h1: "1 h",
+    none: "no limit",
+  },
+
+  profiles: {
+    off: "off",
+    sunrise: "sunrise",
+    daylight: "daylight",
+    sunset: "sunset",
+    moonlight: "moonlight",
+  },
+
+  systemModes: {
+    normal: "normal",
+  },
+
+  cards: {
+    temperature: {
+      title: "temperature",
+      target: "target",
+      heater: "heater",
+      sump: "sump",
+    },
+    filtration: {
+      title: "filtration",
+      flowing: "flowing",
+      noFlow: "no flow",
+      flow: "flow",
+      relay: "relay",
+    },
+    co2: {
+      title: "co2",
+      dosing: "dosing",
+      ph: "pH",
+      target: "target",
+      solenoid: "solenoid",
+      electrode: "electrode",
+    },
+    ato: {
+      title: "ato",
+      reservoirEmpty: "reservoir empty",
+      sumpLow: "sump low",
+      filling: "filling",
+      pump: "pump",
+      reservoir: "reservoir",
+      empty: "empty",
+      lastFill: "last fill",
+    },
+    lighting: {
+      title: "lighting",
+      override: "override",
+      profile: "profile",
+      whiteRgb: "white / rgb",
+    },
+    system: {
+      title: "system",
+      wifi: "wifi",
+      freeHeap: "free heap",
+      uptime: "uptime",
+    },
+  },
+
+  water: {
+    title: "water level",
+    faultyOne: "1 sensor faulty",
+    faultyMany: "{{count}} sensors faulty",
+    mainTank: "main tank",
+    mechanical: "mechanical",
+    biological: "biological",
+    pump: "pump",
+    reserve: "reserve",
+  },
+} as const;
