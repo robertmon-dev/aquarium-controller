@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use aquarium_core::adapters::inbound::http::{self, HttpConfig};
+use aquarium_core::adapters::inbound::http::HttpConfig;
 use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
@@ -25,7 +25,6 @@ use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::{self, link_patches};
-use tokio::net::TcpListener;
 use tokio::sync::{watch, Notify};
 use tokio::task::LocalSet;
 use tokio::time::{sleep, MissedTickBehavior};
@@ -37,13 +36,14 @@ use aquarium_controller::adapters::outbound::ph::PhProbe;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 use aquarium_controller::infrastructure::clock::SystemClock;
+use aquarium_controller::infrastructure::http_server;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 use aquarium_controller::infrastructure::wifi::WifiManager;
 use aquarium_controller::settings::{RunMode, Settings};
 
 const SETTINGS: Settings = Settings::from_env();
 
-const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
+const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 
 const DISCOVERY_SENSOR_LIMIT: usize = 8;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
@@ -267,16 +267,15 @@ async fn run() -> anyhow::Result<()> {
 
     let listener = if components.http.is_initialized() {
         Some(
-            TcpListener::bind(("0.0.0.0", SETTINGS.http.port))
-                .await
+            std::net::TcpListener::bind(("0.0.0.0", SETTINGS.http.port))
                 .context("Failed to bind HTTP listener")?,
         )
     } else {
         None
     };
 
-    let server = match (listener, components.http.is_running()) {
-        (Some(listener), true) => Some(http::run(
+    match (listener, components.http.is_running()) {
+        (Some(listener), true) => http_server::spawn(
             listener,
             Arc::clone(&store),
             Arc::clone(&lighting),
@@ -286,13 +285,12 @@ async fn run() -> anyhow::Result<()> {
                 sse_keepalive: SETTINGS.http.sse_keepalive,
                 cors_origin: SETTINGS.http.cors_origin,
             },
-        )),
-        (Some(_), false) => {
-            info!("HTTP port bound but not serving");
-            None
-        }
-        (None, _) => None,
-    };
+            SETTINGS.http.server_stack_size,
+            components.health.is_running().then_some(HEALTH_INTERVAL),
+        )?,
+        (Some(_), false) => info!("HTTP port bound but not serving"),
+        (None, _) => {}
+    }
 
     let health_loop = components.health.is_running().then(health_watch);
 
@@ -300,7 +298,6 @@ async fn run() -> anyhow::Result<()> {
         optional(telemetry_loop),
         optional(level_loop),
         optional(export_loop),
-        optional(server),
         optional(wifi_loop),
         optional(health_loop),
     );
