@@ -1,6 +1,7 @@
 import type { TankTelemetryDto } from "@aquarium/api-client";
 import type { StatusTone } from "@aquarium/theme";
 import type { Metric } from "@/components/molecules";
+import type { Translate } from "@/i18n";
 import {
   EM_DASH,
   formatCelsius,
@@ -20,14 +21,25 @@ export interface CardData {
   metrics: Metric[];
 }
 
+function translateProfile(profile: string, t: Translate): string {
+  const known = ["off", "sunrise", "daylight", "sunset", "moonlight"];
+  return known.includes(profile)
+    ? t(`profiles.${profile}` as Parameters<Translate>[0])
+    : profile;
+}
+
 export type HeroCardData = CardData & {
   heroValue: string;
   heroUnit: string;
 };
 
-const onOff = (on: boolean) => (on ? "on" : "off");
+const onOff = (t: Translate, on: boolean) =>
+  on ? t("common.on") : t("common.off");
 
-export function temperatureCard(s: TankTelemetryDto): HeroCardData {
+export function temperatureCard(
+  s: TankTelemetryDto,
+  t: Translate,
+): HeroCardData {
   const {
     tank_celsius,
     sump_celsius,
@@ -37,38 +49,54 @@ export function temperatureCard(s: TankTelemetryDto): HeroCardData {
   } = s.temperature;
 
   return {
-    title: "temperature",
+    title: t("cards.temperature.title"),
     status: sensors_healthy ? "ok" : "off",
-    statusLabel: sensors_healthy ? "healthy" : "sensors off",
+    statusLabel: sensors_healthy ? t("common.healthy") : t("common.sensorsOff"),
     heroValue: tank_celsius === null ? EM_DASH : tank_celsius.toFixed(2),
     heroUnit: "°C",
     metrics: [
-      { label: "target", value: formatCelsius(target_celsius) },
-      { label: "heater", value: onOff(heater_active) },
-      { label: "sump", value: formatCelsius(sump_celsius) },
+      {
+        label: t("cards.temperature.target"),
+        value: formatCelsius(target_celsius),
+      },
+      { label: t("cards.temperature.heater"), value: onOff(t, heater_active) },
+      {
+        label: t("cards.temperature.sump"),
+        value: formatCelsius(sump_celsius),
+      },
     ],
   };
 }
 
-export function filtrationCard(s: TankTelemetryDto): CardData {
+export function filtrationCard(s: TankTelemetryDto, t: Translate): CardData {
   const { flow_rate_lph, flow_ok, filter_relay_active } = s.filtration;
 
   const status: StatusTone =
     flow_rate_lph === null ? "off" : flow_ok ? "ok" : "degraded";
 
   return {
-    title: "filtration",
+    title: t("cards.filtration.title"),
     status,
     statusLabel:
-      flow_rate_lph === null ? "off" : flow_ok ? "flowing" : "no flow",
+      flow_rate_lph === null
+        ? t("common.off")
+        : flow_ok
+          ? t("cards.filtration.flowing")
+          : t("cards.filtration.noFlow"),
     metrics: [
-      { label: "flow", value: formatLitresPerHour(flow_rate_lph) },
-      { label: "relay", value: onOff(filter_relay_active) },
+      {
+        label: t("cards.filtration.flow"),
+        value: formatLitresPerHour(flow_rate_lph),
+      },
+      {
+        label: t("cards.filtration.relay"),
+        value: onOff(t, filter_relay_active),
+      },
     ],
   };
 }
 
-export function co2Card(s: TankTelemetryDto): CardData {
+export function co2Card(s: TankTelemetryDto, t: Translate): CardData {
   const {
     solenoid_open,
     current_ph,
@@ -77,16 +105,23 @@ export function co2Card(s: TankTelemetryDto): CardData {
   } = s.co2;
 
   return {
-    title: "co2",
+    title: t("cards.co2.title"),
     status: current_ph === null ? "off" : "ok",
     statusLabel:
-      current_ph === null ? "off" : solenoid_open ? "dosing" : "idle",
+      current_ph === null
+        ? t("common.off")
+        : solenoid_open
+          ? t("cards.co2.dosing")
+          : t("common.idle"),
     metrics: [
-      { label: "pH", value: formatPh(current_ph) },
-      { label: "target", value: formatPh(drop_checker_ph_target) },
-      { label: "solenoid", value: onOff(solenoid_open) },
+      { label: t("cards.co2.ph"), value: formatPh(current_ph) },
       {
-        label: "electrode",
+        label: t("cards.co2.target"),
+        value: formatPh(drop_checker_ph_target),
+      },
+      { label: t("cards.co2.solenoid"), value: onOff(t, solenoid_open) },
+      {
+        label: t("cards.co2.electrode"),
         value:
           ph_electrode_health === null
             ? EM_DASH
@@ -96,7 +131,7 @@ export function co2Card(s: TankTelemetryDto): CardData {
   };
 }
 
-export function atoCard(s: TankTelemetryDto): CardData {
+export function atoCard(s: TankTelemetryDto, t: Translate): CardData {
   const {
     sump_water_low,
     reservoir_empty,
@@ -105,58 +140,73 @@ export function atoCard(s: TankTelemetryDto): CardData {
   } = s.ato;
 
   const statusLabel = reservoir_empty
-    ? "reservoir empty"
+    ? t("cards.ato.reservoirEmpty")
     : sump_water_low
-      ? "sump low"
+      ? t("cards.ato.sumpLow")
       : pump_active
-        ? "filling"
-        : "idle";
+        ? t("cards.ato.filling")
+        : t("common.idle");
 
   return {
-    title: "ato",
+    title: t("cards.ato.title"),
     status: reservoir_empty || sump_water_low ? "degraded" : "ok",
     statusLabel,
     metrics: [
-      { label: "pump", value: onOff(pump_active) },
-      { label: "sump low", value: sump_water_low ? "yes" : "no" },
-      { label: "reservoir", value: reservoir_empty ? "empty" : "ok" },
+      { label: t("cards.ato.pump"), value: onOff(t, pump_active) },
       {
-        label: "last fill",
+        label: t("cards.ato.sumpLow"),
+        value: sump_water_low ? t("common.yes") : t("common.no"),
+      },
+      {
+        label: t("cards.ato.reservoir"),
+        value: reservoir_empty ? t("cards.ato.empty") : t("common.ok"),
+      },
+      {
+        label: t("cards.ato.lastFill"),
         value: formatDuration(Math.round(last_fill_duration_ms / 1000)),
       },
     ],
   };
 }
 
-export function lightingCard(s: TankTelemetryDto): CardData {
+export function lightingCard(s: TankTelemetryDto, t: Translate): CardData {
   const { profile, channel_white_pct, channel_rgb_pct, override_active } =
     s.lighting;
 
   return {
-    title: "lighting",
+    title: t("cards.lighting.title"),
     status: override_active ? "degraded" : "ok",
-    statusLabel: override_active ? "override" : profile,
+    statusLabel: override_active
+      ? t("cards.lighting.override")
+      : translateProfile(profile, t),
     metrics: [
-      { label: "profile", value: profile },
       {
-        label: "white / rgb",
+        label: t("cards.lighting.profile"),
+        value: translateProfile(profile, t),
+      },
+      {
+        label: t("cards.lighting.whiteRgb"),
         value: formatPercentPair(channel_white_pct, channel_rgb_pct),
       },
     ],
   };
 }
 
-export function systemCard(s: TankTelemetryDto): CardData {
+export function systemCard(s: TankTelemetryDto, t: Translate): CardData {
   const { uptime_seconds, wifi_rssi_dbm, free_heap_kb } = s.system_health;
 
   return {
-    title: "system",
+    title: t("cards.system.title"),
     status: s.system_mode === "normal" ? "ok" : "degraded",
-    statusLabel: s.system_mode,
+    statusLabel:
+      s.system_mode === "normal" ? t("systemModes.normal") : s.system_mode,
     metrics: [
-      { label: "wifi", value: formatRssi(wifi_rssi_dbm) },
-      { label: "free heap", value: formatHeap(free_heap_kb) },
-      { label: "uptime", value: formatDuration(uptime_seconds) },
+      { label: t("cards.system.wifi"), value: formatRssi(wifi_rssi_dbm) },
+      { label: t("cards.system.freeHeap"), value: formatHeap(free_heap_kb) },
+      {
+        label: t("cards.system.uptime"),
+        value: formatDuration(uptime_seconds),
+      },
     ],
   };
 }
