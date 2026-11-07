@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  DURATION_CHOICES,
+  durationChoices,
   channelRequest,
   profileRequest,
   tickCountdown,
 } from "./lighting-request";
+import { translator } from "../../i18n";
+
+const t = translator("en");
 
 describe("profileRequest", () => {
   it("wraps a profile in the externally tagged target", () => {
@@ -47,16 +50,16 @@ describe("channelRequest", () => {
   });
 });
 
-describe("DURATION_CHOICES", () => {
+describe("durationChoices", () => {
   it("offers no limit as null rather than zero", () => {
-    const noLimit = DURATION_CHOICES.find((c) => c.label === "no limit");
+    const noLimit = durationChoices(t).find((c) => c.label === "no limit");
 
     expect(noLimit?.seconds).toBeNull();
   });
 
   it("never offers a zero duration, which the firmware rejects", () => {
     expect(
-      DURATION_CHOICES.every((c) => c.seconds === null || c.seconds > 0),
+      durationChoices(t).every((c) => c.seconds === null || c.seconds > 0),
     ).toBe(true);
   });
 });

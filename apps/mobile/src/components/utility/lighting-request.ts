@@ -3,6 +3,7 @@ import type {
   LightingProfile,
   SetOverrideRequest,
 } from "@aquarium/api-client";
+import type { Translate } from "@/i18n";
 
 export const LIGHTING_PROFILES: LightingProfile[] = [
   "off",
@@ -17,12 +18,14 @@ export interface DurationChoice {
   seconds: number | null;
 }
 
-export const DURATION_CHOICES: DurationChoice[] = [
-  { label: "5 min", seconds: 300 },
-  { label: "15 min", seconds: 900 },
-  { label: "1 h", seconds: 3600 },
-  { label: "no limit", seconds: null },
-];
+export function durationChoices(t: Translate): DurationChoice[] {
+  return [
+    { label: t("durations.m5"), seconds: 300 },
+    { label: t("durations.m15"), seconds: 900 },
+    { label: t("durations.h1"), seconds: 3600 },
+    { label: t("durations.none"), seconds: null },
+  ];
+}
 
 export function profileRequest(
   profile: LightingProfile,
