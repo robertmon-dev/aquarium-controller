@@ -1,5 +1,5 @@
 use picoserve::extract::State;
-use picoserve::response::{Json, StatusCode};
+use picoserve::response::{Json, NoContent, StatusCode};
 use serde::Deserialize;
 
 use crate::adapters::inbound::http::routes::LightingState;
@@ -28,12 +28,12 @@ impl SetOverrideRequest {
 
 pub async fn current<L: LightingControl>(
     State(LightingState(lighting)): State<LightingState<L>>,
-) -> Result<Json<LightingOverride>, StatusCode> {
+) -> Result<Json<LightingOverride>, (StatusCode, NoContent)> {
     tracing::info!("GET /api/lighting/override");
 
     match lighting.current_override() {
         Some(over) => Ok(Json(over)),
-        None => Err(StatusCode::NO_CONTENT),
+        None => Err((StatusCode::NO_CONTENT, NoContent)),
     }
 }
 
@@ -56,8 +56,8 @@ pub async fn set<L: LightingControl>(
 
 pub async fn clear<L: LightingControl>(
     State(LightingState(lighting)): State<LightingState<L>>,
-) -> StatusCode {
+) -> (StatusCode, NoContent) {
     tracing::info!("DELETE /api/lighting/override");
     lighting.clear_override();
-    StatusCode::NO_CONTENT
+    (StatusCode::NO_CONTENT, NoContent)
 }
