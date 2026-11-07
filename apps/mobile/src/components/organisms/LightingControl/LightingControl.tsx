@@ -23,6 +23,7 @@ import {
   profileRequest,
 } from "@/components/utility/lighting-request";
 import { useCountdown } from "@/components/utility/use-countdown";
+import { useT } from "@/i18n/use-locale";
 
 export function LightingControl({
   transport,
@@ -31,6 +32,7 @@ export function LightingControl({
   transport: Transport;
   lighting: LightingMetricsDto;
 }) {
+  const t = useT();
   const override = useLightingOverride(transport);
   const setOverride = useSetLightingOverride(transport);
   const clearOverride = useClearLightingOverride(transport);
@@ -58,13 +60,16 @@ export function LightingControl({
   return (
     <View style={{ gap: spacing.sm }}>
       <MetricCard
-        title="now"
+        title={t("lighting.now")}
         status={active ? "degraded" : "ok"}
-        statusLabel={active ? "override" : "on schedule"}
+        statusLabel={active ? t("lighting.override") : t("lighting.onSchedule")}
         metrics={[
-          { label: "profile", value: lighting.profile },
           {
-            label: "white / rgb",
+            label: t("lighting.profile"),
+            value: t(`profiles.${lighting.profile}`),
+          },
+          {
+            label: t("lighting.whiteRgb"),
             value: formatPercentPair(
               lighting.channel_white_pct,
               lighting.channel_rgb_pct,
@@ -72,20 +77,25 @@ export function LightingControl({
           },
           ...(remaining === null
             ? []
-            : [{ label: "expires in", value: formatDuration(remaining) }]),
+            : [
+                {
+                  label: t("lighting.expiresIn"),
+                  value: formatDuration(remaining),
+                },
+              ]),
         ]}
       />
 
       {failure ? (
-        <Alert variant="danger" title="the device refused that">
+        <Alert variant="danger" title={t("lighting.refused")}>
           {failure.message}
         </Alert>
       ) : null}
 
       <MetricCard
-        title="override"
+        title={t("lighting.override")}
         status="ok"
-        statusLabel={busy ? "sending…" : "ready"}
+        statusLabel={busy ? t("lighting.sending") : t("lighting.ready")}
       >
         <View style={{ gap: spacing.sm }}>
           <DurationPicker selected={duration} onSelect={setDuration} />
@@ -109,8 +119,8 @@ export function LightingControl({
 
           <Text style={cardStyles.sectionLabel}>
             {active
-              ? "an override is active — the schedule is paused"
-              : "the schedule is running"}
+              ? t("lighting.schedulePaused")
+              : t("lighting.scheduleRunning")}
           </Text>
 
           <Button
@@ -120,7 +130,7 @@ export function LightingControl({
             disabled={!active}
             onPress={() => clearOverride.mutate()}
           >
-            restore schedule
+            {t("lighting.restore")}
           </Button>
         </View>
       </MetricCard>

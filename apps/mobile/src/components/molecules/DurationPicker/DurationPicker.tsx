@@ -1,7 +1,8 @@
 import { cardStyles, spacing } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import { Chip } from "@/components/atoms";
-import { DURATION_CHOICES } from "@/components/utility/lighting-request";
+import { durationChoices } from "@/components/utility/lighting-request";
+import { useT } from "@/i18n/use-locale";
 
 export interface DurationPickerProps {
   selected: number | null;
@@ -9,11 +10,13 @@ export interface DurationPickerProps {
 }
 
 export function DurationPicker({ selected, onSelect }: DurationPickerProps) {
+  const t = useT();
+
   return (
     <View style={{ gap: spacing.xs }}>
-      <Text style={cardStyles.sectionLabel}>duration</Text>
+      <Text style={cardStyles.sectionLabel}>{t("lighting.duration")}</Text>
       <View style={cardStyles.chipRow}>
-        {DURATION_CHOICES.map((choice) => (
+        {durationChoices(t).map((choice) => (
           <Chip
             key={choice.label}
             label={choice.label}

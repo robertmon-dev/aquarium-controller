@@ -7,6 +7,7 @@ export type { ProfilePickerProps } from "./ProfilePicker/ProfilePicker";
 export type { ScreenMessageProps } from "./ScreenMessage/types";
 export type { WaterLevelGridProps } from "./WaterLevelGrid/WaterLevelGrid";
 export { FormField } from "./FormField/FormField";
+export { LanguageSwitcher } from "./LanguageSwitcher/LanguageSwitcher";
 export { MetricList } from "./MetricList/MetricList";
 export { ScreenMessage } from "./ScreenMessage/ScreenMessage";
 export { ChannelSliders } from "./ChannelSliders/ChannelSliders";

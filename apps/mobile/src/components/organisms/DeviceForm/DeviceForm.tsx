@@ -4,7 +4,7 @@ import {
   type DeviceConfig,
 } from "@aquarium/api-client";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { View } from "react-native";
 import { Alert, Button, Card } from "@/components/atoms";
@@ -17,6 +17,7 @@ import {
   type ParsedDeviceForm,
 } from "@/device/config";
 import { deviceFetch } from "@/device/transport";
+import { useT } from "@/i18n/use-locale";
 
 export interface DeviceFormProps {
   device: DeviceConfig | null;
@@ -24,15 +25,17 @@ export interface DeviceFormProps {
 }
 
 export function DeviceForm({ device, onConnected }: DeviceFormProps) {
+  const t = useT();
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
+  const schema = useMemo(() => deviceFormSchema(t), [t]);
 
   const { control, handleSubmit } = useForm<
     DeviceFormValues,
     unknown,
     ParsedDeviceForm
   >({
-    resolver: zodResolver(deviceFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       host: device?.host ?? "",
       port: device ? String(device.port) : "80",
@@ -50,8 +53,11 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
     } catch (error) {
       setProbeError(
         error instanceof ApiError && error.kind === "unauthorized"
-          ? "the device rejected that token"
-          : `could not reach ${config.host}:${config.port}`,
+          ? t("deviceForm.tokenRejected")
+          : t("deviceForm.unreachable", {
+              host: config.host,
+              port: config.port,
+            }),
       );
       setProbing(false);
       return;
@@ -67,27 +73,27 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
         <FormField
           control={control}
           name="host"
-          label="host"
+          label={t("deviceForm.host")}
           placeholder="192.168.1.50"
         />
         <FormField
           control={control}
           name="port"
-          label="port"
+          label={t("deviceForm.port")}
           keyboardType="number-pad"
-          helperText="defaults to 80"
+          helperText={t("deviceForm.portHelper")}
         />
         <FormField
           control={control}
           name="token"
-          label="token"
+          label={t("deviceForm.token")}
           secureTextEntry
         />
 
         {probeError ? (
           <Alert
             variant="danger"
-            title="cannot connect"
+            title={t("deviceForm.cannotConnect")}
             onClose={() => setProbeError(null)}
           >
             {probeError}
@@ -100,7 +106,7 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
           isLoading={probing}
           onPress={() => void onSubmit()}
         >
-          save and connect
+          {t("deviceForm.submit")}
         </Button>
       </View>
     </Card>
