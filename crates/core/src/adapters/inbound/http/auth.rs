@@ -1,21 +1,18 @@
-use picoserve::io::Read;
 use picoserve::request::RequestParts;
-use picoserve::response::{IntoResponse, ResponseWriter, StatusCode};
-use picoserve::routing::{Layer, Next};
-use picoserve::ResponseSent;
 
 const SSE_PATH: &str = "/api/events";
 
-pub struct ApiTokenLayer {
+#[derive(Debug, Clone, Copy)]
+pub struct TokenCheck {
     token: &'static str,
 }
 
-impl ApiTokenLayer {
+impl TokenCheck {
     pub const fn new(token: &'static str) -> Self {
         Self { token }
     }
 
-    fn is_authorized(&self, parts: &RequestParts<'_>) -> bool {
+    pub fn is_authorized(&self, parts: &RequestParts<'_>) -> bool {
         match self.presented_token(parts) {
             Some(presented) => constant_time_eq(presented.as_bytes(), self.token.as_bytes()),
             None => false,
@@ -32,33 +29,6 @@ impl ApiTokenLayer {
         }
 
         None
-    }
-}
-
-impl<State, PathParameters> Layer<State, PathParameters> for ApiTokenLayer {
-    type NextState = State;
-    type NextPathParameters = PathParameters;
-
-    async fn call_layer<
-        'a,
-        R: Read + 'a,
-        NextLayer: Next<'a, R, Self::NextState, Self::NextPathParameters>,
-        W: ResponseWriter<Error = R::Error>,
-    >(
-        &self,
-        next: NextLayer,
-        state: &State,
-        path_parameters: PathParameters,
-        request_parts: RequestParts<'_>,
-        response_writer: W,
-    ) -> Result<ResponseSent, W::Error> {
-        if self.is_authorized(&request_parts) {
-            return next.run(state, path_parameters, response_writer).await;
-        }
-
-        (StatusCode::UNAUTHORIZED, "unauthorized\n")
-            .write_to(next.into_connection().await?, response_writer)
-            .await
     }
 }
 
