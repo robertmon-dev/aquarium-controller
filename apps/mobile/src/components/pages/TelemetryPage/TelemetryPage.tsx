@@ -7,16 +7,19 @@ import { Alert } from "@/components/atoms";
 import { ScreenMessage } from "@/components/molecules";
 import { TelemetryDashboard } from "@/components/organisms";
 import { useDevice } from "@/components/utility/app-providers";
+import { useT } from "@/i18n/use-locale";
 
 export function TelemetryPage() {
+  const t = useT();
   const { transport } = useDevice();
 
-  if (!transport) return <ScreenMessage>no device configured</ScreenMessage>;
+  if (!transport) return <ScreenMessage>{t("common.noDevice")}</ScreenMessage>;
 
   return <TelemetryContent transport={transport} />;
 }
 
 function TelemetryContent({ transport }: { transport: Transport }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const { data, error, isPending } = useTelemetry(transport);
@@ -28,7 +31,7 @@ function TelemetryContent({ transport }: { transport: Transport }) {
   }, [queryClient]);
 
   if (isPending)
-    return <ScreenMessage loading>fetching snapshot…</ScreenMessage>;
+    return <ScreenMessage loading>{t("telemetry.loading")}</ScreenMessage>;
 
   return (
     <ScrollView
@@ -49,9 +52,11 @@ function TelemetryContent({ transport }: { transport: Transport }) {
 }
 
 function TelemetryError({ error }: { error: Error }) {
+  const t = useT();
+
   if (!(error instanceof ApiError)) {
     return (
-      <Alert variant="danger" title="telemetry failed">
+      <Alert variant="danger" title={t("telemetry.failedTitle")}>
         {error.message}
       </Alert>
     );
@@ -59,30 +64,30 @@ function TelemetryError({ error }: { error: Error }) {
 
   if (error.kind === "unauthorized") {
     return (
-      <Alert variant="danger" title="token rejected">
-        the device refused the api token — open the Device tab and re-enter it
+      <Alert variant="danger" title={t("telemetry.unauthorizedTitle")}>
+        {t("telemetry.unauthorizedBody")}
       </Alert>
     );
   }
 
   if (error.kind === "transport") {
     return (
-      <Alert variant="warning" title="device unreachable">
-        no answer from the controller — it may be off, or on another network
+      <Alert variant="warning" title={t("telemetry.unreachableTitle")}>
+        {t("telemetry.unreachableBody")}
       </Alert>
     );
   }
 
   if (error.kind === "malformed") {
     return (
-      <Alert variant="danger" title="unexpected telemetry">
+      <Alert variant="danger" title={t("telemetry.malformedTitle")}>
         {error.detail ?? error.message}
       </Alert>
     );
   }
 
   return (
-    <Alert variant="danger" title="device returned an error">
+    <Alert variant="danger" title={t("telemetry.errorTitle")}>
       {error.detail ?? error.message}
     </Alert>
   );
