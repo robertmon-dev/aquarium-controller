@@ -9,16 +9,23 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
-# One picoserve connection costs ~78 KiB of stack on this task: the router
-# monomorphises into a single huge future and `spawn_local` polls it here. At
-# the old 64 KiB that ran past the bottom of the stack into the Wi-Fi driver's
-# .bss, onto `g_pm`, and the next TX-done aborted in ets_timer_arm_us.
+# The HTTP server no longer runs on this task - it has its own thread with a
+# 256 KiB stack in PSRAM (see infrastructure/http_server.rs). What is left here
+# are the telemetry, water-level, export, Wi-Fi and health loops.
 #
-# 128 KiB is a safety margin picked from that one measurement, NOT from a
-# high-water reading - nobody has yet reported `stack_free` after exercising
-# /api/telemetry and /api/events. Size it properly from the health log, and
-# see the debug note for why moving the server off this task is the real fix.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=163840
+# Measured 2026-11-07 with uxTaskGetStackHighWaterMark, main task at 160 KiB:
+#   idle                                     35 756 B used
+#   high-water, GET /api/telemetry          134 604 B used
+#   high-water, PUT + SSE + DELETE          138 620 B used
+# The previous 131 072 B was below even the plain-GET figure, so the device
+# panicked on its first connection every time. The old "~78 KiB per connection"
+# note was a mid-flight sample, not a high-water mark - which is why the margin
+# looked generous while being 2.7 % short.
+#
+# 64 KiB is sized from the idle figure, which can only shrink now that the
+# server has left this task. The `health` component logs both tasks' headroom;
+# resize from a reading, never from a guess.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
 
 # Keep this on. It is what finally caught the bug: a hardware watchpoint on
 # the end of the running task's stack, which turned a mystery abort deep in
