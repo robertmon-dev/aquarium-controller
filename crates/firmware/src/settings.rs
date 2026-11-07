@@ -67,7 +67,6 @@ pub struct HttpSettings {
     pub sse_keepalive: Duration,
     pub token: Secret<&'static str>,
     pub cors_origin: &'static str,
-    pub server_stack_size: usize,
 }
 
 #[derive(Debug)]
@@ -119,7 +118,6 @@ impl Settings {
                 sse_keepalive: Duration::from_secs(15),
                 token: Secret::new(env!("API_TOKEN")),
                 cors_origin: "*",
-                server_stack_size: 256 * 1024,
             },
             sensors: SensorSettings {
                 read_interval: Duration::from_secs(2),

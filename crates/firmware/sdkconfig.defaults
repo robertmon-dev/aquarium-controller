@@ -9,23 +9,24 @@ CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 
-# The HTTP server no longer runs on this task - it has its own thread with a
-# 256 KiB stack in PSRAM (see infrastructure/http_server.rs). What is left here
-# are the telemetry, water-level, export, Wi-Fi and health loops.
+# The HTTP server runs on this task, and one picoserve connection is most of
+# what it needs.
 #
-# Measured 2026-11-07 with uxTaskGetStackHighWaterMark, main task at 160 KiB:
+# Measured 2026-11-07 with uxTaskGetStackHighWaterMark at a 160 KiB stack:
 #   idle                                     35 756 B used
 #   high-water, GET /api/telemetry          134 604 B used
 #   high-water, PUT + SSE + DELETE          138 620 B used
-# The previous 131 072 B was below even the plain-GET figure, so the device
+# The earlier 131 072 B sat below even the plain-GET figure, so the device
 # panicked on its first connection every time. The old "~78 KiB per connection"
 # note was a mid-flight sample, not a high-water mark - which is why the margin
 # looked generous while being 2.7 % short.
 #
-# 64 KiB is sized from the idle figure, which can only shrink now that the
-# server has left this task. The `health` component logs both tasks' headroom;
-# resize from a reading, never from a guess.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=65536
+# 163 840 B leaves 25 220 B over the measured peak and survived a full
+# `make smoke`. Moving the server to its own thread with a PSRAM stack was
+# tried on 2026-11-07 and panicked at task creation (double exception, stack
+# pointer and PC inside the 0x3C PSRAM window, 0xa5a5a5a5 fill pattern in the
+# registers) - see the spec before trying it again.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=163840
 
 # Keep this on. It is what finally caught the bug: a hardware watchpoint on
 # the end of the running task's stack, which turned a mystery abort deep in
