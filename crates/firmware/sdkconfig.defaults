@@ -18,7 +18,7 @@ CONFIG_SPIRAM_SPEED_80M=y
 # high-water reading - nobody has yet reported `stack_free` after exercising
 # /api/telemetry and /api/events. Size it properly from the health log, and
 # see the debug note for why moving the server off this task is the real fix.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=131072
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=163840
 
 # Keep this on. It is what finally caught the bug: a hardware watchpoint on
 # the end of the running task's stack, which turned a mystery abort deep in
