@@ -1,27 +1,41 @@
 use picoserve::io::Read;
-use picoserve::request::RequestParts;
-use picoserve::response::{
-    Body, Connection, HeadersIter, IntoResponse, NoContent, Response, ResponseWriter, StatusCode,
-};
-use picoserve::routing::{Layer, Next};
+use picoserve::response::{Body, Connection, HeadersIter, Response, ResponseWriter};
 use picoserve::ResponseSent;
 
-const ORIGIN_HEADER: &str = "Access-Control-Allow-Origin";
+pub const ORIGIN_HEADER: &str = "Access-Control-Allow-Origin";
+
 const ALLOW_METHODS: &str = "GET, PUT, DELETE, OPTIONS";
 const ALLOW_HEADERS: &str = "authorization, content-type";
 const MAX_AGE_SECONDS: &str = "600";
 
-pub struct CorsLayer {
+#[derive(Debug, Clone, Copy)]
+pub struct CorsPolicy {
     origin: &'static str,
 }
 
-impl CorsLayer {
+impl CorsPolicy {
     pub const fn new(origin: &'static str) -> Self {
         Self { origin }
     }
+
+    pub const fn preflight_headers(&self) -> [(&'static str, &'static str); 4] {
+        [
+            (ORIGIN_HEADER, self.origin),
+            ("Access-Control-Allow-Methods", ALLOW_METHODS),
+            ("Access-Control-Allow-Headers", ALLOW_HEADERS),
+            ("Access-Control-Max-Age", MAX_AGE_SECONDS),
+        ]
+    }
+
+    pub fn writer<W>(&self, inner: W) -> OriginWriter<W> {
+        OriginWriter {
+            inner,
+            origin: self.origin,
+        }
+    }
 }
 
-struct OriginWriter<W> {
+pub struct OriginWriter<W> {
     inner: W,
     origin: &'static str,
 }
@@ -40,46 +54,5 @@ impl<W: ResponseWriter> ResponseWriter for OriginWriter<W> {
     }
 }
 
-impl<State, PathParameters> Layer<State, PathParameters> for CorsLayer {
-    type NextState = State;
-    type NextPathParameters = PathParameters;
-
-    async fn call_layer<
-        'a,
-        R: Read + 'a,
-        NextLayer: Next<'a, R, Self::NextState, Self::NextPathParameters>,
-        W: ResponseWriter<Error = R::Error>,
-    >(
-        &self,
-        next: NextLayer,
-        state: &State,
-        path_parameters: PathParameters,
-        request_parts: RequestParts<'_>,
-        response_writer: W,
-    ) -> Result<ResponseSent, W::Error> {
-        if request_parts.method() == "OPTIONS" {
-            return (
-                StatusCode::NO_CONTENT,
-                [
-                    (ORIGIN_HEADER, self.origin),
-                    ("Access-Control-Allow-Methods", ALLOW_METHODS),
-                    ("Access-Control-Allow-Headers", ALLOW_HEADERS),
-                    ("Access-Control-Max-Age", MAX_AGE_SECONDS),
-                ],
-                NoContent,
-            )
-                .write_to(next.into_connection().await?, response_writer)
-                .await;
-        }
-
-        next.run(
-            state,
-            path_parameters,
-            OriginWriter {
-                inner: response_writer,
-                origin: self.origin,
-            },
-        )
-        .await
-    }
-}
+#[cfg(test)]
+mod tests;
