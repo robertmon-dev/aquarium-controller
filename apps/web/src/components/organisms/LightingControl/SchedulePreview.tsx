@@ -96,7 +96,7 @@ export function SchedulePreview({
           minutes,
           schedule.white_pct,
           schedule.rgb_pct,
-        ] as unknown as uPlot.AlignedData,
+        ] as uPlot.AlignedData,
       };
     },
     [schedule, nowMinute, t],
