@@ -1,0 +1,66 @@
+@use "sass:color";
+
+.sidebar {
+  width: 260px;
+  background-color: $bg-surface;
+  border-right: 1px solid $border-color;
+  font-family: $font-stack;
+
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  flex-shrink: 0;
+
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &--collapsed {
+    width: 80px;
+  }
+
+  &__container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: $spacing-md;
+    gap: $spacing-xl;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 3rem;
+    flex-shrink: 0;
+  }
+
+  &__nav {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+
+    &::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background-color: color.change($border-color, $alpha: 0.5);
+      border-radius: 4px;
+    }
+
+    .generic-list {
+      display: flex;
+      flex-direction: column;
+      gap: $spacing-xs;
+    }
+  }
+
+  &__footer {
+    flex-shrink: 0;
+    border-top: 1px solid color.change($border-color, $alpha: 0.3);
+    padding-top: $spacing-md;
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-sm;
+  }
+}

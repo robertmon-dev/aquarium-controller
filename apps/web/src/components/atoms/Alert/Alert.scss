@@ -1,0 +1,96 @@
+@use "sass:color";
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: $spacing-md;
+  padding: $spacing-sm $spacing-md;
+  border-radius: $radius-md;
+  border: 1px solid transparent;
+  min-height: 3rem;
+
+  &__icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: currentColor;
+  }
+
+  &__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: $spacing-xs 0;
+  }
+
+  &__title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: currentColor;
+  }
+
+  &__description {
+    font-size: 0.75rem;
+    opacity: 0.85;
+    line-height: 1.4;
+  }
+
+  &__close {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: $spacing-xs;
+    margin-right: -$spacing-xs;
+
+    opacity: 0.4;
+    color: currentColor;
+    transition: all 0.2s ease;
+    border-radius: $radius-sm;
+
+    &:hover {
+      opacity: 1;
+      background-color: color.change(#fff, $alpha: 0.05);
+    }
+
+    &:active {
+      transform: scale(0.9);
+    }
+  }
+
+  &--info {
+    background-color: color.change($tn-blue, $alpha: 0.1);
+    border-color: color.change($tn-blue, $alpha: 0.2);
+    color: $tn-blue;
+    box-shadow: 0 0 15px color.change($tn-blue, $alpha: 0.05);
+  }
+
+  &--success {
+    background-color: color.change($tn-green, $alpha: 0.1);
+    border-color: color.change($tn-green, $alpha: 0.2);
+    color: $tn-green;
+    box-shadow: 0 0 15px color.change($tn-green, $alpha: 0.05);
+  }
+
+  &--warning {
+    background-color: color.change($tn-yellow, $alpha: 0.1);
+    border-color: color.change($tn-yellow, $alpha: 0.2);
+    color: $tn-yellow;
+    box-shadow: 0 0 15px color.change($tn-yellow, $alpha: 0.05);
+  }
+
+  &--danger {
+    background-color: color.change($tn-red, $alpha: 0.1);
+    border-color: color.change($tn-red, $alpha: 0.2);
+    color: $tn-red;
+    box-shadow: 0 0 15px color.change($tn-red, $alpha: 0.05);
+  }
+}

@@ -1,0 +1,119 @@
+@use "sass:color";
+
+.input-container {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+
+  &.full-width {
+    width: 100%;
+  }
+}
+
+.input-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: $text-main;
+  margin-left: 0.75rem;
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: center;
+
+  background-color: color.adjust($bg-surface, $lightness: 4%);
+
+  border: 2px solid color.change($primary, $alpha: 0);
+
+  border-radius: 1rem;
+  padding: 0 1.25rem;
+
+  transition: all 0.2s ease-in-out;
+  color: $text-main;
+  height: 2.75rem;
+
+  &:focus-within {
+    border: 2px solid color.change($primary, $alpha: 0.3);
+  }
+
+  &--error {
+    border-color: $danger;
+
+    .input-icon {
+      color: $danger;
+    }
+
+    &:focus-within {
+      border-color: $danger;
+      box-shadow: 0 0 0 1.56px color.change($danger, $alpha: 0.25);
+    }
+
+    &:hover {
+      border-color: color.adjust($danger, $lightness: 5%);
+    }
+  }
+
+  &--disabled {
+    opacity: 0.6;
+    pointer-events: none;
+
+    background-color: color.adjust($bg-surface, $lightness: -2%);
+    border-color: transparent;
+  }
+
+  &--full-width {
+    width: 100%;
+  }
+
+  input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: inherit;
+    font-family: inherit;
+    font-size: 0.95rem;
+    padding: 0.5rem 0;
+    width: 100%;
+
+    &::placeholder {
+      color: $text-muted;
+    }
+
+    &:-webkit-autofill,
+    &:-webkit-autofill:hover,
+    &:-webkit-autofill:focus {
+      -webkit-text-fill-color: $text-main;
+      -webkit-box-shadow: 0 0 0px 1000px $bg-surface inset;
+      transition: background-color 5000s ease-in-out 0s;
+      border-radius: 9999px;
+    }
+  }
+
+  .input-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $text-muted;
+    flex-shrink: 0;
+    transition: color 0.2s;
+
+    &--left { margin-right: 0.75rem; }
+    &--right { margin-left: 0.75rem; }
+  }
+}
+
+.input-helper,
+.input-error-msg {
+  font-size: 0.75rem;
+  margin-left: 1rem;
+}
+
+.input-helper {
+  color: $text-muted;
+}
+
+.input-error-msg {
+  color: $danger;
+  font-weight: 500;
+}

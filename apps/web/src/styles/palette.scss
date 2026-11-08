@@ -1,0 +1,135 @@
+@use "sass:color";
+
+// --- Main Palette ---
+$tn-red: #f7768e;
+$tn-orange: #ff9e64;
+$tn-yellow: #e0af68;
+$tn-beige: #cfc9c2;
+
+$tn-green: #9ece6a;
+$tn-teal: #73daca;
+$tn-cyan-pale: #b4f9f8;
+$tn-cyan: #2ac3de;
+$tn-cyan-dim: #41a6b5;
+
+$tn-blue-sky: #7dcfff;
+$tn-blue: #7aa2f7;
+$tn-purple: #bb9af7;
+$tn-lavender: #c0caf5;
+
+$tn-grey-blue: #a9b1d6;
+$tn-grey-muted: #9aa5ce;
+$tn-slate: #565f89;
+$tn-storm: #414868;
+
+$tn-bg-night: #1a1b26;
+$tn-bg-storm: #24283b;
+$bg-storm-light: #24283b;
+
+
+// --- Additional Token Colors ---
+$tn-operator-col: #89ddff;
+$tn-punct-col: #9abdf5;
+$tn-doc-col: #6f7bb0;
+$tn-regex-col: #b4f9f8;
+$tn-constant-col: #ff9e64;
+
+// --- Typography ---
+$font-stack: 'JetBrains Mono', monospace;
+
+// --- Backgrounds ---
+$bg-app: $tn-bg-night;
+$bg-surface: $tn-bg-storm;
+$bg-sidebar: $tn-storm;
+$bg-input: color.adjust($tn-bg-night, $lightness: -2%);
+
+// --- Interactions ---
+$primary: $tn-blue;
+
+$primary-hover: color.adjust($tn-blue, $lightness: 5%);
+
+$highlight: $tn-cyan;
+$danger: $tn-red;
+$success: $tn-green;
+$warning: $tn-orange;
+$info: $tn-yellow;
+$highlight-dim: $tn-cyan-dim;
+
+// --- Text ---
+$text-main: $tn-lavender;
+$text-muted: $tn-slate;
+$text-on-accent: #15161e;
+$text-link: $tn-cyan-pale;
+
+$border-color: color.change($tn-slate, $alpha: 0.4);
+
+$glow-rim-top: inset 0 1px 0 0 color.change(#7aa2f7, $alpha: 0.15);
+$glow-rim-soft: inset 0 0 12px -4px color.change(#7aa2f7, $alpha: 0.08);
+
+$shadow-primary-sm: 0 2px 4px -1px color.change($tn-blue, $alpha: 0.4),
+  0 4px 8px -2px color.change($tn-blue, $alpha: 0.2);
+
+$shadow-primary-md: 0 4px 6px -1px color.change($tn-blue, $alpha: 0.5),
+  0 10px 24px -5px color.change($tn-blue, $alpha: 0.3),
+  $glow-rim-top;
+
+$shadow-surface-sm: 0 1px 2px 0 color.change(#000000, $alpha: 0.4),
+  0 2px 4px -1px color.change(#000000, $alpha: 0.3),
+  $glow-rim-top;
+
+$shadow-surface-md: 0 4px 6px -1px color.change(#000000, $alpha: 0.5),
+  0 12px 24px -6px color.change(#000000, $alpha: 0.4),
+  $glow-rim-top;
+
+$shadow-surface-lg: 0 20px 30px -8px color.change(#000000, $alpha: 0.6),
+  0 40px 60px -15px color.change(#000000, $alpha: 0.5),
+  $glow-rim-soft;
+
+// --- Spacing & Radius ---
+$spacing-none: 0;
+$spacing-xs: 0.5rem;
+$spacing-sm: 0.75rem;
+$spacing-md: 1.5rem;
+$spacing-md-l: 1.75rem;
+$spacing-lg: 2.5rem;
+$spacing-xl: 4rem;
+
+$radius-sm: 6px;
+$radius-md: 12px;
+$radius-md-l: 16px;
+$radius-lg: 2.5rem;
+
+// --- syntax tokens ---
+$tn-operator: #89ddff;
+$tn-punctuation: #9abdf5;
+$tn-comment: #565f89;
+$tn-class: #c0caf5;
+$tn-tag: #f7768e;
+$token-keyword: $tn-purple;
+$token-function: $tn-blue;
+$token-string: $tn-green;
+$token-number: $tn-orange;
+$token-comment: $tn-comment;
+$token-doc: $tn-doc-col;
+$token-regex: $tn-regex-col;
+$token-operator: $tn-operator;
+$token-class: $tn-cyan;
+$token-variable: $tn-lavender;
+$token-property: $tn-teal;
+$token-parameter: $tn-yellow;
+$token-tag: $tn-tag;
+$token-punctuation: $tn-punctuation;
+
+// --- Additional Token Colors ---
+$tn-operator-col: #89ddff;
+$tn-punct-col: #9abdf5;
+$tn-doc-col: #6f7bb0;
+$tn-regex-col: #b4f9f8;
+$tn-constant-col: #ff9e64;
+
+:root {
+  --tn-purple: #{$tn-purple};
+  --warning: #{$warning};
+  --tn-green: #{$tn-green};
+  --primary: #{$primary};
+}

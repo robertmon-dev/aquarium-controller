@@ -1,0 +1,35 @@
+.hero {
+  &__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-main;
+  }
+
+  &__row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    margin: 0.75rem 0 1rem;
+  }
+
+  &__value {
+    font-size: 3rem;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: $highlight;
+  }
+
+  &__unit {
+    font-size: 1.1rem;
+    color: $text-muted;
+  }
+}
