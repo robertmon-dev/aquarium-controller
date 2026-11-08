@@ -13,7 +13,6 @@ import {
 export interface DeviceProbe {
   state: ProbeState;
   probing: boolean;
-  /** Resolves true when the device answered. */
   run: (action: ProbeTrigger, device: DeviceConfig) => Promise<boolean>;
   dismiss: () => void;
 }
