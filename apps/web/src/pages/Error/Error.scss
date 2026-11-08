@@ -26,7 +26,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: calc(100vh - 200px);
+  min-height: 60vh;
   padding: 2rem;
   position: relative;
   overflow: hidden;
@@ -35,12 +35,12 @@
 
   @include apply-error-theme($primary);
 
-  &--500,
+  &--device-error,
   &--offline {
     @include apply-error-theme($danger);
   }
 
-  &--403 {
+  &--unauthorized {
     @include apply-error-theme($warning);
   }
 
