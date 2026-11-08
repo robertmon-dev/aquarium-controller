@@ -1,6 +1,5 @@
 .layout {
   display: flex;
-  flex-direction: column;
   min-height: 100vh;
 
   &__brand {
@@ -9,17 +8,15 @@
     color: $text-main;
   }
 
-  &__body {
+  &__content {
     display: flex;
+    flex-direction: column;
     flex: 1;
-    min-height: 0;
+    min-width: 0;
   }
 
   &__nav {
-    display: flex;
-    flex-direction: column;
     gap: 0.25rem;
-    padding: 0.75rem 0.5rem;
   }
 
   &__link {
@@ -57,7 +54,15 @@
 }
 
 @media (max-width: 720px) {
-  .layout__body {
+  .layout {
     flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid $border-color;
   }
 }

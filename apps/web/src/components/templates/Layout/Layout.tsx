@@ -4,8 +4,8 @@ import { Activity, Gauge, Lightbulb, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Badge } from "@/components/atoms";
+import { LanguageSwitcher } from "@/components/molecules/LanguageSwitcher/LanguageSwitcher";
 import { Footer } from "@/components/organisms/Footer/Footer";
-import { Navbar } from "@/components/organisms/NavBar/NavBar";
 import { Sidebar } from "@/components/organisms/SideBar/SideBar";
 import { useTelemetryStream } from "@/device/use-telemetry-stream";
 import { useDevice } from "@/providers/AppProviders";
@@ -22,40 +22,43 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="layout">
-      <Navbar>
-        <span className="layout__brand">{t("common.appName")}</span>
-        <Badge variant={badge.variant}>{badge.label}</Badge>
-      </Navbar>
+      <Sidebar>
+        <div className="sidebar__header">
+          <span className="layout__brand">{t("common.appName")}</span>
+          <Badge variant={badge.variant}>{badge.label}</Badge>
+        </div>
 
-      <div className="layout__body">
-        <Sidebar>
-          <nav className="layout__nav" aria-label={t("nav.dashboard")}>
-            {navItems(t).map((item, index) => {
-              const Icon = ICONS[index] ?? Gauge;
+        <nav className="sidebar__nav layout__nav" aria-label={t("nav.dashboard")}>
+          {navItems(t).map((item, index) => {
+            const Icon = ICONS[index] ?? Gauge;
 
-              return (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.to === "/"}
-                  className={({ isActive }) =>
-                    isActive
-                      ? "layout__link layout__link--active"
-                      : "layout__link"
-                  }
-                >
-                  <Icon size={16} />
-                  <span>{item.label}</span>
-                </NavLink>
-              );
-            })}
-          </nav>
-        </Sidebar>
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === "/"}
+                className={({ isActive }) =>
+                  isActive
+                    ? "layout__link layout__link--active"
+                    : "layout__link"
+                }
+              >
+                <Icon size={16} />
+                <span>{item.label}</span>
+              </NavLink>
+            );
+          })}
+        </nav>
 
+        <div className="sidebar__footer">
+          <LanguageSwitcher />
+        </div>
+      </Sidebar>
+
+      <div className="layout__content">
         <main className="layout__main">{children}</main>
+        <Footer copyright={t("common.appName")} />
       </div>
-
-      <Footer copyright={t("common.appName")} />
     </div>
   );
 }
