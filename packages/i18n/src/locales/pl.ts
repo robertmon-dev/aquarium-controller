@@ -115,7 +115,6 @@ export const pl: DeepString<typeof en> = {
     idle: "bezczynny",
     healthy: "sprawne",
     sensorsOff: "czujniki wyłączone",
-    noDevice: "nie skonfigurowano urządzenia",
     noData: "brak danych",
     close: "zamknij",
     cancel: "anuluj",
