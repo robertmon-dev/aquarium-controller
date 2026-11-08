@@ -1,0 +1,15 @@
+#datatype,string,long,dateTime:RFC3339,dateTime:RFC3339,dateTime:RFC3339,boolean,string,string
+#group,false,false,true,true,false,false,true,true
+#default,_result,,,,,,,
+,result,table,_start,_stop,_time,_value,_field,_measurement
+,,0,2026-11-08T11:26:41.501756558Z,2026-11-08T12:26:41.501756558Z,2026-11-08T12:25:29Z,true,healthy,aquarium_temperature
+,,1,2026-11-08T11:26:41.501756558Z,2026-11-08T12:26:41.501756558Z,2026-11-08T12:25:29Z,false,heater,aquarium_temperature
+
+#datatype,string,long,dateTime:RFC3339,dateTime:RFC3339,dateTime:RFC3339,double,string,string
+#group,false,false,true,true,false,false,true,true
+#default,_result,,,,,,,
+,result,table,_start,_stop,_time,_value,_field,_measurement
+,,2,2026-11-08T11:26:41.501756558Z,2026-11-08T12:26:41.501756558Z,2026-11-08T12:25:29Z,26,sump_c,aquarium_temperature
+,,3,2026-11-08T11:26:41.501756558Z,2026-11-08T12:26:41.501756558Z,2026-11-08T12:25:29Z,26.5,tank_c,aquarium_temperature
+,,4,2026-11-08T11:26:41.501756558Z,2026-11-08T12:26:41.501756558Z,2026-11-08T12:25:29Z,27,target_c,aquarium_temperature
+
