@@ -1,0 +1,35 @@
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+  }
+
+  &__label {
+    color: $text-muted;
+    font-size: 0.85rem;
+  }
+
+  &__value {
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__track {
+    height: 6px;
+    border-radius: 3px;
+    background-color: rgba($text-muted, 0.25);
+    overflow: hidden;
+  }
+
+  &__fill {
+    height: 100%;
+    border-radius: 3px;
+    background-color: $warning;
+    transition: width 1s linear;
+  }
+}
