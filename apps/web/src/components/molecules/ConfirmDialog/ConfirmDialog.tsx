@@ -1,11 +1,14 @@
-import { useMemo } from "react";
 import { useT } from "@aquarium/i18n/use-locale";
-import { Button } from "@/components/atoms/Button/Button";
 import { AlertCircle, Info, RotateCcw } from "lucide-react";
+import { useMemo } from "react";
+import { Button } from "@/components/atoms/Button/Button";
+import { Modal } from "@/components/molecules/Modal/Modal";
 import type { ConfirmDialogProps } from "./types";
 import "./ConfirmDialog.scss";
 
 export const ConfirmDialog = ({
+  open,
+  title,
   message,
   confirmText,
   cancelText,
@@ -32,29 +35,37 @@ export const ConfirmDialog = ({
   }, [variant]);
 
   return (
-    <div className="confirm-dialog">
-      <div className="confirm-dialog__header">{Icon}</div>
+    <Modal
+      open={open}
+      title={title}
+      onClose={onCancel}
+      role="alertdialog"
+      size="40vw"
+    >
+      <div className="confirm-dialog">
+        <div className="confirm-dialog__header">{Icon}</div>
 
-      <p className="confirm-dialog__message">{message}</p>
+        <p className="confirm-dialog__message">{message}</p>
 
-      <div className="confirm-dialog__actions">
-        <Button
-          variant="ghost"
-          onClick={onCancel}
-          disabled={isLoading}
-          fullWidth
-        >
-          {cancelText || t("common.cancel")}
-        </Button>
-        <Button
-          variant={variant}
-          onClick={onConfirm}
-          isLoading={isLoading ?? false}
-          fullWidth
-        >
-          {confirmText}
-        </Button>
+        <div className="confirm-dialog__actions">
+          <Button
+            variant="ghost"
+            onClick={onCancel}
+            disabled={isLoading ?? false}
+            fullWidth
+          >
+            {cancelText || t("common.cancel")}
+          </Button>
+          <Button
+            variant={variant}
+            onClick={onConfirm}
+            isLoading={isLoading ?? false}
+            fullWidth
+          >
+            {confirmText}
+          </Button>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 };
