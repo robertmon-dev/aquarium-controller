@@ -14,6 +14,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       disabled,
       isIcon = false,
       variant = "primary",
+      size = "md",
       fullWidth = false,
       className,
       ...rest
@@ -23,6 +24,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       isLoading,
       isIcon,
       variant,
+      size,
       fullWidth,
       className,
     });
