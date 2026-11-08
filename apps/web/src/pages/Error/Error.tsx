@@ -53,6 +53,8 @@ export function ErrorPage({
           )}
         </div>
       </div>
+
+      <div className="error-page__glow" aria-hidden="true" />
     </div>
   );
 }
