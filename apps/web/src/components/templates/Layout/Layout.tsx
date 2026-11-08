@@ -1,12 +1,11 @@
 import { useT } from "@aquarium/i18n/use-locale";
-import { streamBadge } from "@aquarium/view-model";
+import { streamBadge, useTelemetryStream } from "@aquarium/view-model";
 import { Activity, Gauge, Lightbulb, Settings } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Badge } from "@/components/atoms";
 import { LanguageSwitcher } from "@/components/molecules/LanguageSwitcher/LanguageSwitcher";
 import { Sidebar } from "@/components/organisms/SideBar/SideBar";
-import { useTelemetryStream } from "@/device/use-telemetry-stream";
 import { useDevice } from "@/providers/AppProviders";
 import { navItems } from "./nav-items";
 import "./Layout.scss";
