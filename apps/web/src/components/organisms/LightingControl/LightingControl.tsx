@@ -4,7 +4,7 @@ import {
   type Transport,
 } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
-import { formatDuration } from "@aquarium/view-model";
+import { formatDuration, useOverrideControl } from "@aquarium/view-model";
 import { RotateCcw } from "lucide-react";
 import { Alert, Button } from "@/components/atoms";
 import { ConfirmDialog } from "@/components/molecules";
@@ -12,7 +12,6 @@ import { LightingStatus } from "./LightingStatus";
 import { SchedulePreview } from "./SchedulePreview";
 import { OverrideControls } from "./OverrideControls";
 import { useLocalClock } from "./use-local-clock";
-import { useOverrideControl } from "./use-override-control";
 import "./LightingControl.scss";
 
 export function LightingControl({
