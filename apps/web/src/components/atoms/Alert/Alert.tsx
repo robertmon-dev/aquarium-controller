@@ -9,6 +9,7 @@ export const Alert = ({
   title,
   children,
   onClose,
+  action,
   className = "",
 }: AlertProps) => {
   const t = useT();
@@ -36,6 +37,8 @@ export const Alert = ({
         {title && <strong className="alert__title">{title}</strong>}
         <div className="alert__description">{children}</div>
       </div>
+
+      {action && <div className="alert__action">{action}</div>}
 
       {onClose && (
         <button

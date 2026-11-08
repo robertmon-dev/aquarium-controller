@@ -7,5 +7,6 @@ export interface AlertProps {
   title?: string;
   children: ReactNode;
   onClose?: () => void;
+  action?: ReactNode;
   className?: string;
 }
