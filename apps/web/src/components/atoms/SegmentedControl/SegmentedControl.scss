@@ -1,0 +1,38 @@
+.segmented {
+  display: inline-flex;
+  border: 1px solid $border-color;
+  border-radius: $radius-md;
+  overflow: hidden;
+  background-color: rgba($bg-input, 0.6);
+
+  &__item {
+    appearance: none;
+    border: none;
+    background: none;
+    padding: 0.4rem 0.8rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    color: $text-muted;
+    cursor: pointer;
+    white-space: nowrap;
+
+    + .segmented__item {
+      border-left: 1px solid $border-color;
+    }
+
+    &:hover {
+      color: $text-main;
+      background-color: rgba($primary, 0.08);
+    }
+
+    &--active {
+      color: $text-on-accent;
+      background-color: $primary;
+
+      &:hover {
+        color: $text-on-accent;
+        background-color: $primary;
+      }
+    }
+  }
+}
