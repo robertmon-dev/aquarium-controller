@@ -1,0 +1,36 @@
+.history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.history-table {
+  overflow-x: auto;
+
+  table {
+    border-collapse: collapse;
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th,
+  td {
+    text-align: right;
+    padding: 0.3rem 0.6rem;
+    border-bottom: 1px solid $chart-grid;
+    white-space: nowrap;
+  }
+
+  thead th {
+    color: $text-muted;
+    font-weight: 600;
+    text-align: right;
+  }
+
+  tbody th {
+    text-align: left;
+    color: $text-muted;
+    font-weight: 500;
+  }
+}
