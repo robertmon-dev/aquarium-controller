@@ -1,0 +1,13 @@
+.lighting {
+  &__controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  &__note {
+    margin: 0;
+    font-size: 0.82rem;
+    color: $text-muted;
+  }
+}

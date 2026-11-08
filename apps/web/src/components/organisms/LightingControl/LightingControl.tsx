@@ -21,6 +21,7 @@ import { ChannelSliders } from "@/components/molecules/ChannelSliders/ChannelSli
 import { DurationPicker } from "@/components/molecules/DurationPicker/DurationPicker";
 import { ProfilePicker } from "@/components/molecules/ProfilePicker/ProfilePicker";
 import { initialLightingState, lightingReducer } from "./lighting-reducer";
+import "./LightingControl.scss";
 
 export function LightingControl({
   transport,
@@ -99,48 +100,52 @@ export function LightingControl({
         status="ok"
         statusLabel={busy ? t("lighting.sending") : t("lighting.ready")}
       >
-        <DurationPicker
-          selected={state.duration}
-          onSelect={(seconds) => dispatch({ type: "setDuration", seconds })}
-        />
+        <div className="lighting__controls">
+          <DurationPicker
+            selected={state.duration}
+            onSelect={(seconds) => dispatch({ type: "setDuration", seconds })}
+          />
 
-        <ProfilePicker
-          selected={selectedProfile}
-          disabled={busy}
-          onSelect={(profile) => {
-            dispatch({ type: "pickProfile", profile });
-            setOverride.mutate(profileRequest(profile, state.duration), {
-              onSuccess: () => dispatch({ type: "committed" }),
-            });
-          }}
-        />
+          <ProfilePicker
+            selected={selectedProfile}
+            disabled={busy}
+            onSelect={(profile) => {
+              dispatch({ type: "pickProfile", profile });
+              setOverride.mutate(profileRequest(profile, state.duration), {
+                onSuccess: () => dispatch({ type: "committed" }),
+              });
+            }}
+          />
 
-        <ChannelSliders
-          levels={state.levels}
-          disabled={busy}
-          onChange={(channel, value) =>
-            dispatch({ type: "setChannel", channel, value })
-          }
-          onCommit={() => {
-            if (!state.dirty) return;
-            setOverride.mutate(channelRequest(state.levels, state.duration), {
-              onSuccess: () => dispatch({ type: "committed" }),
-            });
-          }}
-        />
+          <ChannelSliders
+            levels={state.levels}
+            disabled={busy}
+            onChange={(channel, value) =>
+              dispatch({ type: "setChannel", channel, value })
+            }
+            onCommit={() => {
+              if (!state.dirty) return;
+              setOverride.mutate(channelRequest(state.levels, state.duration), {
+                onSuccess: () => dispatch({ type: "committed" }),
+              });
+            }}
+          />
 
-        <p className="lighting__note">
-          {active ? t("lighting.schedulePaused") : t("lighting.scheduleRunning")}
-        </p>
+          <p className="lighting__note">
+            {active
+              ? t("lighting.schedulePaused")
+              : t("lighting.scheduleRunning")}
+          </p>
 
-        <Button
-          variant="outline"
-          fullWidth
-          disabled={!active || busy}
-          onClick={() => setConfirming(true)}
-        >
-          {t("lighting.restore")}
-        </Button>
+          <Button
+            variant="outline"
+            fullWidth
+            disabled={!active || busy}
+            onClick={() => setConfirming(true)}
+          >
+            {t("lighting.restore")}
+          </Button>
+        </div>
       </MetricCard>
 
       {confirming ? (
