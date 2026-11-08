@@ -8,13 +8,6 @@
     color: $text-main;
   }
 
-  &__content {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-width: 0;
-  }
-
   &__nav {
     gap: 0.25rem;
   }
