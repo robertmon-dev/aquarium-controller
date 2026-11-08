@@ -1,0 +1,36 @@
+{
+  "name": "@aquarium/i18n",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./use-locale": "./src/use-locale.tsx",
+    "./adapter": "./src/adapter.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "i18n-js": "^4.5.4"
+  },
+  "peerDependencies": {
+    "react": "*"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/react": "~19.3.0",
+    "eslint": "9.39.5",
+    "jsdom": "31.0.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  }
+}
