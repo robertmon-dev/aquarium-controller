@@ -1,13 +1,84 @@
-.lighting {
-  &__controls {
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
+.lighting__panels {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  align-items: start;
+  max-width: 64rem;
+}
+
+.lighting-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.lighting-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+
+  &__profile {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: $highlight;
   }
 
-  &__note {
+  &__channels {
+    display: flex;
+    gap: 2rem;
+  }
+
+  &__channel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  &__reading {
+    display: flex;
+    align-items: baseline;
+    gap: 0.15rem;
+  }
+
+  &__value {
+    font-size: 2.4rem;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: $text-main;
+  }
+
+  &__unit {
+    font-size: 1rem;
+    color: $text-muted;
+  }
+
+  &__name {
+    font-size: 0.8rem;
+    color: $text-muted;
+  }
+}
+
+.override {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  &__label {
     margin: 0;
-    font-size: 0.82rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     color: $text-muted;
   }
 }

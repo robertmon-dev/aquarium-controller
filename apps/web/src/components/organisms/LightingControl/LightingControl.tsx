@@ -10,16 +10,15 @@ import { useT } from "@aquarium/i18n/use-locale";
 import {
   channelRequest,
   formatDuration,
-  formatPercentPair,
   profileRequest,
   useCountdown,
 } from "@aquarium/view-model";
-import { useReducer, useState } from "react";
+import { RotateCcw } from "lucide-react";
+import { useReducer, useRef, useState } from "react";
 import { Alert, Button } from "@/components/atoms";
-import { ConfirmDialog, MetricCard } from "@/components/molecules";
-import { ChannelSliders } from "@/components/molecules/ChannelSliders/ChannelSliders";
-import { DurationPicker } from "@/components/molecules/DurationPicker/DurationPicker";
-import { ProfilePicker } from "@/components/molecules/ProfilePicker/ProfilePicker";
+import { ConfirmDialog } from "@/components/molecules";
+import { LightingStatus } from "./LightingStatus";
+import { OverrideControls } from "./OverrideControls";
 import { initialLightingState, lightingReducer } from "./lighting-reducer";
 import "./LightingControl.scss";
 
@@ -49,6 +48,11 @@ export function LightingControl({
     void override.refetch();
   });
 
+  const total = useRef<number | null>(null);
+  if (remaining === null) total.current = null;
+  else if (total.current === null || remaining > total.current)
+    total.current = remaining;
+
   const busy = setOverride.isPending || clearOverride.isPending;
   const active = lighting.override_active;
   const failure = setOverride.error ?? clearOverride.error;
@@ -62,32 +66,28 @@ export function LightingControl({
 
   return (
     <>
-      <MetricCard
-        title={t("lighting.now")}
-        status={active ? "degraded" : "ok"}
-        statusLabel={active ? t("lighting.override") : t("lighting.onSchedule")}
-        metrics={[
-          {
-            label: t("lighting.profile"),
-            value: t(`profiles.${lighting.profile}`),
-          },
-          {
-            label: t("lighting.whiteRgb"),
-            value: formatPercentPair(
-              lighting.channel_white_pct,
-              lighting.channel_rgb_pct,
-            ),
-          },
-          ...(remaining === null
-            ? []
-            : [
-                {
-                  label: t("lighting.expiresIn"),
-                  value: formatDuration(remaining),
-                },
-              ]),
-        ]}
-      />
+      {active ? (
+        <Alert variant="warning" title={t("lighting.manualActive")}>
+          <div className="lighting-banner">
+            <span>
+              {remaining === null
+                ? t("lighting.schedulePaused")
+                : t("lighting.manualBody", {
+                    remaining: formatDuration(remaining),
+                  })}
+            </span>
+
+            <Button
+              variant="outline"
+              leftIcon={<RotateCcw size={14} />}
+              disabled={busy}
+              onClick={() => setConfirming(true)}
+            >
+              {t("lighting.restore")}
+            </Button>
+          </div>
+        </Alert>
+      ) : null}
 
       {failure ? (
         <Alert variant="danger" title={t("lighting.refused")}>
@@ -95,62 +95,40 @@ export function LightingControl({
         </Alert>
       ) : null}
 
-      <MetricCard
-        title={t("lighting.override")}
-        status="ok"
-        statusLabel={busy ? t("lighting.sending") : t("lighting.ready")}
-      >
-        <div className="lighting__controls">
-          <DurationPicker
-            selected={state.duration}
-            onSelect={(seconds) => dispatch({ type: "setDuration", seconds })}
-          />
+      <div className="lighting__panels">
+        <LightingStatus
+          lighting={lighting}
+          remaining={remaining}
+          total={total.current}
+        />
 
-          <ProfilePicker
-            selected={selectedProfile}
-            disabled={busy}
-            onSelect={(profile) => {
-              dispatch({ type: "pickProfile", profile });
-              setOverride.mutate(profileRequest(profile, state.duration), {
-                onSuccess: () => dispatch({ type: "committed" }),
-              });
-            }}
-          />
-
-          <ChannelSliders
-            levels={state.levels}
-            disabled={busy}
-            onChange={(channel, value) =>
-              dispatch({ type: "setChannel", channel, value })
-            }
-            onCommit={() => {
-              if (!state.dirty) return;
-              setOverride.mutate(channelRequest(state.levels, state.duration), {
-                onSuccess: () => dispatch({ type: "committed" }),
-              });
-            }}
-          />
-
-          <p className="lighting__note">
-            {active
-              ? t("lighting.schedulePaused")
-              : t("lighting.scheduleRunning")}
-          </p>
-
-          <Button
-            variant="outline"
-            fullWidth
-            disabled={!active || busy}
-            onClick={() => setConfirming(true)}
-          >
-            {t("lighting.restore")}
-          </Button>
-        </div>
-      </MetricCard>
+        <OverrideControls
+          busy={busy}
+          duration={state.duration}
+          levels={state.levels}
+          selectedProfile={selectedProfile}
+          onDuration={(seconds) => dispatch({ type: "setDuration", seconds })}
+          onProfile={(profile) => {
+            dispatch({ type: "pickProfile", profile });
+            setOverride.mutate(profileRequest(profile, state.duration), {
+              onSuccess: () => dispatch({ type: "committed" }),
+            });
+          }}
+          onChannel={(channel, value) =>
+            dispatch({ type: "setChannel", channel, value })
+          }
+          onCommitChannels={() => {
+            if (!state.dirty) return;
+            setOverride.mutate(channelRequest(state.levels, state.duration), {
+              onSuccess: () => dispatch({ type: "committed" }),
+            });
+          }}
+        />
+      </div>
 
       {confirming ? (
         <ConfirmDialog
-          message={t("lighting.restore")}
+          message={t("lighting.schedulePaused")}
           confirmText={t("lighting.restore")}
           cancelText={t("common.cancel")}
           variant="primary"
