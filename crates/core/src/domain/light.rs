@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::metrics::{LightingMetricsDto, LightingProfile};
+use super::metrics::{LightingMetricsDto, LightingProfile, LightingScheduleDto};
 
 pub const DAYLIGHT_WHITE_PCT: u8 = 60;
 pub const DAYLIGHT_RGB_PCT: u8 = 40;
@@ -145,6 +145,39 @@ impl LightingSchedule {
                 override_active: false,
             }
         }
+    }
+
+    pub fn try_preview(&self, month: u8, step_minutes: u16) -> Option<LightingScheduleDto> {
+        if !(1..=12).contains(&month) {
+            return None;
+        }
+
+        if step_minutes == 0 || 1440 % step_minutes != 0 {
+            return None;
+        }
+
+        let samples = (1440 / step_minutes) as usize;
+        let mut white_pct = Vec::with_capacity(samples);
+        let mut rgb_pct = Vec::with_capacity(samples);
+
+        for index in 0..samples {
+            let minute = index as u16 * step_minutes;
+            let point = self.evaluate(minute, month);
+            white_pct.push(point.channel_white_pct);
+            rgb_pct.push(point.channel_rgb_pct);
+        }
+
+        Some(LightingScheduleDto {
+            month,
+            step_minutes,
+            white_pct,
+            rgb_pct,
+        })
+    }
+
+    pub fn preview(&self, month: u8, step_minutes: u16) -> LightingScheduleDto {
+        self.try_preview(month, step_minutes)
+            .expect("caller passed a valid month and step")
     }
 }
 
