@@ -14,7 +14,7 @@ import {
   useCountdown,
 } from "@aquarium/view-model";
 import { RotateCcw } from "lucide-react";
-import { useReducer, useRef, useState } from "react";
+import { useReducer, useRef } from "react";
 import { Alert, Button } from "@/components/atoms";
 import { ConfirmDialog } from "@/components/molecules";
 import { LightingStatus } from "./LightingStatus";
@@ -33,7 +33,6 @@ export function LightingControl({
   const override = useLightingOverride(transport);
   const setOverride = useSetLightingOverride(transport);
   const clearOverride = useClearLightingOverride(transport);
-  const [confirming, setConfirming] = useState(false);
 
   const [state, dispatch] = useReducer(
     lightingReducer,
@@ -81,7 +80,7 @@ export function LightingControl({
               variant="outline"
               leftIcon={<RotateCcw size={14} />}
               disabled={busy}
-              onClick={() => setConfirming(true)}
+              onClick={() => dispatch({ type: "confirmRestore" })}
             >
               {t("lighting.restore")}
             </Button>
@@ -126,26 +125,24 @@ export function LightingControl({
         />
       </div>
 
-      {confirming ? (
+      {state.confirming ? (
         <ConfirmDialog
           message={t("lighting.schedulePaused")}
           confirmText={t("lighting.restore")}
           cancelText={t("common.cancel")}
           variant="primary"
           isLoading={clearOverride.isPending}
-          onCancel={() => setConfirming(false)}
+          onCancel={() => dispatch({ type: "cancelRestore" })}
           onConfirm={() =>
             clearOverride.mutate(undefined, {
-              onSuccess: () => {
+              onSuccess: () =>
                 dispatch({
                   type: "restore",
                   levels: {
                     white_pct: lighting.channel_white_pct,
                     rgb_pct: lighting.channel_rgb_pct,
                   },
-                });
-                setConfirming(false);
-              },
+                }),
             })
           }
         />
