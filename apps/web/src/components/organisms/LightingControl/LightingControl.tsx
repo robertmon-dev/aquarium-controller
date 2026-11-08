@@ -56,6 +56,15 @@ export function LightingControl({
   const active = lighting.override_active;
   const failure = setOverride.error ?? clearOverride.error;
 
+  // The device keeps reporting a profile even when an override drives the
+  // channels directly, so "custom" comes from the override target, not from it.
+  const manualChannels =
+    lighting.override_active &&
+    ((state.mode === "channels" && state.dirty) ||
+      (override.data !== null &&
+        override.data !== undefined &&
+        "channels" in override.data.target));
+
   const selectedProfile: LightingProfile | null =
     state.mode === "profile" && state.profile
       ? state.profile
@@ -99,6 +108,7 @@ export function LightingControl({
           lighting={lighting}
           remaining={remaining}
           total={total.current}
+          manualChannels={manualChannels}
         />
 
         <OverrideControls

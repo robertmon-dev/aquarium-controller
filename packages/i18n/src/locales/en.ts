@@ -125,6 +125,7 @@ export const en = {
     whiteRgb: "white / rgb",
     expiresIn: "expires in",
     manualActive: "manual mode active",
+    custom: "custom (manual)",
     manualBody: "the schedule is paused — {{remaining}} left",
     currentState: "current state",
   },
