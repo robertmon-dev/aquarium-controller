@@ -1,12 +1,12 @@
 import { router } from "expo-router";
 import { ScrollView } from "react-native";
 import { LanguageSwitcher } from "@/components/molecules";
-import { DeviceForm } from "@/components/organisms";
+import { DeviceForm, DeviceInfo } from "@/components/organisms";
 import { screenStyles, spacing } from "@aquarium/theme";
 import { useDevice } from "@/components/utility/app-providers";
 
 export function DeviceSettingsPage() {
-  const { device, setDevice } = useDevice();
+  const { device, transport, setDevice } = useDevice();
 
   return (
     <ScrollView
@@ -20,6 +20,10 @@ export function DeviceSettingsPage() {
           router.replace("/");
         }}
       />
+
+      {device && transport ? (
+        <DeviceInfo device={device} transport={transport} />
+      ) : null}
 
       <LanguageSwitcher />
     </ScrollView>
