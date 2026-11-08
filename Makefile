@@ -17,6 +17,10 @@ BL_DEBUG      := target/$(TARGET)/debug/bootloader.bin
 ELF_DEBUG     := target/$(TARGET)/debug/$(BIN)
 
 ENV_FILE ?= .env
+
+DOCKER_DIR    := docker
+DOCKER_ENV    := $(DOCKER_DIR)/.env
+COMPOSE       := docker compose -f $(DOCKER_DIR)/compose.yml --project-directory $(DOCKER_DIR)
 LOAD_ENV = if [ -f $(ENV_FILE) ]; then while IFS='=' read -r k v; do case "$$k" in ''|'\#'*) continue ;; *) export "$$k=$$v" ;; esac; done < $(ENV_FILE); fi;
 
 # ------------------------------------------------------------------------------
@@ -275,6 +279,80 @@ js-lint: ## Lint every yarn workspace
 js-test: ## Run JavaScript unit tests
 	@$(MSG) "JavaScript tests"
 	@yarn test
+
+# ==============================================================================
+# Web client & stack
+# ==============================================================================
+
+.PHONY: web-build
+web-build: types ## Build the browser app into apps/web/dist (what Caddy serves)
+	@$(MSG) "Building the web client"
+	@yarn workspace web run build
+	@$(OK) "Built apps/web/dist"
+
+.PHONY: web-start
+web-start: types ## Start the Vite dev server
+	@$(MSG) "Vite dev server"
+	@yarn workspace web run dev
+
+.PHONY: check-stack-env
+check-stack-env: ## Verify docker/.env carries the Influx settings
+	@test -f $(DOCKER_ENV) || { $(ERR) "$(DOCKER_ENV) is missing - see make stack-env"; exit 1; }
+	@for name in INFLUX_USERNAME INFLUX_PASSWORD INFLUX_ORG INFLUX_BUCKET INFLUX_ADMIN_TOKEN; do \
+		grep -qE "^$$name=.+" $(DOCKER_ENV) || { $(ERR) "$$name is empty in $(DOCKER_ENV)"; exit 1; }; \
+	done
+	@grep -qE '^INFLUX_READ_TOKEN=.+' $(DOCKER_ENV) \
+		&& $(SUB) "read token present - the proxy can query" \
+		|| $(WARN) "INFLUX_READ_TOKEN is empty - /influx stays closed until you create it (docker/README.md)"
+	@$(SUB) "stack env ok"
+
+.PHONY: stack-up
+stack-up: check-stack-env web-build ## Start InfluxDB and Caddy, serving a fresh web build
+	@$(MSG) "Starting the stack"
+	@$(COMPOSE) up -d --wait
+	@$(SUB) "web     http://localhost:8080"
+	@$(SUB) "influx  http://localhost:8086"
+	@$(OK) "Stack is up"
+
+.PHONY: stack-down
+stack-down: ## Stop the stack, keeping the Influx data
+	@$(MSG) "Stopping the stack"
+	@$(COMPOSE) down
+	@$(OK) "Stack is down - data volumes kept"
+
+.PHONY: stack-ps
+stack-ps: ## Show what the stack is doing
+	@$(COMPOSE) ps
+
+.PHONY: stack-logs
+stack-logs: ## Follow stack logs (ctrl-c to stop)
+	@$(COMPOSE) logs -f --tail 50
+
+.PHONY: stack-env
+stack-env: ## Write docker/.env from the example, with fresh secrets
+	@test ! -f $(DOCKER_ENV) || { $(ERR) "$(DOCKER_ENV) already exists - refusing to overwrite"; exit 1; }
+	@$(MSG) "Creating $(DOCKER_ENV)"
+	@cp $(DOCKER_DIR)/.env.example $(DOCKER_ENV)
+	@sed -i "s|^INFLUX_PASSWORD=.*|INFLUX_PASSWORD=$$(head -c 18 /dev/urandom | base64 | tr -d '/+=')|" $(DOCKER_ENV)
+	@sed -i "s|^INFLUX_ADMIN_TOKEN=.*|INFLUX_ADMIN_TOKEN=$$(head -c 32 /dev/urandom | base64 | tr -d '/+=')|" $(DOCKER_ENV)
+	@$(SUB) "password and admin token generated"
+	@$(SUB) "scoped write and read tokens come after the first start - see docker/README.md"
+	@grep -qxF '.env' .gitignore 2>/dev/null && $(SUB) "$(DOCKER_ENV) is gitignored" || $(WARN) "add .env to .gitignore"
+
+.PHONY: stack-tokens
+stack-tokens: ## List Influx tokens and their permissions, values hidden
+	@$(MSG) "Influx tokens"
+# The token column is masked on purpose: this target exists to confirm that each
+# scoped token carries exactly one permission, not to hand out credentials.
+	@$(COMPOSE) exec -T influxdb influx auth list \
+		| awk -F'\t' 'BEGIN { OFS = "\t" } { if (NR > 1 && NF >= 3) $$3 = "<hidden>"; print }'
+
+.PHONY: stack-reset
+stack-reset: ## Destroy the stack AND the Influx data (make stack-reset CONFIRM=yes)
+	@test "$(CONFIRM)" = "yes" || { $(ERR) "this deletes the Influx volume and every token - rerun with CONFIRM=yes"; exit 1; }
+	@$(WARN) "destroying the Influx volume, its data and every token"
+	@$(COMPOSE) down -v
+	@$(OK) "Stack and data removed - the next stack-up re-bootstraps Influx"
 
 # ==============================================================================
 # Device smoke test

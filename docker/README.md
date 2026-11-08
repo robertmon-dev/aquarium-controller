@@ -3,12 +3,32 @@
 InfluxDB for telemetry history, and Caddy serving the web app while proxying
 read-only queries to Influx.
 
+## Make targets
+
+From the repo root, these wrap everything below:
+
+| target | what |
+| --- | --- |
+| `make stack-env` | write `docker/.env` from the example, with generated password and admin token |
+| `make stack-up` | build the web client, then start both services and wait for healthy |
+| `make stack-down` | stop both services, keeping the data volumes |
+| `make stack-ps` | what the stack is doing |
+| `make stack-logs` | follow the logs |
+| `make stack-tokens` | list the tokens and their permissions, values masked |
+| `make stack-reset CONFIRM=yes` | destroy the containers **and** the Influx data |
+
+`make stack-up` always rebuilds `apps/web/dist` first, because Caddy serves that
+directory — otherwise it would quietly serve a stale build.
+
+Creating the two scoped tokens is still manual, in step 5 below: it needs the
+bucket id, which only exists after the first start.
+
 ## First run
 
-1. `cp .env.example .env`
-2. Fill `INFLUX_PASSWORD` and `INFLUX_ADMIN_TOKEN` with fresh secrets:
-   `openssl rand -hex 32`
-3. `docker compose up -d` — the empty data volume triggers Influx's setup mode,
+1. `make stack-env` (or `cp .env.example .env` and fill it in by hand)
+2. If you filled it by hand, set `INFLUX_PASSWORD` and `INFLUX_ADMIN_TOKEN` to
+   fresh secrets: `openssl rand -hex 32`
+3. `make stack-up` — the empty data volume triggers Influx's setup mode,
    which consumes every `DOCKER_INFLUXDB_INIT_*` variable **once**. Changing them
    later has no effect unless the `influx-data` volume is destroyed.
 4. `docker compose exec influxdb influx bucket list` — note the bucket id.
@@ -19,7 +39,8 @@ read-only queries to Influx.
    Add `--json` to either if you want to script the token out of the output.
 6. Put them in `.env` as `INFLUX_WRITE_TOKEN` and `INFLUX_READ_TOKEN`.
 7. `docker compose up -d --force-recreate caddy` — Caddy reads the token at
-   config-parse time, so it must be recreated, not reloaded.
+   config-parse time, so it must be recreated, not reloaded. (`make stack-down`
+   followed by `make stack-up` does the same thing.)
 8. Put the firmware's values in the **repo-root** `.env`:
    `INFLUX_URL=http://<this-machine's-LAN-ip>:8086`, `INFLUX_ORG`,
    `INFLUX_BUCKET`, and `INFLUX_TOKEN=<the write token>`. Not `localhost` — the
@@ -71,6 +92,6 @@ Responses are CRLF-terminated.
 
 ## Resetting
 
-`docker compose down -v` destroys the data **and** the Influx setup, so the next
-`up` re-bootstraps and every token has to be recreated. To keep the data, use
-`docker compose down` without `-v`.
+`make stack-reset CONFIRM=yes` (or `docker compose down -v`) destroys the data
+**and** the Influx setup, so the next start re-bootstraps and every token has to
+be recreated. To keep the data, use `make stack-down`.
