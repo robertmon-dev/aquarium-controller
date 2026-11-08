@@ -8,6 +8,7 @@ export interface LightingState {
   levels: ChannelLevels;
   duration: number | null;
   dirty: boolean;
+  confirming: boolean;
 }
 
 export type LightingAction =
@@ -15,7 +16,9 @@ export type LightingAction =
   | { type: "setChannel"; channel: keyof ChannelLevels; value: number }
   | { type: "setDuration"; seconds: number | null }
   | { type: "restore"; levels: ChannelLevels }
-  | { type: "committed" };
+  | { type: "committed" }
+  | { type: "confirmRestore" }
+  | { type: "cancelRestore" };
 
 const DEFAULT_DURATION_S = 900;
 
@@ -25,6 +28,7 @@ export function initialLightingState(levels: ChannelLevels): LightingState {
     levels,
     duration: DEFAULT_DURATION_S,
     dirty: false,
+    confirming: false,
   };
 }
 
@@ -56,15 +60,25 @@ export function lightingReducer(
     case "setDuration":
       return { ...state, duration: action.seconds };
 
+    // Restoring closes the confirmation in the same transition. Were that a
+    // second setState next to the dispatch, the two could drift apart and leave
+    // the dialog over a schedule that is already back.
     case "restore":
       return {
         ...state,
         mode: "schedule",
         levels: action.levels,
         dirty: false,
+        confirming: false,
       };
 
     case "committed":
       return { ...state, dirty: false };
+
+    case "confirmRestore":
+      return { ...state, confirming: true };
+
+    case "cancelRestore":
+      return { ...state, confirming: false };
   }
 }

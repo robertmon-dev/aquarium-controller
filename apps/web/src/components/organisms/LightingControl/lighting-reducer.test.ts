@@ -18,6 +18,7 @@ describe("lightingReducer", () => {
       levels: { white_pct: 40, rgb_pct: 20 },
       duration: 900,
       dirty: false,
+      confirming: false,
     });
   });
 
@@ -90,5 +91,37 @@ describe("lightingReducer", () => {
 
     expect(state.dirty).toBe(false);
     expect(state.mode).toBe("profile");
+  });
+
+  it("opens and closes the restore confirmation", () => {
+    expect(run({ type: "confirmRestore" }).confirming).toBe(true);
+    expect(
+      run({ type: "confirmRestore" }, { type: "cancelRestore" }).confirming,
+    ).toBe(false);
+  });
+
+  it("closes the confirmation as part of restoring, not as a second step", () => {
+    const state = run(
+      { type: "setChannel", channel: "white_pct", value: 90 },
+      { type: "confirmRestore" },
+      { type: "restore", levels: { white_pct: 55, rgb_pct: 35 } },
+    );
+
+    expect(state).toMatchObject({
+      mode: "schedule",
+      levels: { white_pct: 55, rgb_pct: 35 },
+      dirty: false,
+      confirming: false,
+    });
+  });
+
+  it("leaves the confirmation alone when an override commits", () => {
+    const state = run(
+      { type: "confirmRestore" },
+      { type: "pickProfile", profile: "sunset" },
+      { type: "committed" },
+    );
+
+    expect(state.confirming).toBe(true);
   });
 });
