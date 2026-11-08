@@ -23,3 +23,4 @@ export type { TextDisplayProps, TextDisplayState } from "./TextDisplay/types";
 export type { ChipProps, ChipVariant } from "./Chip/types";
 export type { SliderProps } from "./Slider/types";
 export type { StatusDotProps, StatusTone } from "./StatusDot/types";
+export { Meter } from "./Meter/Meter";
