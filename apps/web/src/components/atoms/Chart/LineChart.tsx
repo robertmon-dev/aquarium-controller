@@ -1,13 +1,17 @@
-import uPlot from "uplot";
+import type uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { HistorySeries } from "@/history/csv";
 import { alignTimes, valuesAt } from "./chart-data";
 import {
+  axisTickFormat,
+  colorOf,
+  isReference,
+  type PlottedSeries,
+} from "./chart-series";
+import {
   GRID,
   LINE_WIDTH,
   POINT_SIZE,
-  REFERENCE,
-  SERIES,
   SURFACE,
   TEXT_MUTED,
 } from "./chart-tokens";
@@ -15,75 +19,70 @@ import { useUplot, type ChartSpec } from "./use-uplot";
 import "./Chart.scss";
 
 const SYNC_KEY = "aquarium-history";
+const DEFAULT_HEIGHT = 300;
 
 export interface LineChartProps {
-  title: string;
   unit: string;
   series: HistorySeries[];
-  referenceField?: string;
+  range: [number, number];
+  plotted: PlottedSeries[];
   height?: number;
 }
 
-function seriesOption(
-  one: HistorySeries,
-  stroke: string,
-  isReference: boolean,
-): uPlot.Series {
-  return {
-    label: one.field,
-    stroke,
-    width: isReference ? 1 : LINE_WIDTH,
-    ...(isReference ? { dash: [4, 4] } : {}),
-    points: {
-      show: !isReference,
-      size: POINT_SIZE,
-      stroke: SURFACE,
-      width: 2,
-      fill: stroke,
-    },
-  };
-}
-
-function timeAxis(): uPlot.Axis {
-  return {
-    stroke: TEXT_MUTED,
-    grid: { stroke: GRID, width: 1 },
-    ticks: { stroke: GRID },
-  };
-}
-
 export function LineChart({
-  title,
   unit,
   series,
-  referenceField,
-  height = 160,
+  range,
+  plotted,
+  height = DEFAULT_HEIGHT,
 }: LineChartProps) {
   const host = useUplot(
     (width): ChartSpec | null => {
       if (series.length === 0) return null;
 
       const times = alignTimes(series);
-      let slot = 0;
+      const formatTick = axisTickFormat(range[1] - range[0]);
 
       return {
         options: {
-          title,
           width,
           height,
           cursor: { sync: { key: SYNC_KEY }, points: { size: POINT_SIZE } },
-          legend: { show: series.length > 1 },
-          scales: { x: { time: true } },
-          axes: [timeAxis(), { ...timeAxis(), label: unit }],
+          legend: { show: false },
+          scales: { x: { time: true, range: [range[0], range[1]] } },
+          axes: [
+            {
+              stroke: TEXT_MUTED,
+              grid: { stroke: GRID, width: 1 },
+              ticks: { stroke: GRID },
+              values: (_, splits) => splits.map(formatTick),
+            },
+            {
+              stroke: TEXT_MUTED,
+              grid: { stroke: GRID, width: 1 },
+              ticks: { stroke: GRID },
+              label: unit,
+            },
+          ],
           series: [
             {},
             ...series.map((one) => {
-              const isReference = one.field === referenceField;
-              const stroke = isReference
-                ? REFERENCE
-                : (SERIES[slot++ % SERIES.length] ?? REFERENCE);
+              const color = colorOf(plotted, one.field);
+              const reference = isReference(plotted, one.field);
 
-              return seriesOption(one, stroke, isReference);
+              return {
+                label: one.field,
+                stroke: color,
+                width: reference ? 1 : LINE_WIDTH,
+                ...(reference ? { dash: [4, 4] } : {}),
+                points: {
+                  show: !reference,
+                  size: POINT_SIZE,
+                  stroke: SURFACE,
+                  width: 2,
+                  fill: color,
+                },
+              };
             }),
           ],
         },
@@ -93,7 +92,7 @@ export function LineChart({
         ] as uPlot.AlignedData,
       };
     },
-    [title, unit, series, referenceField, height],
+    [unit, series, range, plotted, height],
   );
 
   return <div className="chart" ref={host} />;
