@@ -3,6 +3,12 @@ export { ApiError } from "./transport";
 export type { ApiErrorKind, FetchImpl, Transport } from "./transport";
 export type { DeviceClient } from "./client";
 export type { SseEvent } from "./events";
+export type {
+  DeviceFormMessages,
+  DeviceFormValues,
+  ParsedDeviceForm,
+} from "./device-form";
+export type * from "./generated";
 export { assertTelemetry } from "./schema";
 export { baseUrl, endpointUrl, eventsUrl, EVENTS_PATH } from "./config";
 export { createClient } from "./client";
@@ -16,4 +22,4 @@ export {
   useTelemetry,
 } from "./queries";
 export { SseDecoder, streamTelemetry } from "./events";
-export type * from "./generated";
+export { deviceFormSchema, toDeviceConfig } from "./device-form";
