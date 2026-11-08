@@ -16,6 +16,24 @@ export const pl: DeepString<typeof en> = {
     unauthorized: "token odrzucony",
   },
 
+  history: {
+    title: "historia",
+    loading: "czytam historię…",
+    empty: "w tym okresie nic nie zapisano",
+    failed: "nie udało się odczytać historii",
+    raw: "pełna rozdzielczość",
+    aggregated: "uśrednione",
+    table: "tabela",
+    chart: "wykres",
+    changedOnly: "tylko to, co się zmieniło",
+    ranges: {
+      h1: "1 godz.",
+      h6: "6 godz.",
+      h24: "24 godz.",
+      d7: "7 dni",
+      d30: "30 dni",
+    },
+  },
   nav: {
     dashboard: "pulpit",
     lighting: "oświetlenie",

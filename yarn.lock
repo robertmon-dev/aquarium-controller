@@ -9503,6 +9503,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"uplot@npm:1.6.32":
+  version: 1.6.32
+  resolution: "uplot@npm:1.6.32"
+  checksum: 10c0/4d9cdd5f53371656cfc178ea4ae0d8c9bdbe4c98c99df847926d7e5f5a5bcb8043561219da2979fee7616aabe3619d80fee093befdfe39aae65e6621284c39b1
+  languageName: node
+  linkType: hard
+
 "uri-js@npm:^4.2.2":
   version: 4.4.1
   resolution: "uri-js@npm:4.4.1"
@@ -9725,6 +9732,7 @@ __metadata:
     sass: "npm:^1.108.1"
     typescript: "npm:~6.0.3"
     typescript-eslint: "npm:8.72.1"
+    uplot: "npm:1.6.32"
     vite: "npm:8.3.6"
     vitest: "npm:5.1.0"
     zod: "npm:4.6.7"
