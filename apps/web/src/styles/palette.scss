@@ -26,7 +26,6 @@ $tn-bg-night: #1a1b26;
 $tn-bg-storm: #24283b;
 $bg-storm-light: #24283b;
 
-
 // --- Additional Token Colors ---
 $tn-operator-col: #89ddff;
 $tn-punct-col: #9abdf5;
@@ -35,7 +34,7 @@ $tn-regex-col: #b4f9f8;
 $tn-constant-col: #ff9e64;
 
 // --- Typography ---
-$font-stack: 'JetBrains Mono', monospace;
+$font-stack: "JetBrains Mono", monospace;
 
 // --- Backgrounds ---
 $bg-app: $tn-bg-night;
@@ -66,22 +65,27 @@ $border-color: color.change($tn-slate, $alpha: 0.4);
 $glow-rim-top: inset 0 1px 0 0 color.change(#7aa2f7, $alpha: 0.15);
 $glow-rim-soft: inset 0 0 12px -4px color.change(#7aa2f7, $alpha: 0.08);
 
-$shadow-primary-sm: 0 2px 4px -1px color.change($tn-blue, $alpha: 0.4),
+$shadow-primary-sm:
+  0 2px 4px -1px color.change($tn-blue, $alpha: 0.4),
   0 4px 8px -2px color.change($tn-blue, $alpha: 0.2);
 
-$shadow-primary-md: 0 4px 6px -1px color.change($tn-blue, $alpha: 0.5),
+$shadow-primary-md:
+  0 4px 6px -1px color.change($tn-blue, $alpha: 0.5),
   0 10px 24px -5px color.change($tn-blue, $alpha: 0.3),
   $glow-rim-top;
 
-$shadow-surface-sm: 0 1px 2px 0 color.change(#000000, $alpha: 0.4),
+$shadow-surface-sm:
+  0 1px 2px 0 color.change(#000000, $alpha: 0.4),
   0 2px 4px -1px color.change(#000000, $alpha: 0.3),
   $glow-rim-top;
 
-$shadow-surface-md: 0 4px 6px -1px color.change(#000000, $alpha: 0.5),
+$shadow-surface-md:
+  0 4px 6px -1px color.change(#000000, $alpha: 0.5),
   0 12px 24px -6px color.change(#000000, $alpha: 0.4),
   $glow-rim-top;
 
-$shadow-surface-lg: 0 20px 30px -8px color.change(#000000, $alpha: 0.6),
+$shadow-surface-lg:
+  0 20px 30px -8px color.change(#000000, $alpha: 0.6),
   0 40px 60px -15px color.change(#000000, $alpha: 0.5),
   $glow-rim-soft;
 
@@ -133,3 +137,10 @@ $tn-constant-col: #ff9e64;
   --tn-green: #{$tn-green};
   --primary: #{$primary};
 }
+
+// --- Chart marks ---
+$series-1: #3987e5;
+$series-2: #d95926;
+$series-3: #199e70;
+$chart-reference: $tn-grey-muted;
+$chart-grid: #333a54;
