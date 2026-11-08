@@ -7,3 +7,4 @@ export { Alert } from "./Alert/Alert";
 export { Spinner } from "./Spinner/Spinner";
 export { StatusDot } from "./StatusDot/StatusDot";
 export { Meter } from "./Meter/Meter";
+export { SegmentedControl } from "./SegmentedControl/SegmentedControl";
