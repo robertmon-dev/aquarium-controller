@@ -4,3 +4,4 @@ export { MetricGrid } from "./MetricGrid/MetricGrid";
 export { MetricList } from "./MetricList/MetricList";
 export { ScreenMessage } from "./ScreenMessage/ScreenMessage";
 export { WaterLevelGrid } from "./WaterLevelGrid/WaterLevelGrid";
+export { Modal } from "./Modal/Modal";
