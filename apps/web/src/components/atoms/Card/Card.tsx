@@ -9,7 +9,6 @@ export const Card = forwardRef<HTMLDivElement, CardProps>((props, ref) => {
     padding = "md",
     width = "auto",
     interactive = false,
-    hover = true,
     className,
     children,
     ...rest
@@ -19,7 +18,6 @@ export const Card = forwardRef<HTMLDivElement, CardProps>((props, ref) => {
     padding,
     width,
     interactive,
-    hover,
     className,
   });
 

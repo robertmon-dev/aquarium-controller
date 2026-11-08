@@ -18,5 +18,4 @@ export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   padding?: CardPadding;
   width?: CardWidth;
   interactive?: boolean;
-  hover?: boolean;
 }
