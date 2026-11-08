@@ -113,7 +113,6 @@ export const en = {
     idle: "idle",
     healthy: "healthy",
     sensorsOff: "sensors off",
-    noDevice: "no device configured",
     noData: "no data",
     close: "close",
     cancel: "cancel",
