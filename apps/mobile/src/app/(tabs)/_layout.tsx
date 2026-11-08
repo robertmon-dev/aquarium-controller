@@ -4,9 +4,8 @@ import { Tabs } from "expo-router";
 import type { ColorValue } from "react-native";
 import { Badge } from "@/components/atoms";
 import { useDevice } from "@/components/utility/app-providers";
-import { streamBadge } from "@aquarium/view-model";
+import { streamBadge, useTelemetryStream } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
-import { useTelemetryStream } from "@/device/use-telemetry-stream";
 
 function iconColor(color: ColorValue | undefined): string {
   return typeof color === "string" ? color : colors.textMuted;

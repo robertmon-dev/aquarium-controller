@@ -64,3 +64,4 @@ export { describeProbeFailure } from "./probe-failure";
 export { useDeviceProbe } from "./use-device-probe";
 export type { DeviceProbe } from "./use-device-probe";
 
+export { useTelemetryStream } from "./use-telemetry-stream";
