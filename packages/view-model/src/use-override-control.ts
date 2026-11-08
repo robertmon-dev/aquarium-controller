@@ -7,11 +7,8 @@ import {
   type LightingProfile,
   type Transport,
 } from "@aquarium/api-client";
-import {
-  channelRequest,
-  profileRequest,
-  useCountdown,
-} from "@aquarium/view-model";
+import { channelRequest, profileRequest } from "./lighting-request";
+import { useCountdown } from "./use-countdown";
 import { useReducer, useRef } from "react";
 import {
   initialLightingState,
