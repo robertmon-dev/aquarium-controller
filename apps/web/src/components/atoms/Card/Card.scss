@@ -1,0 +1,124 @@
+@use "sass:color";
+
+.card {
+  position: relative;
+  background-color: $bg-surface;
+  border-radius: $radius-md;
+  color: $text-main;
+  border: 2px solid transparent;
+  overflow: hidden;
+
+  transition:
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+
+  &--elevated {
+    border-color: color.change($border-color, $alpha: 0.5);
+    box-shadow: 0 4px 20px color.change(#000000, $alpha: 0.25);
+  }
+
+  &--outlined {
+    background-color: transparent;
+    border: 2px solid $border-color;
+  }
+
+  &--flat {
+    background-color: $bg-sidebar;
+    border: 1px solid color.change($border-color, $alpha: 0.3);
+  }
+
+  &--contact {
+    background-color: $bg-surface;
+    border: 1px solid $border-color;
+    box-shadow: $shadow-surface-sm;
+  }
+
+  &--transparent {
+    background: color.change($bg-surface, $alpha: 0.07);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 2px solid color.change($border-color, $alpha: 0.1);
+    box-shadow: 0 4px 16px 0 color.change(#000000, $alpha: 0.15);
+  }
+
+  &--levitating {
+    background-color: $bg-surface;
+    animation: levitate 4s ease-in-out infinite;
+  }
+
+  &--levitating-transparent {
+    @extend .card--transparent;
+    animation: levitate 4s ease-in-out infinite;
+  }
+
+  &--floating {
+    background-color: $bg-surface;
+    animation: float-clean 5s ease-in-out infinite;
+  }
+
+  &--interactive {
+    cursor: pointer;
+  }
+
+  &--hover:hover {
+    transform: translateY(-4px);
+    border-color: $primary;
+    box-shadow: 0 8px 24px color.change($primary, $alpha: 0.15);
+
+    &.card--contact {
+      background-color: color.adjust($bg-surface, $lightness: 3%);
+      border-color: color.change($primary, $alpha: 0.5);
+      box-shadow: $shadow-primary-sm;
+    }
+
+    &.card--transparent {
+      background: color.change($bg-surface, $alpha: 0.12);
+      border-color: color.change($primary, $alpha: 0.4);
+      transform: translateY(-2px);
+    }
+
+    &.card--levitating,
+    &.card--levitating-transparent {
+      animation-play-state: paused;
+      transform: translateY(-10px);
+      box-shadow: 0 10px 30px color.change($primary, $alpha: 0.2);
+    }
+
+    &.card--floating {
+      transform: scale(1.02);
+      border-color: color.change($border-color, $alpha: 0.4);
+    }
+  }
+
+  &--padding-none { padding: 0; }
+  &--padding-sm { padding: $spacing-sm; }
+  &--padding-md { padding: $spacing-md; }
+  &--padding-lg { padding: $spacing-lg; }
+
+  &--width-wide {
+    width: 100%;
+    min-width: 600px;
+    max-width: 800px;
+    @media (max-width: 768px) { min-width: auto; }
+  }
+  &--width-full { width: 100%; }
+
+  @keyframes levitate {
+    0%, 100% {
+      transform: translateY(0);
+      box-shadow: 0 5px 15px color.change(#000000, $alpha: 0.3);
+    }
+    50% {
+      transform: translateY(-12px);
+      box-shadow: 0 15px 30px color.change($primary, $alpha: 0.1);
+      border-color: color.change($primary, $alpha: 0.3);
+    }
+  }
+
+  @keyframes float-clean {
+    0%, 100% { transform: translateY(0); box-shadow: 0 5px 15px color.change(#000000, $alpha: 0.3); }
+    50% { transform: translateY(-8px); box-shadow: 0 20px 25px -5px color.change(#000000, $alpha: 0.4); }
+  }
+}

@@ -1,0 +1,40 @@
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+  }
+
+  &__label {
+    color: $text-muted;
+    font-size: 0.85rem;
+  }
+
+  &__value {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+    color: $text-main;
+
+    &--error {
+      color: $danger;
+    }
+
+    &--success {
+      color: $success;
+    }
+
+    &--warning {
+      color: $warning;
+    }
+
+    &--info {
+      color: $info;
+    }
+  }
+}

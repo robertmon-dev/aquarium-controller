@@ -1,0 +1,40 @@
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &--ok {
+    background-color: $success;
+  }
+
+  &--degraded {
+    background-color: $warning;
+  }
+
+  &--off {
+    background-color: $text-muted;
+  }
+}
+
+.status-label {
+  font-size: 0.8rem;
+
+  &--ok {
+    color: $success;
+  }
+
+  &--degraded {
+    color: $warning;
+  }
+
+  &--off {
+    color: $text-muted;
+  }
+}

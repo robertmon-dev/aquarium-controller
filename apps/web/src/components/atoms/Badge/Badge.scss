@@ -1,0 +1,72 @@
+@use "sass:color";
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: $font-stack;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: $radius-sm;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+
+  &--size-sm {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+  }
+
+  &--size-md {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.03em;
+  }
+
+  &--primary {
+    color: $primary;
+    background: color.change($primary, $alpha: 0.1);
+    border-color: color.change($primary, $alpha: 0.2);
+  }
+
+  &--secondary {
+    color: $text-muted;
+    background: color.change($tn-slate, $alpha: 0.1);
+    border-color: color.change($tn-slate, $alpha: 0.2);
+  }
+
+  &--warning {
+    color: $tn-orange;
+    background: color.change($tn-orange, $alpha: 0.1);
+    border-color: color.change($tn-orange, $alpha: 0.2);
+  }
+
+  &--success {
+    color: $tn-green;
+    background: color.change($tn-green, $alpha: 0.1);
+    border-color: color.change($tn-green, $alpha: 0.2);
+  }
+
+  &--danger {
+    color: $tn-red;
+    background: color.change($tn-red, $alpha: 0.1);
+    border-color: color.change($tn-red, $alpha: 0.2);
+  }
+
+  &--info {
+    color: $tn-cyan;
+    background: color.change($tn-cyan, $alpha: 0.1);
+    border-color: color.change($tn-cyan, $alpha: 0.2);
+  }
+
+  &--outline {
+    color: $text-main;
+    background: transparent;
+    border-color: $border-color;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+}
