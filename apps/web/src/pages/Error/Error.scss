@@ -1,0 +1,147 @@
+@use "sass:color";
+
+.error-page {
+  @mixin apply-error-theme($accent-color) {
+    .error-page__icon-wrapper {
+      color: $accent-color;
+      filter: drop-shadow(0 0 20px color.change($accent-color, $alpha: 0.2));
+    }
+
+    .error-page__code {
+      background: linear-gradient(135deg, $text-main 30%, $accent-color);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: $accent-color;
+    }
+
+    .error-page__glow {
+      background: radial-gradient(
+        circle,
+        color.change($accent-color, $alpha: 0.15) 0%,
+        transparent 70%
+      );
+    }
+  }
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(100vh - 200px);
+  padding: 2rem;
+  position: relative;
+  overflow: hidden;
+  background-color: $bg-app;
+  font-family: $font-stack;
+
+  @include apply-error-theme($primary);
+
+  &--500,
+  &--offline {
+    @include apply-error-theme($danger);
+  }
+
+  &--403 {
+    @include apply-error-theme($warning);
+  }
+
+  &__container {
+    position: relative;
+    z-index: 2;
+    text-align: center;
+    max-width: 600px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $spacing-md;
+    margin-bottom: $spacing-md;
+
+    @media (max-width: 480px) {
+      flex-direction: column;
+      gap: $spacing-xs;
+    }
+  }
+
+  &__icon-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.01s ease;
+
+    svg {
+      display: block;
+    }
+  }
+
+  &__code {
+    font-size: clamp(4rem, 12vw, 8rem);
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -0.05em;
+    margin: 0;
+  }
+
+  &__text {
+    margin-bottom: $spacing-lg;
+  }
+
+  &__title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: $spacing-sm;
+    color: $text-main;
+  }
+
+  &__description {
+    font-size: 1.125rem;
+    line-height: 1.6;
+    color: $text-muted;
+    max-width: 420px;
+    margin: 0 auto;
+  }
+
+  &__actions {
+    display: flex;
+    gap: $spacing-sm;
+    width: 100%;
+    justify-content: center;
+
+    @media (max-width: 480px) {
+      flex-direction: column;
+
+      button {
+        width: 100%;
+      }
+    }
+  }
+
+  &__button-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $spacing-xs;
+    line-height: 1;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &__glow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60vw;
+    height: 60vw;
+    filter: blur(100px);
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.5;
+  }
+}
