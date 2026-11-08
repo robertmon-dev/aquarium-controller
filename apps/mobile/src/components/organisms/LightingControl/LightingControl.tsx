@@ -1,29 +1,19 @@
+import type { LightingMetricsDto, Transport } from "@aquarium/api-client";
+import { spacing } from "@aquarium/theme";
 import {
-  useClearLightingOverride,
-  useLightingOverride,
-  useSetLightingOverride,
-  type ChannelLevels,
-  type LightingMetricsDto,
-  type LightingProfile,
-  type Transport,
-} from "@aquarium/api-client";
-import { cardStyles, spacing } from "@aquarium/theme";
-import { useState } from "react";
-import { Text, View } from "react-native";
-import { Alert, Button } from "@/components/atoms";
+  formatDuration,
+  formatPercentPair,
+  useOverrideControl,
+} from "@aquarium/view-model";
+import { useEffect, useRef } from "react";
+import { Alert as RNAlert, View } from "react-native";
+import { Alert, Button, Meter } from "@/components/atoms";
 import {
   ChannelSliders,
   DurationPicker,
   MetricCard,
   ProfilePicker,
 } from "@/components/molecules";
-import {
-  channelRequest,
-  formatDuration,
-  formatPercentPair,
-  profileRequest,
-  useCountdown,
-} from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 
 export function LightingControl({
@@ -34,40 +24,77 @@ export function LightingControl({
   lighting: LightingMetricsDto;
 }) {
   const t = useT();
-  const override = useLightingOverride(transport);
-  const setOverride = useSetLightingOverride(transport);
-  const clearOverride = useClearLightingOverride(transport);
+  const control = useOverrideControl(transport, lighting);
+  const { confirming } = control.state;
 
-  const [duration, setDuration] = useState<number | null>(900);
-  const [levels, setLevels] = useState<ChannelLevels>({
-    white_pct: lighting.channel_white_pct,
-    rgb_pct: lighting.channel_rgb_pct,
+  // The handlers are deliberately not memoised, so listing them as effect
+  // dependencies would reopen the dialog on every render. A ref keeps the
+  // dependency list honest and still calls the current handler — written in an
+  // effect, because writing to a ref during render breaks the rules of React.
+  const latest = useRef(control);
+
+  useEffect(() => {
+    latest.current = control;
   });
 
-  const remaining = useCountdown(override.data?.expires_in_s ?? null, () => {
-    void override.refetch();
-  });
+  // The shared reducer carries `confirming`; on mobile the platform's own
+  // dialog answers it. Without this effect the restore button would set a flag
+  // and nothing else would ever happen.
+  useEffect(() => {
+    if (!confirming) return;
 
-  const busy = setOverride.isPending || clearOverride.isPending;
-  const active = lighting.override_active;
-
-  const selectedProfile: LightingProfile | null =
-    override.data && "profile" in override.data.target
-      ? override.data.target.profile
-      : null;
-
-  const failure = setOverride.error ?? clearOverride.error;
+    RNAlert.alert(t("lighting.restore"), t("lighting.schedulePaused"), [
+      {
+        text: t("common.cancel"),
+        style: "cancel",
+        onPress: () => latest.current.cancelRestore(),
+      },
+      { text: t("lighting.restore"), onPress: () => latest.current.restore() },
+    ]);
+  }, [confirming, t]);
 
   return (
     <View style={{ gap: spacing.sm }}>
+      {control.active ? (
+        <Alert
+          variant="warning"
+          title={t("lighting.manualActive")}
+          action={
+            <Button
+              variant="warning"
+              disabled={control.busy}
+              onPress={control.confirmRestore}
+            >
+              {t("lighting.restore")}
+            </Button>
+          }
+        >
+          {control.remaining === null
+            ? t("lighting.schedulePaused")
+            : t("lighting.manualBody", {
+                remaining: formatDuration(control.remaining),
+              })}
+        </Alert>
+      ) : null}
+
+      {control.failure ? (
+        <Alert variant="danger" title={t("lighting.refused")}>
+          {control.failure.message}
+        </Alert>
+      ) : null}
+
       <MetricCard
-        title={t("lighting.now")}
-        status={active ? "degraded" : "ok"}
-        statusLabel={active ? t("lighting.override") : t("lighting.onSchedule")}
+        title={t("lighting.currentState")}
+        status={control.active ? "degraded" : "ok"}
+        statusLabel={
+          control.active ? t("lighting.override") : t("lighting.onSchedule")
+        }
         metrics={[
           {
             label: t("lighting.profile"),
-            value: t(`profiles.${lighting.profile}`),
+            value: control.manualChannels
+              ? t("lighting.custom")
+              : t(`profiles.${lighting.profile}`),
           },
           {
             label: t("lighting.whiteRgb"),
@@ -76,63 +103,41 @@ export function LightingControl({
               lighting.channel_rgb_pct,
             ),
           },
-          ...(remaining === null
-            ? []
-            : [
-                {
-                  label: t("lighting.expiresIn"),
-                  value: formatDuration(remaining),
-                },
-              ]),
         ]}
-      />
-
-      {failure ? (
-        <Alert variant="danger" title={t("lighting.refused")}>
-          {failure.message}
-        </Alert>
-      ) : null}
+      >
+        {control.remaining !== null &&
+        control.total !== null &&
+        control.total > 0 ? (
+          <Meter
+            value={control.remaining / control.total}
+            label={t("lighting.expiresIn")}
+            valueText={formatDuration(control.remaining)}
+          />
+        ) : null}
+      </MetricCard>
 
       <MetricCard
         title={t("lighting.override")}
         status="ok"
-        statusLabel={busy ? t("lighting.sending") : t("lighting.ready")}
+        statusLabel={control.busy ? t("lighting.sending") : t("lighting.ready")}
       >
         <View style={{ gap: spacing.sm }}>
-          <DurationPicker selected={duration} onSelect={setDuration} />
+          <DurationPicker
+            selected={control.state.duration}
+            onSelect={control.setDuration}
+          />
 
           <ProfilePicker
-            selected={selectedProfile}
-            disabled={busy}
-            onSelect={(profile) =>
-              setOverride.mutate(profileRequest(profile, duration))
-            }
+            selected={control.selectedProfile}
+            disabled={control.busy}
+            onSelect={control.pickProfile}
           />
 
           <ChannelSliders
-            levels={levels}
-            disabled={busy}
-            onCommit={(next) => {
-              setLevels(next);
-              setOverride.mutate(channelRequest(next, duration));
-            }}
+            levels={control.state.levels}
+            disabled={control.busy}
+            onCommit={control.commitLevels}
           />
-
-          <Text style={cardStyles.sectionLabel}>
-            {active
-              ? t("lighting.schedulePaused")
-              : t("lighting.scheduleRunning")}
-          </Text>
-
-          <Button
-            variant="outline"
-            fullWidth
-            isLoading={clearOverride.isPending}
-            disabled={!active}
-            onPress={() => clearOverride.mutate()}
-          >
-            {t("lighting.restore")}
-          </Button>
         </View>
       </MetricCard>
     </View>
