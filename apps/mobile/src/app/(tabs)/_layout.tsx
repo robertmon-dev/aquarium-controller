@@ -3,7 +3,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { Tabs } from "expo-router";
 import type { ColorValue } from "react-native";
 import { Badge } from "@/components/atoms";
-import { ScreenMessage } from "@/components/molecules";
 import { useDevice } from "@/components/utility/app-providers";
 import { streamBadge } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
@@ -15,7 +14,7 @@ function iconColor(color: ColorValue | undefined): string {
 
 export default function TabsLayout() {
   const t = useT();
-  const { transport, loading } = useDevice();
+  const { transport } = useDevice();
   const stream = useTelemetryStream(transport);
   const badge = streamBadge(stream.status, t);
 
