@@ -15,10 +15,6 @@ export interface HistoryTableModel {
   rows: TableRow[];
 }
 
-/**
- * Newest first and capped: the table is for reading values off a window, not
- * for scrolling tens of thousands of samples. The chart carries the shape.
- */
 export function historyTableModel(
   series: HistorySeries[],
   limit = 200,

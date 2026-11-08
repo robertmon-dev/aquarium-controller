@@ -2,10 +2,6 @@ import { useMemo } from "react";
 import type { HistoryWindow } from "@/history/queries";
 import { RANGES, type RangeKey } from "./history-reducer";
 
-/**
- * The window is recomputed only when the range changes, so a re-render does not
- * silently shift `stop` and invalidate every chart's query key.
- */
 export function useHistoryWindow(rangeKey: RangeKey): HistoryWindow {
   return useMemo(() => {
     const seconds = RANGES[rangeKey];
