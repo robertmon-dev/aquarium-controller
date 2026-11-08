@@ -29,6 +29,16 @@ body {
   flex-direction: column;
 }
 
+// A row of choice buttons, used by the profile, duration, range and language
+// pickers. Declared once here: four components use the class and only two used
+// to declare it, so the other two were relying on someone else's stylesheet
+// being pulled into the bundle.
+.picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 button,
 input,
 select,

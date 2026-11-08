@@ -1,7 +1,6 @@
 import { useT } from "@aquarium/i18n/use-locale";
 import { durationChoices } from "@aquarium/view-model";
 import { Button } from "@/components/atoms";
-import "./DurationPicker.scss";
 
 export function DurationPicker({
   selected,
