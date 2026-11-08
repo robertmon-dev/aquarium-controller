@@ -2,7 +2,6 @@ import type { LightingProfile } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
 import { LIGHTING_PROFILES } from "@aquarium/view-model";
 import { Button } from "@/components/atoms";
-import "./ProfilePicker.scss";
 
 export function ProfilePicker({
   selected,
