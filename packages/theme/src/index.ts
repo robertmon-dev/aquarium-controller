@@ -1,15 +1,12 @@
 import type { TextStyle, ViewStyle } from "react-native";
 import { withAlpha } from "./color";
-
 import type {
   BadgeVariant,
   ChipVariant,
   StatusTone,
   TextDisplayState,
 } from "@aquarium/view-model/semantics";
-
 export { withAlpha } from "./color";
-
 export type {
   BadgeVariant,
   ChipVariant,
