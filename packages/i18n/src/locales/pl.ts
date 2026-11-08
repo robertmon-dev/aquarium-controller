@@ -129,6 +129,7 @@ export const pl: DeepString<typeof en> = {
     expiresIn: "wygasa za",
     manualActive: "tryb ręczny aktywny",
     custom: "własne (ręcznie)",
+    schedulePreview: "harmonogram na 24 h",
     manualBody: "harmonogram wstrzymany — pozostało {{remaining}}",
     currentState: "stan bieżący",
   },
