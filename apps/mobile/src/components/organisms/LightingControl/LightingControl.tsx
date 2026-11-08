@@ -17,12 +17,13 @@ import {
   MetricCard,
   ProfilePicker,
 } from "@/components/molecules";
-import { formatDuration, formatPercentPair } from "@/components/utility/format";
 import {
   channelRequest,
+  formatDuration,
+  formatPercentPair,
   profileRequest,
-} from "@/components/utility/lighting-request";
-import { useCountdown } from "@/components/utility/use-countdown";
+  useCountdown,
+} from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 
 export function LightingControl({

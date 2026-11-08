@@ -8,12 +8,9 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
-export type StreamState =
-  | "idle"
-  | "connecting"
-  | "live"
-  | "reconnecting"
-  | "unauthorized";
+import type { StreamState } from "@aquarium/view-model";
+
+export type { StreamState };
 
 const RETRY_MS = 3_000;
 

@@ -2,7 +2,7 @@ import { cardStyles } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import { Card, StatusDot } from "@/components/atoms";
 import { MetricList } from "@/components/molecules";
-import type { HeroCardData } from "@/components/utility/cards";
+import type { HeroCardData } from "@aquarium/view-model";
 
 export function HeroCard({ card }: { card: HeroCardData }) {
   return (

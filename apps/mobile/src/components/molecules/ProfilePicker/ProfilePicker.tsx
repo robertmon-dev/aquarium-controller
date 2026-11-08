@@ -2,7 +2,7 @@ import type { LightingProfile } from "@aquarium/api-client";
 import { cardStyles, spacing } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import { Chip } from "@/components/atoms";
-import { LIGHTING_PROFILES } from "@/components/utility/lighting-request";
+import { LIGHTING_PROFILES } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 
 export interface ProfilePickerProps {

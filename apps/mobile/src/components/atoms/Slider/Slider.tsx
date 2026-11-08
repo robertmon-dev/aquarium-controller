@@ -2,7 +2,7 @@ import { cardStyles, sliderStyles } from "@aquarium/theme";
 import CommunitySlider from "@react-native-community/slider";
 import { useState } from "react";
 import { Text, View } from "react-native";
-import { formatPercent } from "@/components/utility/format";
+import { formatPercent } from "@aquarium/view-model";
 import type { SliderProps } from "./types";
 
 export type { SliderProps } from "./types";
