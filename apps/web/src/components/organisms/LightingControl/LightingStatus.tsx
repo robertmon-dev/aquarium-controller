@@ -9,10 +9,12 @@ export function LightingStatus({
   lighting,
   remaining,
   total,
+  manualChannels,
 }: {
   lighting: LightingMetricsDto;
   remaining: number | null;
   total: number | null;
+  manualChannels: boolean;
 }) {
   const t = useT();
   const active = lighting.override_active;
@@ -30,17 +32,34 @@ export function LightingStatus({
     >
       <div className="lighting-status">
         <p className="lighting-status__profile">
-          {t(`profiles.${lighting.profile}`)}
+          {manualChannels
+            ? t("lighting.custom")
+            : t(`profiles.${lighting.profile}`)}
         </p>
 
         <div className="lighting-status__channels">
           {channels.map((channel) => (
             <div className="lighting-status__channel" key={channel.name}>
+              <span className="lighting-status__name">{channel.name}</span>
+
               <span className="lighting-status__reading">
                 <span className="lighting-status__value">{channel.pct}</span>
                 <span className="lighting-status__unit">%</span>
               </span>
-              <span className="lighting-status__name">{channel.name}</span>
+
+              <div
+                className="lighting-status__bar"
+                role="meter"
+                aria-label={channel.name}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={channel.pct}
+              >
+                <div
+                  className="lighting-status__bar-fill"
+                  style={{ width: `${channel.pct}%` }}
+                />
+              </div>
             </div>
           ))}
         </div>
