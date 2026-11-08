@@ -5,20 +5,22 @@ import {
   streamTelemetry,
   type Transport,
 } from "@aquarium/api-client";
+import {
+  initialStreamState,
+  streamReducer,
+  type StreamStatus,
+} from "@aquarium/view-model";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-
-import type { StreamState } from "@aquarium/view-model";
-
-export type { StreamState };
+import { useEffect, useReducer } from "react";
 
 const RETRY_MS = 3_000;
 
-export function useTelemetryStream(transport: Transport | null): StreamState {
+export function useTelemetryStream(transport: Transport | null): StreamStatus {
   const queryClient = useQueryClient();
-  const [state, setState] = useState<StreamState>("connecting");
+  const [state, dispatch] = useReducer(streamReducer, initialStreamState);
 
   useEffect(() => {
+    dispatch({ type: "reset" });
     if (!transport) return;
 
     const active = transport;
@@ -28,23 +30,25 @@ export function useTelemetryStream(transport: Transport | null): StreamState {
 
     async function run() {
       while (!cancelled) {
+        dispatch({ type: "connecting" });
+
         try {
           for await (const raw of streamTelemetry(active, controller.signal)) {
             if (cancelled) return;
-            setState("live");
+            dispatch({ type: "snapshot", at: Date.now() });
             publishTelemetry(queryClient, active.device, assertTelemetry(raw));
           }
           if (cancelled) return;
-          setState("reconnecting");
+          dispatch({ type: "dropped" });
         } catch (error) {
           if (cancelled) return;
 
           if (error instanceof ApiError && error.kind === "unauthorized") {
-            setState("unauthorized");
+            dispatch({ type: "unauthorized" });
             return;
           }
 
-          setState("reconnecting");
+          dispatch({ type: "dropped" });
         }
 
         await new Promise<void>((resolve) => {
@@ -62,5 +66,5 @@ export function useTelemetryStream(transport: Transport | null): StreamState {
     };
   }, [transport, queryClient]);
 
-  return transport ? state : "idle";
+  return state;
 }

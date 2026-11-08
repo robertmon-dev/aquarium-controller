@@ -16,11 +16,8 @@ function iconColor(color: ColorValue | undefined): string {
 export default function TabsLayout() {
   const t = useT();
   const { transport, loading } = useDevice();
-  const streamState = useTelemetryStream(transport);
-  const badge = streamBadge(streamState, t);
-
-  if (loading)
-    return <ScreenMessage loading>{t("stream.connecting")}</ScreenMessage>;
+  const stream = useTelemetryStream(transport);
+  const badge = streamBadge(stream.status, t);
 
   return (
     <Tabs

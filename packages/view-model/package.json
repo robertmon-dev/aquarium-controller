@@ -18,9 +18,11 @@
     "@aquarium/i18n": "workspace:*"
   },
   "peerDependencies": {
+    "@tanstack/react-query": "*",
     "react": "*"
   },
   "devDependencies": {
+    "@tanstack/react-query": "5.106.1",
     "@types/react": "~19.3.0",
     "eslint": "9.39.5",
     "react": "19.3.0",

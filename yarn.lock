@@ -76,6 +76,7 @@ __metadata:
   dependencies:
     "@aquarium/api-client": "workspace:*"
     "@aquarium/i18n": "workspace:*"
+    "@tanstack/react-query": "npm:5.106.1"
     "@types/react": "npm:~19.3.0"
     eslint: "npm:9.39.5"
     react: "npm:19.3.0"
@@ -84,6 +85,7 @@ __metadata:
     vite: "npm:8.3.6"
     vitest: "npm:5.1.0"
   peerDependencies:
+    "@tanstack/react-query": "*"
     react: "*"
   languageName: unknown
   linkType: soft

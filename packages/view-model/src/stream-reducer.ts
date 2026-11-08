@@ -1,4 +1,4 @@
-import type { StreamState } from "@aquarium/view-model";
+import type { StreamState } from "./semantics";
 
 export interface StreamStatus {
   status: StreamState;
