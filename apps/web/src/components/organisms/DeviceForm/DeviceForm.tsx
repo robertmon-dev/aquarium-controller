@@ -1,6 +1,4 @@
 import {
-  ApiError,
-  createClient,
   deviceFormSchema,
   toDeviceConfig,
   type DeviceConfig,
@@ -10,12 +8,11 @@ import {
 import { useT } from "@aquarium/i18n/use-locale";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff } from "lucide-react";
-import { useMemo, useReducer, useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Alert, Button, Card, Input } from "@/components/atoms";
 import { deviceFormMessages } from "@/device/form-messages";
-import { deviceFetch } from "@/device/transport";
-import { initialProbe, probeReducer } from "./probe-reducer";
+import { useDeviceProbe } from "./use-device-probe";
 import "./DeviceForm.scss";
 
 export function DeviceForm({
@@ -26,7 +23,7 @@ export function DeviceForm({
   onConnected: (device: DeviceConfig) => Promise<void>;
 }) {
   const t = useT();
-  const [probe, dispatch] = useReducer(probeReducer, initialProbe);
+  const probe = useDeviceProbe();
   const [showToken, setShowToken] = useState(false);
   const schema = useMemo(() => deviceFormSchema(deviceFormMessages(t)), [t]);
 
@@ -45,49 +42,20 @@ export function DeviceForm({
     },
   });
 
-  async function reach(config: DeviceConfig): Promise<string | null> {
-    try {
-      await createClient({ device: config, fetchImpl: deviceFetch }).health();
-      return null;
-    } catch (error) {
-      return error instanceof ApiError && error.kind === "unauthorized"
-        ? t("deviceForm.tokenRejected")
-        : t("deviceForm.unreachable", {
-            host: config.host,
-            port: config.port,
-          });
-    }
-  }
-
   const onTest = async () => {
     if (!(await trigger())) return;
 
     const parsed = schema.safeParse(getValues());
     if (!parsed.success) return;
 
-    dispatch({ type: "start", action: "test" });
-    const failure = await reach(toDeviceConfig(parsed.data));
-    dispatch(
-      failure ? { type: "failed", message: failure } : { type: "reachable" },
-    );
+    await probe.run("test", toDeviceConfig(parsed.data));
   };
 
   const onSave = handleSubmit(async (values) => {
     const config = toDeviceConfig(values);
 
-    dispatch({ type: "start", action: "save" });
-    const failure = await reach(config);
-
-    if (failure) {
-      dispatch({ type: "failed", message: failure });
-      return;
-    }
-
-    dispatch({ type: "reachable" });
-    await onConnected(config);
+    if (await probe.run("save", config)) await onConnected(config);
   });
-
-  const probing = probe.status === "probing";
 
   return (
     <Card variant="outlined" padding="md" width="full">
@@ -137,17 +105,17 @@ export function DeviceForm({
           {...register("token")}
         />
 
-        {probe.status === "failed" ? (
+        {probe.state.status === "failed" ? (
           <Alert
             variant="danger"
             title={t("deviceForm.cannotConnect")}
-            onClose={() => dispatch({ type: "dismiss" })}
+            onClose={probe.dismiss}
           >
-            {probe.message}
+            {probe.state.message}
           </Alert>
         ) : null}
 
-        {probe.status === "reachable" ? (
+        {probe.state.status === "reachable" ? (
           <Alert variant="success" title={t("deviceForm.reachable")}>
             {t("deviceForm.host")}: {getValues("host")}
           </Alert>
@@ -157,8 +125,8 @@ export function DeviceForm({
           <Button
             type="button"
             variant="outline"
-            isLoading={probing && probe.action === "test"}
-            disabled={probing}
+            isLoading={probe.state.status === "probing" && probe.state.action === "test"}
+            disabled={probe.probing}
             onClick={() => void onTest()}
           >
             {t("deviceForm.test")}
@@ -167,8 +135,8 @@ export function DeviceForm({
           <Button
             type="submit"
             variant="primary"
-            isLoading={probing && probe.action === "save"}
-            disabled={probing}
+            isLoading={probe.state.status === "probing" && probe.state.action === "save"}
+            disabled={probe.probing}
           >
             {t("deviceForm.submit")}
           </Button>

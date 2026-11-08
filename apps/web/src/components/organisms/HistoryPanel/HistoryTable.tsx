@@ -1,18 +1,16 @@
 import type { HistorySeries } from "@/history/csv";
+import { historyTableModel, type TableColumn } from "./table-rows";
 import "./HistoryPanel.scss";
 
-export function HistoryTable({ series }: { series: HistorySeries[] }) {
-  const times = [
-    ...new Set(series.flatMap((one) => one.points.map((p) => p.time))),
-  ]
-    .sort((a, b) => b - a)
-    .slice(0, 200);
+function cellText(value: number | undefined, column: TableColumn): string {
+  if (value === undefined) return "—";
+  if (column.kind === "boolean") return value === 1 ? "on" : "off";
 
-  const byField = series.map((one) => ({
-    field: one.field,
-    kind: one.kind,
-    lookup: new Map(one.points.map((p) => [p.time, p.value])),
-  }));
+  return value.toFixed(2);
+}
+
+export function HistoryTable({ series }: { series: HistorySeries[] }) {
+  const { columns, rows } = historyTableModel(series);
 
   return (
     <div className="history-table">
@@ -20,31 +18,24 @@ export function HistoryTable({ series }: { series: HistorySeries[] }) {
         <thead>
           <tr>
             <th scope="col">time</th>
-            {byField.map((one) => (
-              <th scope="col" key={one.field}>
-                {one.field}
+            {columns.map((column) => (
+              <th scope="col" key={column.field}>
+                {column.field}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {times.map((time) => (
-            <tr key={time}>
-              <th scope="row">{new Date(time * 1000).toLocaleTimeString()}</th>
-              {byField.map((one) => {
-                const value = one.lookup.get(time);
+          {rows.map((row) => (
+            <tr key={row.time}>
+              <th scope="row">
+                {new Date(row.time * 1000).toLocaleTimeString()}
+              </th>
+              {row.cells.map((value, index) => {
+                const column = columns[index];
+                if (!column) return null;
 
-                return (
-                  <td key={one.field}>
-                    {value === undefined
-                      ? "—"
-                      : one.kind === "boolean"
-                        ? value === 1
-                          ? "on"
-                          : "off"
-                        : value.toFixed(2)}
-                  </td>
-                );
+                return <td key={column.field}>{cellText(value, column)}</td>;
               })}
             </tr>
           ))}

@@ -1,31 +1,22 @@
 import { useT } from "@aquarium/i18n/use-locale";
-import { useMemo, useReducer } from "react";
+import { useReducer } from "react";
 import { Alert, Button } from "@/components/atoms";
 import { LineChart } from "@/components/atoms/Chart/LineChart";
 import { StateStrip } from "@/components/atoms/Chart/StateStrip";
 import { ScreenMessage } from "@/components/molecules";
 import { TimeRangePicker } from "@/components/molecules/TimeRangePicker/TimeRangePicker";
 import { useHistory, type HistoryWindow } from "@/history/queries";
+import { useHistoryWindow } from "./use-history-window";
 import { CHARTS, type ChartSpec } from "@/history/series";
 import { HistoryTable } from "./HistoryTable";
-import { historyReducer, initialHistoryState, RANGES } from "./history-reducer";
+import { historyReducer, initialHistoryState } from "./history-reducer";
 import "./HistoryPanel.scss";
 
 export function HistoryPanel() {
   const t = useT();
   const [state, dispatch] = useReducer(historyReducer, initialHistoryState);
 
-  const window = useMemo<HistoryWindow>(() => {
-    const seconds = RANGES[state.rangeKey];
-    const stop = new Date();
-    const start = new Date(stop.getTime() - seconds * 1000);
-
-    return {
-      start: start.toISOString(),
-      stop: stop.toISOString(),
-      seconds,
-    };
-  }, [state.rangeKey]);
+  const window = useHistoryWindow(state.rangeKey);
 
   return (
     <>
