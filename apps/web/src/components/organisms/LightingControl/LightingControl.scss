@@ -9,6 +9,10 @@
   }
 }
 
+.lighting__preview {
+  grid-column: 1 / -1;
+}
+
 .lighting-status {
   display: flex;
   flex-direction: column;

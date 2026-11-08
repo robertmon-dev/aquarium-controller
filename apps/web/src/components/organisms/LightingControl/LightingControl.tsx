@@ -1,11 +1,17 @@
-import type { LightingMetricsDto, Transport } from "@aquarium/api-client";
+import {
+  useLightingSchedule,
+  type LightingMetricsDto,
+  type Transport,
+} from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
 import { formatDuration } from "@aquarium/view-model";
 import { RotateCcw } from "lucide-react";
 import { Alert, Button } from "@/components/atoms";
 import { ConfirmDialog } from "@/components/molecules";
 import { LightingStatus } from "./LightingStatus";
+import { SchedulePreview } from "./SchedulePreview";
 import { OverrideControls } from "./OverrideControls";
+import { useLocalClock } from "./use-local-clock";
 import { useOverrideControl } from "./use-override-control";
 import "./LightingControl.scss";
 
@@ -18,6 +24,8 @@ export function LightingControl({
 }) {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
+  const clock = useLocalClock();
+  const schedule = useLightingSchedule(transport, clock.month);
 
   return (
     <>
@@ -68,6 +76,15 @@ export function LightingControl({
           onChannel={control.setChannel}
           onCommitChannels={control.commitChannels}
         />
+
+        {schedule.data ? (
+          <div className="lighting__preview">
+            <SchedulePreview
+              schedule={schedule.data}
+              nowMinute={clock.minuteOfDay}
+            />
+          </div>
+        ) : null}
       </div>
 
       <ConfirmDialog
