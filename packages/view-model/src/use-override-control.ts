@@ -9,7 +9,7 @@ import {
 } from "@aquarium/api-client";
 import { channelRequest, profileRequest } from "./lighting-request";
 import { useCountdown } from "./use-countdown";
-import { useReducer, useRef } from "react";
+import { useEffect, useReducer, useState } from "react";
 import {
   initialLightingState,
   lightingReducer,
@@ -17,13 +17,20 @@ import {
 } from "./lighting-reducer";
 
 function useCountdownScale(remaining: number | null): number | null {
-  const total = useRef<number | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
 
-  if (remaining === null) total.current = null;
-  else if (total.current === null || remaining > total.current)
-    total.current = remaining;
+  useEffect(() => {
+    if (remaining === null) {
+      setTotal(null);
+      return;
+    }
 
-  return total.current;
+    setTotal((current) =>
+      current === null || remaining > current ? remaining : current,
+    );
+  }, [remaining]);
+
+  return total;
 }
 
 export interface OverrideControl {
@@ -39,6 +46,13 @@ export interface OverrideControl {
   pickProfile: (profile: LightingProfile) => void;
   setChannel: (channel: keyof ChannelLevels, value: number) => void;
   commitChannels: () => void;
+  /**
+   * Sets both channels and sends them in one call. React Native's slider
+   * reports only a finished value, so there is no drag to accumulate — and
+   * committing from the argument rather than from reducer state avoids reading
+   * a `dirty` flag that the same handler just set.
+   */
+  commitLevels: (levels: ChannelLevels) => void;
   confirmRestore: () => void;
   cancelRestore: () => void;
   restore: () => void;
@@ -112,6 +126,20 @@ export function useOverrideControl(
         channelRequest(state.levels, state.duration),
         committed,
       );
+    },
+
+    commitLevels: (levels) => {
+      dispatch({
+        type: "setChannel",
+        channel: "white_pct",
+        value: levels.white_pct,
+      });
+      dispatch({
+        type: "setChannel",
+        channel: "rgb_pct",
+        value: levels.rgb_pct,
+      });
+      setOverride.mutate(channelRequest(levels, state.duration), committed);
     },
 
     confirmRestore: () => dispatch({ type: "confirmRestore" }),
