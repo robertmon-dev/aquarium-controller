@@ -5,7 +5,7 @@ import type { ColorValue } from "react-native";
 import { Badge } from "@/components/atoms";
 import { ScreenMessage } from "@/components/molecules";
 import { useDevice } from "@/components/utility/app-providers";
-import { streamBadge } from "@/components/utility/stream-badge";
+import { streamBadge } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 import { useTelemetryStream } from "@/device/use-telemetry-stream";
 
