@@ -10,8 +10,8 @@ import {
   lightingCard,
   systemCard,
   temperatureCard,
-} from "@/components/utility/cards";
-import { waterLevelCard } from "@/components/utility/water-level";
+  waterLevelCard,
+} from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 import { HeroCard } from "./HeroCard";
 

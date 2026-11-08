@@ -11,6 +11,7 @@ import { Alert, Button, Card } from "@/components/atoms";
 import { FormField } from "@/components/molecules";
 import { spacing } from "@aquarium/theme";
 import {
+  deviceFormMessages,
   deviceFormSchema,
   toDeviceConfig,
   type DeviceFormValues,
@@ -28,7 +29,7 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
   const t = useT();
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probing, setProbing] = useState(false);
-  const schema = useMemo(() => deviceFormSchema(t), [t]);
+  const schema = useMemo(() => deviceFormSchema(deviceFormMessages(t)), [t]);
 
   const { control, handleSubmit } = useForm<
     DeviceFormValues,

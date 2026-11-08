@@ -1,11 +1,7 @@
 import type { StyleProp, ViewStyle } from "react-native";
-import type { TextDisplayState } from "@aquarium/theme";
+import type { Metric } from "@aquarium/view-model";
 
-export type Metric = {
-  label: string;
-  value: string;
-  state?: TextDisplayState;
-};
+export type { Metric };
 
 export interface MetricListProps {
   metrics: Metric[];

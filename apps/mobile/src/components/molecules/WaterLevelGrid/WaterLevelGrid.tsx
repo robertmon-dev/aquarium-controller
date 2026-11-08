@@ -1,7 +1,7 @@
 import { cardStyles } from "@aquarium/theme";
 import { View } from "react-native";
 import { Chip } from "@/components/atoms";
-import type { WaterLevelChip } from "@/components/utility/water-level";
+import type { WaterLevelChip } from "@aquarium/view-model";
 
 export interface WaterLevelGridProps {
   chips: WaterLevelChip[];
