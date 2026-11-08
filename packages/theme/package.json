@@ -12,6 +12,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@aquarium/view-model": "workspace:*"
+  },
   "peerDependencies": {
     "react-native": "*"
   },

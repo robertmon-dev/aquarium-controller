@@ -1,7 +1,21 @@
 import type { TextStyle, ViewStyle } from "react-native";
 import { withAlpha } from "./color";
 
+import type {
+  BadgeVariant,
+  ChipVariant,
+  StatusTone,
+  TextDisplayState,
+} from "@aquarium/view-model/semantics";
+
 export { withAlpha } from "./color";
+
+export type {
+  BadgeVariant,
+  ChipVariant,
+  StatusTone,
+  TextDisplayState,
+} from "@aquarium/view-model/semantics";
 
 export const palette = {
   red: "#f7768e",
@@ -517,15 +531,6 @@ export const alertCloseStyle: TextStyle = {
   fontSize: typography.size.lg,
 };
 
-export type BadgeVariant =
-  | "primary"
-  | "secondary"
-  | "warning"
-  | "success"
-  | "danger"
-  | "info"
-  | "outline";
-
 export type BadgeSize = "sm" | "md";
 
 const BADGE_VARIANTS: Record<
@@ -616,13 +621,6 @@ export function badgeLabelStyle(
   };
 }
 
-export type TextDisplayState =
-  | "default"
-  | "error"
-  | "success"
-  | "warning"
-  | "info";
-
 const TEXT_DISPLAY_COLOR: Record<TextDisplayState, string> = {
   default: colors.textMain,
   error: colors.danger,
@@ -647,8 +645,6 @@ export const textDisplayHelperStyle: TextStyle = {
   color: colors.textMuted,
   fontSize: typography.size.sm,
 };
-
-export type ChipVariant = "default" | "wet" | "dry" | "faulty";
 
 function tagSurface(accent: string): ViewStyle {
   return {
@@ -721,8 +717,6 @@ export function chipLabelStyle(
     ...(selected ? { color: colors.primary } : {}),
   };
 }
-
-export type StatusTone = "ok" | "degraded" | "off";
 
 const STATUS_COLOR: Record<StatusTone, string> = {
   ok: colors.success,
