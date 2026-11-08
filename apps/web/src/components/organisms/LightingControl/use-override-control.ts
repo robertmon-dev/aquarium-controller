@@ -7,7 +7,11 @@ import {
   type LightingProfile,
   type Transport,
 } from "@aquarium/api-client";
-import { channelRequest, profileRequest, useCountdown } from "@aquarium/view-model";
+import {
+  channelRequest,
+  profileRequest,
+  useCountdown,
+} from "@aquarium/view-model";
 import { useReducer, useRef } from "react";
 import {
   initialLightingState,
@@ -15,12 +19,6 @@ import {
   type LightingState,
 } from "./lighting-reducer";
 
-/**
- * The device reports only what is left of an override, never the duration it
- * started with, so the highest value seen during this one is the denominator
- * for the countdown bar. It resets with the override, which is what makes a
- * reload start a fresh scale.
- */
 function useCountdownScale(remaining: number | null): number | null {
   const total = useRef<number | null>(null);
 
@@ -38,7 +36,6 @@ export interface OverrideControl {
   busy: boolean;
   active: boolean;
   failure: Error | null;
-  /** True while the override drives the channels rather than a profile. */
   manualChannels: boolean;
   selectedProfile: LightingProfile | null;
   setDuration: (seconds: number | null) => void;
@@ -80,8 +77,6 @@ export function useOverrideControl(
 
   const committed = { onSuccess: () => dispatch({ type: "committed" }) };
 
-  // The device keeps naming a scheduled profile even when an override drives
-  // the channels directly, so "manual" comes from the override target.
   const manualChannels =
     lighting.override_active &&
     ((state.mode === "channels" && state.dirty) ||
@@ -94,9 +89,6 @@ export function useOverrideControl(
         ? override.data.target.profile
         : null;
 
-  // None of the handlers below are memoised: half of them close over `state`,
-  // so a stable identity would hand back a stale duration or dirty flag, and
-  // nothing downstream is memoised to benefit from it anyway.
   return {
     state,
     remaining,

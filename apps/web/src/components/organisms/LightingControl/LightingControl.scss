@@ -4,8 +4,6 @@
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   max-width: 64rem;
 
-  // Both panels share the row height, so the two cards end level however much
-  // the override controls outgrow the status readout.
   > * {
     height: 100%;
   }
