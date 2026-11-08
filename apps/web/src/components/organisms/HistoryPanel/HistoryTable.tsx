@@ -1,13 +1,7 @@
 import type { HistorySeries } from "@/history/csv";
-import { historyTableModel, type TableColumn } from "./table-rows";
+import { formatSample } from "./readings";
+import { historyTableModel } from "./table-rows";
 import "./HistoryPanel.scss";
-
-function cellText(value: number | undefined, column: TableColumn): string {
-  if (value === undefined) return "—";
-  if (column.kind === "boolean") return value === 1 ? "on" : "off";
-
-  return value.toFixed(2);
-}
 
 export function HistoryTable({ series }: { series: HistorySeries[] }) {
   const { columns, rows } = historyTableModel(series);
@@ -35,7 +29,9 @@ export function HistoryTable({ series }: { series: HistorySeries[] }) {
                 const column = columns[index];
                 if (!column) return null;
 
-                return <td key={column.field}>{cellText(value, column)}</td>;
+                return (
+                  <td key={column.field}>{formatSample(value, column.kind)}</td>
+                );
               })}
             </tr>
           ))}
