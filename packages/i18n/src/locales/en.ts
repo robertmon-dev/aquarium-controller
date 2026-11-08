@@ -13,6 +13,24 @@ export const en = {
     unauthorized: "token rejected",
   },
 
+  history: {
+    title: "history",
+    loading: "reading history…",
+    empty: "nothing recorded in this window",
+    failed: "could not read the history",
+    raw: "raw resolution",
+    aggregated: "averaged",
+    table: "table",
+    chart: "chart",
+    changedOnly: "only what changed",
+    ranges: {
+      h1: "1h",
+      h6: "6h",
+      h24: "24h",
+      d7: "7d",
+      d30: "30d",
+    },
+  },
   nav: {
     dashboard: "dashboard",
     lighting: "lighting",
