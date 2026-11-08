@@ -249,6 +249,16 @@ pub struct WaterLevelMetricsDto {
     pub sensors_healthy: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct LightingScheduleDto {
+    pub month: u8,
+    pub step_minutes: u16,
+    pub white_pct: Vec<u8>,
+    pub rgb_pct: Vec<u8>,
+}
+
 impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
     fn from(snapshot: &WaterLevelSnapshot) -> Self {
         let entry = |role: WaterLevelRole| {

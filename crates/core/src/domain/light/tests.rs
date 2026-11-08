@@ -210,3 +210,69 @@ fn an_override_wins_even_when_the_schedule_says_off() {
     assert_eq!(resolved.channel_rgb_pct, MOONLIGHT_RGB_PCT);
     assert!(resolved.override_active);
 }
+
+const DECEMBER: u8 = 12;
+const STEP: u16 = 5;
+
+#[test]
+fn a_preview_covers_a_whole_day_at_the_requested_step() {
+    let preview = LightingSchedule::new().preview(JUNE, STEP);
+
+    assert_eq!(preview.month, JUNE);
+    assert_eq!(preview.step_minutes, STEP);
+    assert_eq!(preview.white_pct.len(), (1440 / STEP) as usize);
+    assert_eq!(preview.rgb_pct.len(), (1440 / STEP) as usize);
+}
+
+#[test]
+fn a_preview_agrees_with_evaluate_at_every_sample() {
+    let schedule = LightingSchedule::new();
+    let preview = schedule.preview(JUNE, STEP);
+
+    for (index, white) in preview.white_pct.iter().enumerate() {
+        let minute = index as u16 * STEP;
+        let expected = schedule.evaluate(minute, JUNE);
+
+        assert_eq!(
+            *white, expected.channel_white_pct,
+            "white disagrees at minute {minute}"
+        );
+        assert_eq!(
+            preview.rgb_pct[index], expected.channel_rgb_pct,
+            "rgb disagrees at minute {minute}"
+        );
+    }
+}
+
+#[test]
+fn a_summer_preview_is_lit_for_longer_than_a_winter_one() {
+    let schedule = LightingSchedule::new();
+
+    let lit = |month: u8| {
+        schedule
+            .preview(month, STEP)
+            .white_pct
+            .iter()
+            .filter(|pct| **pct > 0)
+            .count()
+    };
+
+    assert!(
+        lit(JUNE) > lit(DECEMBER),
+        "june should be lit longer than december: {} vs {}",
+        lit(JUNE),
+        lit(DECEMBER)
+    );
+}
+
+#[test]
+fn a_step_that_does_not_divide_the_day_is_refused() {
+    assert!(LightingSchedule::new().try_preview(JUNE, 7).is_none());
+    assert!(LightingSchedule::new().try_preview(JUNE, 0).is_none());
+}
+
+#[test]
+fn a_month_outside_the_calendar_is_refused() {
+    assert!(LightingSchedule::new().try_preview(0, STEP).is_none());
+    assert!(LightingSchedule::new().try_preview(13, STEP).is_none());
+}
