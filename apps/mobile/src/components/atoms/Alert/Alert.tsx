@@ -15,6 +15,7 @@ export function Alert({
   title,
   children,
   onClose,
+  action,
   style,
 }: AlertProps) {
   return (
@@ -27,6 +28,8 @@ export function Alert({
           children
         )}
       </View>
+
+      {action ? <View>{action}</View> : null}
 
       {onClose ? (
         <Pressable accessibilityRole="button" onPress={onClose} hitSlop={8}>

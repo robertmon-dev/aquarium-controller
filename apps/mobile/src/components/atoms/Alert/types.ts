@@ -9,5 +9,6 @@ export interface AlertProps {
   title?: string;
   children: ReactNode;
   onClose?: () => void;
+  action?: ReactNode;
   style?: StyleProp<ViewStyle>;
 }
