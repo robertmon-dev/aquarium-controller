@@ -15,7 +15,7 @@ export const ConfirmDialog = ({
   onConfirm,
   onCancel,
   isLoading,
-  variant = "primary",
+  variant = "success",
 }: ConfirmDialogProps) => {
   const t = useT();
 
