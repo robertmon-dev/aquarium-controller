@@ -6,16 +6,15 @@ import { RefreshControl, ScrollView } from "react-native";
 import { Alert } from "@/components/atoms";
 import { ScreenMessage } from "@/components/molecules";
 import { TelemetryDashboard } from "@/components/organisms";
-import { useDevice } from "@/components/utility/app-providers";
+import { DeviceGate } from "@/components/utility/DeviceGate";
 import { useT } from "@/i18n/use-locale";
 
 export function TelemetryPage() {
-  const t = useT();
-  const { transport } = useDevice();
-
-  if (!transport) return <ScreenMessage>{t("common.noDevice")}</ScreenMessage>;
-
-  return <TelemetryContent transport={transport} />;
+  return (
+    <DeviceGate>
+      {(transport) => <TelemetryContent transport={transport} />}
+    </DeviceGate>
+  );
 }
 
 function TelemetryContent({ transport }: { transport: Transport }) {

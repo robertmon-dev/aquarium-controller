@@ -3,16 +3,15 @@ import { screenStyles, spacing } from "@aquarium/theme";
 import { ScrollView } from "react-native";
 import { ScreenMessage } from "@/components/molecules";
 import { LightingControl } from "@/components/organisms";
-import { useDevice } from "@/components/utility/app-providers";
+import { DeviceGate } from "@/components/utility/DeviceGate";
 import { useT } from "@/i18n/use-locale";
 
 export function LightingPage() {
-  const t = useT();
-  const { transport } = useDevice();
-
-  if (!transport) return <ScreenMessage>{t("common.noDevice")}</ScreenMessage>;
-
-  return <LightingContent transport={transport} />;
+  return (
+    <DeviceGate>
+      {(transport) => <LightingContent transport={transport} />}
+    </DeviceGate>
+  );
 }
 
 function LightingContent({ transport }: { transport: Transport }) {

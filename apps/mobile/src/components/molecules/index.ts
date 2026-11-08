@@ -15,3 +15,4 @@ export { DurationPicker } from "./DurationPicker/DurationPicker";
 export { MetricCard } from "./MetricCard/MetricCard";
 export { ProfilePicker } from "./ProfilePicker/ProfilePicker";
 export { WaterLevelGrid } from "./WaterLevelGrid/WaterLevelGrid";
+export { DeviceNotice } from "./DeviceNotice/DeviceNotice";
