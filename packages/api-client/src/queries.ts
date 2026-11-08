@@ -46,8 +46,6 @@ export function useLightingOverride(
   });
 }
 
-// The curve for a month does not change, so this is fetched once a session
-// rather than polled.
 export function useLightingSchedule(
   transport: Transport,
   month: number,
