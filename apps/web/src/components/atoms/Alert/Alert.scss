@@ -26,6 +26,14 @@
     padding: $spacing-xs 0;
   }
 
+  // A direct child of the centred flex row, so the action sits on the vertical
+  // middle of the whole alert rather than under the title.
+  &__action {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+
   &__title {
     font-size: 0.85rem;
     font-weight: 700;
