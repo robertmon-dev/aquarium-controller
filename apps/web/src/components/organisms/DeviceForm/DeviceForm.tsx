@@ -6,13 +6,14 @@ import {
   type ParsedDeviceForm,
 } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
+import { useDeviceProbe } from "@aquarium/view-model";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Eye, EyeOff } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Alert, Button, Card, Input } from "@/components/atoms";
 import { deviceFormMessages } from "@/device/form-messages";
-import { useDeviceProbe } from "./use-device-probe";
+import { deviceFetch } from "@/device/transport";
 import "./DeviceForm.scss";
 
 export function DeviceForm({
@@ -23,7 +24,7 @@ export function DeviceForm({
   onConnected: (device: DeviceConfig) => Promise<void>;
 }) {
   const t = useT();
-  const probe = useDeviceProbe();
+  const probe = useDeviceProbe(deviceFetch);
   const [showToken, setShowToken] = useState(false);
   const schema = useMemo(() => deviceFormSchema(deviceFormMessages(t)), [t]);
 

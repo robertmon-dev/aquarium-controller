@@ -1,7 +1,10 @@
-import { createClient, type DeviceConfig } from "@aquarium/api-client";
+import {
+  createClient,
+  type DeviceConfig,
+  type FetchImpl,
+} from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
 import { useCallback, useReducer } from "react";
-import { deviceFetch } from "@/device/transport";
 import { describeProbeFailure } from "./probe-failure";
 import {
   initialProbe,
@@ -17,7 +20,12 @@ export interface DeviceProbe {
   dismiss: () => void;
 }
 
-export function useDeviceProbe(): DeviceProbe {
+/**
+ * `fetchImpl` is injected rather than reached for: the web app uses
+ * `globalThis.fetch` and the mobile app uses `expo/fetch`, so a global here
+ * would quietly bypass what one of them chose.
+ */
+export function useDeviceProbe(fetchImpl: FetchImpl): DeviceProbe {
   const t = useT();
   const [state, dispatch] = useReducer(probeReducer, initialProbe);
 
@@ -26,7 +34,7 @@ export function useDeviceProbe(): DeviceProbe {
       dispatch({ type: "start", action });
 
       try {
-        await createClient({ device, fetchImpl: deviceFetch }).health();
+        await createClient({ device, fetchImpl }).health();
         dispatch({ type: "reachable" });
         return true;
       } catch (error) {
@@ -37,7 +45,7 @@ export function useDeviceProbe(): DeviceProbe {
         return false;
       }
     },
-    [t],
+    [t, fetchImpl],
   );
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
