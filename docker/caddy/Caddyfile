@@ -1,0 +1,38 @@
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	encode gzip
+
+	@influx_query {
+		path /influx/api/v2/query
+		method POST
+	}
+	handle @influx_query {
+		uri strip_prefix /influx
+		reverse_proxy influxdb:8086 {
+			header_up Authorization "Token {$INFLUX_READ_TOKEN}"
+		}
+	}
+
+	@influx_ping {
+		path /influx/ping
+		method GET
+	}
+	handle @influx_ping {
+		uri strip_prefix /influx
+		reverse_proxy influxdb:8086
+	}
+
+	handle /influx/* {
+		respond "not proxied" 404
+	}
+
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
+}
