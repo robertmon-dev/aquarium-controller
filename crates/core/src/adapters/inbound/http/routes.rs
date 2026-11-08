@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use picoserve::extract::{FromRef, State};
-use picoserve::routing::{get, PathRouter};
+use picoserve::routing::{get, parse_path_segment, PathRouter};
 use picoserve::Router;
 
 use crate::adapters::inbound::http::api::ApiLayer;
@@ -53,6 +53,10 @@ where
             get(handlers::lighting::current::<L>)
                 .put(handlers::lighting::set::<L>)
                 .delete(handlers::lighting::clear::<L>),
+        )
+        .route(
+            ("/api/lighting/schedule", parse_path_segment::<u8>()),
+            get(handlers::lighting::schedule),
         )
         .layer(ApiLayer::new(token, cors_origin))
         .with_state(AppState {

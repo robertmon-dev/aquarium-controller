@@ -3,8 +3,11 @@ use picoserve::response::{Json, NoContent, StatusCode};
 use serde::Deserialize;
 
 use crate::adapters::inbound::http::routes::LightingState;
-use crate::domain::light::{LightingOverride, LightingTarget};
+use crate::domain::light::{LightingOverride, LightingSchedule, LightingTarget};
+use crate::domain::metrics::LightingScheduleDto;
 use crate::ports::inbound::LightingControl;
+
+const PREVIEW_STEP_MINUTES: u16 = 5;
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -60,4 +63,13 @@ pub async fn clear<L: LightingControl>(
     tracing::info!("DELETE /api/lighting/override");
     lighting.clear_override();
     (StatusCode::NO_CONTENT, NoContent)
+}
+
+pub async fn schedule(month: u8) -> Result<Json<LightingScheduleDto>, (StatusCode, &'static str)> {
+    tracing::info!(month, "GET /api/lighting/schedule");
+
+    LightingSchedule::new()
+        .try_preview(month, PREVIEW_STEP_MINUTES)
+        .map(Json)
+        .ok_or((StatusCode::BAD_REQUEST, "month must be 1-12\n"))
 }
