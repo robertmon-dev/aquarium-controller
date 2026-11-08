@@ -66,25 +66,25 @@ export function LightingControl({
   return (
     <>
       {active ? (
-        <Alert variant="warning" title={t("lighting.manualActive")}>
-          <div className="lighting-banner">
-            <span>
-              {remaining === null
-                ? t("lighting.schedulePaused")
-                : t("lighting.manualBody", {
-                    remaining: formatDuration(remaining),
-                  })}
-            </span>
-
+        <Alert
+          variant="warning"
+          title={t("lighting.manualActive")}
+          action={
             <Button
-              variant="outline"
+              variant="warning"
               leftIcon={<RotateCcw size={14} />}
               disabled={busy}
               onClick={() => dispatch({ type: "confirmRestore" })}
             >
               {t("lighting.restore")}
             </Button>
-          </div>
+          }
+        >
+          {remaining === null
+            ? t("lighting.schedulePaused")
+            : t("lighting.manualBody", {
+                remaining: formatDuration(remaining),
+              })}
         </Alert>
       ) : null}
 
@@ -125,28 +125,28 @@ export function LightingControl({
         />
       </div>
 
-      {state.confirming ? (
-        <ConfirmDialog
-          message={t("lighting.schedulePaused")}
-          confirmText={t("lighting.restore")}
-          cancelText={t("common.cancel")}
-          variant="primary"
-          isLoading={clearOverride.isPending}
-          onCancel={() => dispatch({ type: "cancelRestore" })}
-          onConfirm={() =>
-            clearOverride.mutate(undefined, {
-              onSuccess: () =>
-                dispatch({
-                  type: "restore",
-                  levels: {
-                    white_pct: lighting.channel_white_pct,
-                    rgb_pct: lighting.channel_rgb_pct,
-                  },
-                }),
-            })
-          }
-        />
-      ) : null}
+      <ConfirmDialog
+        open={state.confirming}
+        title={t("lighting.restore")}
+        message={t("lighting.schedulePaused")}
+        confirmText={t("lighting.restore")}
+        cancelText={t("common.cancel")}
+        variant="primary"
+        isLoading={clearOverride.isPending}
+        onCancel={() => dispatch({ type: "cancelRestore" })}
+        onConfirm={() =>
+          clearOverride.mutate(undefined, {
+            onSuccess: () =>
+              dispatch({
+                type: "restore",
+                levels: {
+                  white_pct: lighting.channel_white_pct,
+                  rgb_pct: lighting.channel_rgb_pct,
+                },
+              }),
+          })
+        }
+      />
     </>
   );
 }
