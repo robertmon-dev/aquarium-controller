@@ -1,0 +1,19 @@
+.chart {
+  width: 100%;
+  min-width: 0;
+}
+
+.u-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: $text-main;
+}
+
+.u-legend {
+  font-size: 0.78rem;
+  color: $text-muted;
+}
+
+.u-over {
+  cursor: crosshair;
+}
