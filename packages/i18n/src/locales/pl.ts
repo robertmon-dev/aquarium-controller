@@ -56,7 +56,20 @@ export const pl: DeepString<typeof en> = {
     appName: "akwarium",
   },
 
+  deviceInfo: {
+    title: "informacje o urządzeniu",
+    status: "status",
+    address: "adres",
+    connected: "połączono",
+    offline: "brak odpowiedzi",
+    checking: "sprawdzam…",
+  },
   deviceForm: {
+    title: "połączenie z urządzeniem",
+    test: "testuj",
+    reachable: "urządzenie odpowiedziało",
+    showToken: "pokaż token",
+    hideToken: "ukryj token",
     host: "adres",
     port: "port",
     token: "token",

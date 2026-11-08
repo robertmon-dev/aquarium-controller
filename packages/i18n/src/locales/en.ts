@@ -53,7 +53,20 @@ export const en = {
     appName: "aquarium",
   },
 
+  deviceInfo: {
+    title: "device information",
+    status: "status",
+    address: "address",
+    connected: "connected",
+    offline: "no answer",
+    checking: "checking…",
+  },
   deviceForm: {
+    title: "device connection",
+    test: "test",
+    reachable: "the device answered",
+    showToken: "show token",
+    hideToken: "hide token",
     host: "host",
     port: "port",
     token: "token",
