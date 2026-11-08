@@ -108,6 +108,7 @@ export const en = {
 
   lighting: {
     loading: "reading lighting…",
+    now: "now",
     override: "override",
     onSchedule: "on schedule",
     sending: "sending…",
@@ -126,7 +127,6 @@ export const en = {
     manualActive: "manual mode active",
     custom: "custom (manual)",
     schedulePreview: "24h schedule preview",
-    now: "now",
     manualBody: "the schedule is paused — {{remaining}} left",
     currentState: "current state",
   },
