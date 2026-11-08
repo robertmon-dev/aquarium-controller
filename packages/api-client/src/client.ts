@@ -1,5 +1,6 @@
 import type {
   LightingOverride,
+  LightingScheduleDto,
   SetOverrideRequest,
   SystemHealthDto,
   TankTelemetryDto,
@@ -12,6 +13,7 @@ export interface DeviceClient {
   lightingOverride: () => Promise<LightingOverride | null>;
   setLightingOverride: (body: SetOverrideRequest) => Promise<LightingOverride>;
   clearLightingOverride: () => Promise<void>;
+  lightingSchedule: (month: number) => Promise<LightingScheduleDto>;
 }
 
 export function createClient(transport: Transport): DeviceClient {
@@ -36,5 +38,11 @@ export function createClient(transport: Transport): DeviceClient {
 
     clearLightingOverride: () =>
       request<void>(transport, "/api/lighting/override", { method: "DELETE" }),
+
+    lightingSchedule: (month) =>
+      request<LightingScheduleDto>(
+        transport,
+        `/api/lighting/schedule/${month}`,
+      ),
   };
 }

@@ -18,6 +18,7 @@ export {
   useClearLightingOverride,
   useHealth,
   useLightingOverride,
+  useLightingSchedule,
   useSetLightingOverride,
   useTelemetry,
 } from "./queries";
