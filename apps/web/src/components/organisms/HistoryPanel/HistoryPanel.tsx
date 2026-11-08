@@ -26,7 +26,6 @@ import "./HistoryPanel.scss";
 const RANGE_KEYS = Object.keys(RANGES) as RangeKey[];
 const VIEWS: HistoryView[] = ["chart", "table"];
 
-/** The catalogue carries a label for every chart id and field in the registry. */
 function label(t: Translate, path: string): string {
   return t(path as TranslationKey);
 }

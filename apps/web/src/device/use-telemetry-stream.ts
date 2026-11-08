@@ -11,7 +11,7 @@ import {
   initialStreamState,
   streamReducer,
   type StreamStatus,
-} from "./stream-reducer";
+} from "@aquarium/view-model";
 
 const RETRY_MS = 3_000;
 
