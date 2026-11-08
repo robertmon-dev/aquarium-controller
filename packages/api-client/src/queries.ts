@@ -10,6 +10,7 @@ import { createClient } from "./client";
 import type { DeviceConfig } from "./config";
 import type {
   LightingOverride,
+  LightingScheduleDto,
   SetOverrideRequest,
   SystemHealthDto,
   TankTelemetryDto,
@@ -42,6 +43,19 @@ export function useLightingOverride(
   return useQuery({
     queryKey: queryKeys.lightingOverride(transport.device),
     queryFn: () => createClient(transport).lightingOverride(),
+  });
+}
+
+// The curve for a month does not change, so this is fetched once a session
+// rather than polled.
+export function useLightingSchedule(
+  transport: Transport,
+  month: number,
+): UseQueryResult<LightingScheduleDto> {
+  return useQuery({
+    queryKey: queryKeys.lightingSchedule(transport.device, month),
+    queryFn: () => createClient(transport).lightingSchedule(month),
+    staleTime: 6 * 60 * 60 * 1000,
   });
 }
 

@@ -7,7 +7,8 @@ export type DeviceConfig = {
 export type ApiPath =
   | "/api/telemetry"
   | "/api/health"
-  | "/api/lighting/override";
+  | "/api/lighting/override"
+  | `/api/lighting/schedule/${number}`;
 
 export const EVENTS_PATH = "/api/events";
 
