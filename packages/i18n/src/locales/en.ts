@@ -111,6 +111,9 @@ export const en = {
     rgb: "rgb",
     whiteRgb: "white / rgb",
     expiresIn: "expires in",
+    manualActive: "manual mode active",
+    manualBody: "the schedule is paused — {{remaining}} left",
+    currentState: "current state",
   },
 
   durations: {

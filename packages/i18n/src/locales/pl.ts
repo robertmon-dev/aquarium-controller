@@ -114,6 +114,9 @@ export const pl: DeepString<typeof en> = {
     rgb: "rgb",
     whiteRgb: "biały / rgb",
     expiresIn: "wygasa za",
+    manualActive: "tryb ręczny aktywny",
+    manualBody: "harmonogram wstrzymany — pozostało {{remaining}}",
+    currentState: "stan bieżący",
   },
 
   durations: {
