@@ -1,10 +1,6 @@
-import {
-  ApiError,
-  createClient,
-  type DeviceConfig,
-} from "@aquarium/api-client";
+import type { DeviceConfig } from "@aquarium/api-client";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { View } from "react-native";
 import { Alert, Button, Card } from "@/components/atoms";
@@ -18,6 +14,7 @@ import {
   type ParsedDeviceForm,
 } from "@/device/config";
 import { deviceFetch } from "@/device/transport";
+import { useDeviceProbe } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 
 export interface DeviceFormProps {
@@ -27,8 +24,7 @@ export interface DeviceFormProps {
 
 export function DeviceForm({ device, onConnected }: DeviceFormProps) {
   const t = useT();
-  const [probeError, setProbeError] = useState<string | null>(null);
-  const [probing, setProbing] = useState(false);
+  const probe = useDeviceProbe(deviceFetch);
   const schema = useMemo(() => deviceFormSchema(deviceFormMessages(t)), [t]);
 
   const { control, handleSubmit } = useForm<
@@ -46,26 +42,8 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
 
   const onSubmit = handleSubmit(async (values) => {
     const config = toDeviceConfig(values);
-    setProbing(true);
-    setProbeError(null);
 
-    try {
-      await createClient({ device: config, fetchImpl: deviceFetch }).health();
-    } catch (error) {
-      setProbeError(
-        error instanceof ApiError && error.kind === "unauthorized"
-          ? t("deviceForm.tokenRejected")
-          : t("deviceForm.unreachable", {
-              host: config.host,
-              port: config.port,
-            }),
-      );
-      setProbing(false);
-      return;
-    }
-
-    await onConnected(config);
-    setProbing(false);
+    if (await probe.run("save", config)) await onConnected(config);
   });
 
   return (
@@ -91,20 +69,20 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
           secureTextEntry
         />
 
-        {probeError ? (
+        {probe.state.status === "failed" ? (
           <Alert
             variant="danger"
             title={t("deviceForm.cannotConnect")}
-            onClose={() => setProbeError(null)}
+            onClose={probe.dismiss}
           >
-            {probeError}
+            {probe.state.message}
           </Alert>
         ) : null}
 
         <Button
           variant="primary"
           fullWidth
-          isLoading={probing}
+          isLoading={probe.probing}
           onPress={() => void onSubmit()}
         >
           {t("deviceForm.submit")}

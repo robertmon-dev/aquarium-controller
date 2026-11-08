@@ -57,3 +57,10 @@ export type {
 
 export { useOverrideControl } from "./use-override-control";
 export type { OverrideControl } from "./use-override-control";
+
+export { initialProbe, probeReducer } from "./probe-reducer";
+export type { ProbeAction, ProbeState, ProbeTrigger } from "./probe-reducer";
+export { describeProbeFailure } from "./probe-failure";
+export { useDeviceProbe } from "./use-device-probe";
+export type { DeviceProbe } from "./use-device-probe";
+
