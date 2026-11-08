@@ -84,3 +84,5 @@ const Modal = forwardRef<HTMLDivElement, ModalProps>((props, ref) => {
 Modal.displayName = "Modal";
 
 export default Modal;
+
+export { Modal };

@@ -89,37 +89,3 @@
   max-height: 80vh;
   overflow-y: auto;
 }
-
-.modal-anim {
-  &-enter {
-    opacity: 0;
-
-    .modal-container {
-      transform: scale(0.9) translateY(10px);
-    }
-  }
-
-  &-enter-active {
-    opacity: 1;
-    transition: opacity 300ms ease;
-
-    .modal-container {
-      transform: scale(1) translateY(0);
-      transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
-    }
-  }
-
-  &-exit {
-    opacity: 1;
-  }
-
-  &-exit-active {
-    opacity: 0;
-    transition: opacity 200ms ease;
-
-    .modal-container {
-      transform: scale(0.95);
-      transition: transform 200ms ease;
-    }
-  }
-}
