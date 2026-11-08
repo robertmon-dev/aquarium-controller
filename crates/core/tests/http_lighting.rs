@@ -197,3 +197,44 @@ async fn deleting_an_override_sends_no_body() {
         })
         .await;
 }
+
+const SCHEDULE_PATH: &str = "/api/lighting/schedule/6";
+
+#[tokio::test]
+async fn the_schedule_is_served_for_a_valid_month() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+            let response = raw(addr, &get(SCHEDULE_PATH, Some(TOKEN))).await;
+
+            assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
+            assert!(response.contains("\"month\":6"), "got: {response}");
+            assert!(response.contains("\"step_minutes\":5"), "got: {response}");
+            assert!(response.contains("\"white_pct\":["), "got: {response}");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_month_outside_the_calendar_is_a_bad_request() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+            let response = raw(addr, &get("/api/lighting/schedule/13", Some(TOKEN))).await;
+
+            assert!(response.starts_with("HTTP/1.1 400"), "got: {response}");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn the_schedule_needs_a_token_like_every_other_route() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start(Arc::new(InMemoryTelemetryStore::new())).await;
+            let response = raw(addr, &get(SCHEDULE_PATH, None)).await;
+
+            assert!(response.starts_with("HTTP/1.1 401"), "got: {response}");
+        })
+        .await;
+}
