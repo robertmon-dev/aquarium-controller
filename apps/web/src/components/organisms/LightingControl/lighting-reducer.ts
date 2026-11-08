@@ -60,9 +60,6 @@ export function lightingReducer(
     case "setDuration":
       return { ...state, duration: action.seconds };
 
-    // Restoring closes the confirmation in the same transition. Were that a
-    // second setState next to the dispatch, the two could drift apart and leave
-    // the dialog over a schedule that is already back.
     case "restore":
       return {
         ...state,
