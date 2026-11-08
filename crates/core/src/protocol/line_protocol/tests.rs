@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::metrics::{LightingProfile, WaterLevelEntryDto};
+use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
 
 fn populated() -> TankTelemetryDto {
     let mut dto = TankTelemetryDto::empty();
@@ -65,7 +65,7 @@ fn temperature_fields_are_encoded_with_their_types() {
 
     assert!(
         encoded.contains(
-            "aquarium_temperature tank_c=26.5,sump_c=26,target_c=27,healthy=true 1750000000"
+            "aquarium_temperature tank_c=26.5,sump_c=26,target_c=27,healthy=true,heater=false 1750000000"
         ),
         "got: {encoded}"
     );
@@ -207,15 +207,135 @@ fn an_absent_ph_reading_omits_the_field() {
 }
 
 #[test]
-fn an_unconfigured_co2_section_produces_no_line() {
+fn an_unconfigured_co2_section_still_reports_the_solenoid() {
     let mut dto = populated();
     dto.co2.current_ph = None;
     dto.co2.ph_electrode_health = None;
+    dto.co2.drop_checker_ph_target = None;
+    dto.co2.solenoid_open = true;
 
     let encoded = encode(&dto).expect("encodes");
 
     assert!(
-        !encoded.contains("aquarium_co2"),
-        "with no pH probe there is nothing to report yet: {encoded}"
+        encoded.contains("aquarium_co2 solenoid_open=true"),
+        "the valve state is known even with no probe: {encoded}"
     );
+    assert!(!encoded.contains("ph="), "got: {encoded}");
+    assert!(!encoded.contains("electrode_health="), "got: {encoded}");
+}
+
+#[test]
+fn filtration_is_exported() {
+    let mut dto = populated();
+    dto.filtration.flow_rate_lph = Some(420.5);
+    dto.filtration.flow_ok = true;
+    dto.filtration.filter_relay_active = true;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("aquarium_filtration flow_lph=420.5,flow_ok=true,relay=true"),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn a_dead_flow_sensor_omits_the_rate_but_keeps_the_line() {
+    let mut dto = populated();
+    dto.filtration.flow_rate_lph = None;
+    dto.filtration.flow_ok = false;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(!encoded.contains("flow_lph="), "got: {encoded}");
+    assert!(
+        encoded.contains("aquarium_filtration flow_ok=false"),
+        "the relay state is still worth recording: {encoded}"
+    );
+}
+
+#[test]
+fn ato_is_exported_with_the_fill_duration_as_an_integer() {
+    let mut dto = populated();
+    dto.ato.sump_water_low = true;
+    dto.ato.reservoir_empty = false;
+    dto.ato.pump_active = true;
+    dto.ato.last_fill_duration_ms = 4200;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains(
+            "aquarium_ato sump_low=true,reservoir_empty=false,pump_active=true,last_fill_ms=4200i"
+        ),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn the_heater_state_is_exported() {
+    let mut dto = populated();
+    dto.temperature.heater_active = true;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(encoded.contains("heater=true"), "got: {encoded}");
+}
+
+#[test]
+fn the_ph_target_is_exported_when_configured() {
+    let mut dto = populated();
+    dto.co2.current_ph = Some(6.85);
+    dto.co2.ph_electrode_health = Some(0.94);
+    dto.co2.drop_checker_ph_target = Some(6.8);
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains(
+            "aquarium_co2 ph=6.85,electrode_health=0.94,ph_target=6.8,solenoid_open=false"
+        ),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn the_system_mode_is_a_quoted_string() {
+    let mut dto = populated();
+    dto.system_mode = SystemMode::EmergencyLockout;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("mode=\"emergency_lockout\""),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn the_leak_flag_and_water_sensor_health_ride_on_the_health_line() {
+    let mut dto = populated();
+    dto.leak_detected = true;
+    dto.water_level.sensors_healthy = false;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    let health = encoded
+        .lines()
+        .find(|line| line.starts_with("aquarium_health "))
+        .expect("a health line");
+
+    assert!(health.contains("leak=true"), "got: {health}");
+    assert!(health.contains("water_healthy=false"), "got: {health}");
+}
+
+#[test]
+fn every_system_mode_has_a_name() {
+    for (mode, expected) in [
+        (SystemMode::Normal, "normal"),
+        (SystemMode::Maintenance, "maintenance"),
+        (SystemMode::EmergencyLockout, "emergency_lockout"),
+    ] {
+        assert_eq!(mode_name(&mode), expected);
+    }
 }

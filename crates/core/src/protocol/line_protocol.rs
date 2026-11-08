@@ -1,6 +1,6 @@
 use std::fmt::{self, Write};
 
-use crate::domain::metrics::{LightingProfile, TankTelemetryDto, WaterLevelEntryDto};
+use crate::domain::metrics::{LightingProfile, SystemMode, TankTelemetryDto, WaterLevelEntryDto};
 
 struct Fields(String);
 
@@ -64,12 +64,38 @@ fn profile_name(profile: LightingProfile) -> &'static str {
     }
 }
 
+fn mode_name(mode: &SystemMode) -> &'static str {
+    match mode {
+        SystemMode::Normal => "normal",
+        SystemMode::Maintenance => "maintenance",
+        SystemMode::EmergencyLockout => "emergency_lockout",
+    }
+}
+
 fn temperature(snapshot: &TankTelemetryDto) -> Fields {
     let mut fields = Fields::new();
     fields.optional_float("tank_c", snapshot.temperature.tank_celsius);
     fields.optional_float("sump_c", snapshot.temperature.sump_celsius);
     fields.float("target_c", snapshot.temperature.target_celsius);
     fields.boolean("healthy", snapshot.temperature.sensors_healthy);
+    fields.boolean("heater", snapshot.temperature.heater_active);
+    fields
+}
+
+fn filtration(snapshot: &TankTelemetryDto) -> Fields {
+    let mut fields = Fields::new();
+    fields.optional_float("flow_lph", snapshot.filtration.flow_rate_lph);
+    fields.boolean("flow_ok", snapshot.filtration.flow_ok);
+    fields.boolean("relay", snapshot.filtration.filter_relay_active);
+    fields
+}
+
+fn ato(snapshot: &TankTelemetryDto) -> Fields {
+    let mut fields = Fields::new();
+    fields.boolean("sump_low", snapshot.ato.sump_water_low);
+    fields.boolean("reservoir_empty", snapshot.ato.reservoir_empty);
+    fields.boolean("pump_active", snapshot.ato.pump_active);
+    fields.integer("last_fill_ms", snapshot.ato.last_fill_duration_ms);
     fields
 }
 
@@ -78,6 +104,9 @@ fn health(snapshot: &TankTelemetryDto) -> Fields {
     fields.integer("uptime_s", snapshot.system_health.uptime_seconds);
     fields.integer("rssi_dbm", snapshot.system_health.wifi_rssi_dbm);
     fields.integer("free_heap_kb", snapshot.system_health.free_heap_kb);
+    fields.string("mode", mode_name(&snapshot.system_mode));
+    fields.boolean("leak", snapshot.leak_detected);
+    fields.boolean("water_healthy", snapshot.water_level.sensors_healthy);
     fields
 }
 
@@ -94,6 +123,8 @@ fn co2(snapshot: &TankTelemetryDto) -> Fields {
     let mut fields = Fields::new();
     fields.optional_float("ph", snapshot.co2.current_ph);
     fields.optional_float("electrode_health", snapshot.co2.ph_electrode_health);
+    fields.optional_float("ph_target", snapshot.co2.drop_checker_ph_target);
+    fields.boolean("solenoid_open", snapshot.co2.solenoid_open);
     fields
 }
 
@@ -127,6 +158,12 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
     lines.extend(line("aquarium_health", health(snapshot), timestamp_s));
     lines.extend(line("aquarium_lighting", lighting(snapshot), timestamp_s));
     lines.extend(line("aquarium_co2", co2(snapshot), timestamp_s));
+    lines.extend(line(
+        "aquarium_filtration",
+        filtration(snapshot),
+        timestamp_s,
+    ));
+    lines.extend(line("aquarium_ato", ato(snapshot), timestamp_s));
 
     for (tag, entry) in sensors {
         lines.extend(line(
