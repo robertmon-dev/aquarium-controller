@@ -185,6 +185,7 @@ export type ButtonVariant =
   | "outline"
   | "ghost"
   | "danger"
+  | "warning"
   | "success"
   | "purple"
   | "select";
@@ -254,6 +255,14 @@ const BUTTON_VARIANTS: Record<
       borderWidth: 2.5,
     },
     label: { color: colors.danger },
+  },
+  warning: {
+    container: {
+      backgroundColor: withAlpha(colors.warning, 0.12),
+      borderColor: withAlpha(colors.warning, 0.5),
+      borderWidth: 2.5,
+    },
+    label: { color: colors.warning },
   },
   success: {
     container: {
