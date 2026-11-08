@@ -4,6 +4,7 @@ import { Dashboard } from "@/pages/Dashboard";
 import { History } from "@/pages/History";
 import { Lighting } from "@/pages/Lighting";
 import { Settings } from "@/pages/Settings";
+import { ErrorPage } from "@/pages/Error/Error";
 import { AppProviders } from "@/providers/AppProviders";
 
 export function App() {
@@ -16,6 +17,7 @@ export function App() {
             <Route path="/lighting" element={<Lighting />} />
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<ErrorPage code="not-found" />} />
           </Routes>
         </Layout>
       </BrowserRouter>
