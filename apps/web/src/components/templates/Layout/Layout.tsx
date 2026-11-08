@@ -5,7 +5,6 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Badge } from "@/components/atoms";
 import { LanguageSwitcher } from "@/components/molecules/LanguageSwitcher/LanguageSwitcher";
-import { Footer } from "@/components/organisms/Footer/Footer";
 import { Sidebar } from "@/components/organisms/SideBar/SideBar";
 import { useTelemetryStream } from "@/device/use-telemetry-stream";
 import { useDevice } from "@/providers/AppProviders";
@@ -55,10 +54,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </Sidebar>
 
-      <div className="layout__content">
-        <main className="layout__main">{children}</main>
-        <Footer copyright={t("common.appName")} />
-      </div>
+      <main className="layout__main">{children}</main>
     </div>
   );
 }
