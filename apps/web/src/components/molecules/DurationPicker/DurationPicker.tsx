@@ -1,14 +1,15 @@
 import { useT } from "@aquarium/i18n/use-locale";
 import { durationChoices } from "@aquarium/view-model";
 import { Button } from "@/components/atoms";
+import type { ReactNode } from "react";
 
-export function DurationPicker({
+export const DurationPicker = ({
   selected,
   onSelect,
 }: {
   selected: number | null;
   onSelect: (seconds: number | null) => void;
-}) {
+}): ReactNode => {
   const t = useT();
 
   return (
@@ -24,4 +25,4 @@ export function DurationPicker({
       ))}
     </div>
   );
-}
+};

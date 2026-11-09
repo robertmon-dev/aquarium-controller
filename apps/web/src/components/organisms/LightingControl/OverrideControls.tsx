@@ -6,7 +6,7 @@ import { DurationPicker } from "@/components/molecules/DurationPicker/DurationPi
 import { ProfilePicker } from "@/components/molecules/ProfilePicker/ProfilePicker";
 import "./LightingControl.scss";
 
-export function OverrideControls({
+export const OverrideControls = ({
   busy,
   duration,
   levels,
@@ -24,7 +24,7 @@ export function OverrideControls({
   onProfile: (profile: LightingProfile) => void;
   onChannel: (channel: keyof ChannelLevels, value: number) => void;
   onCommitChannels: () => void;
-}) {
+}) => {
   const t = useT();
 
   return (
@@ -60,4 +60,4 @@ export function OverrideControls({
       </div>
     </MetricCard>
   );
-}
+};

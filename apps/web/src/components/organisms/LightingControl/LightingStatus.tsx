@@ -5,7 +5,7 @@ import { Meter } from "@/components/atoms";
 import { MetricCard } from "@/components/molecules";
 import "./LightingControl.scss";
 
-export function LightingStatus({
+export const LightingStatus = ({
   lighting,
   remaining,
   total,
@@ -15,7 +15,7 @@ export function LightingStatus({
   remaining: number | null;
   total: number | null;
   manualChannels: boolean;
-}) {
+}) => {
   const t = useT();
   const active = lighting.override_active;
 
@@ -74,4 +74,4 @@ export function LightingStatus({
       </div>
     </MetricCard>
   );
-}
+};
