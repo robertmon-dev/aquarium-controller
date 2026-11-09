@@ -27,19 +27,12 @@ export function LightingControl({
   const control = useOverrideControl(transport, lighting);
   const { confirming } = control.state;
 
-  // The handlers are deliberately not memoised, so listing them as effect
-  // dependencies would reopen the dialog on every render. A ref keeps the
-  // dependency list honest and still calls the current handler — written in an
-  // effect, because writing to a ref during render breaks the rules of React.
   const latest = useRef(control);
 
   useEffect(() => {
     latest.current = control;
   });
 
-  // The shared reducer carries `confirming`; on mobile the platform's own
-  // dialog answers it. Without this effect the restore button would set a flag
-  // and nothing else would ever happen.
   useEffect(() => {
     if (!confirming) return;
 
