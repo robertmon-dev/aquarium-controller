@@ -17,8 +17,6 @@ export function DeviceInfo({
   const t = useT();
   const { data, error, isPending } = useHealth(transport);
 
-  // No firmware row: SystemHealthDto reports uptime, RSSI and free heap, and
-  // nothing in the API reports a build.
   return (
     <MetricCard
       title={t("deviceInfo.title")}
