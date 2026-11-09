@@ -30,7 +30,7 @@ function label(t: Translate, path: string): string {
   return t(path as TranslationKey);
 }
 
-export function HistoryPanel() {
+export const HistoryPanel = () => {
   const t = useT();
   const [state, dispatch] = useReducer(historyReducer, initialHistoryState);
   const window = useHistoryWindow(state.rangeKey);
@@ -84,9 +84,9 @@ export function HistoryPanel() {
       </div>
     </>
   );
-}
+};
 
-function HistoryChart({
+const HistoryChart = ({
   chart,
   window,
   forceRaw,
@@ -96,7 +96,7 @@ function HistoryChart({
   window: HistoryWindow;
   forceRaw: boolean;
   asTable: boolean;
-}) {
+}) => {
   const t = useT();
   const { data, error, isPending } = useHistory(chart, window, forceRaw);
 
@@ -148,9 +148,9 @@ function HistoryChart({
       />
     </HistoryCard>
   );
-}
+};
 
-function HistoryBody({
+const HistoryBody = ({
   chart,
   series,
   plotted,
@@ -166,7 +166,7 @@ function HistoryBody({
   asTable: boolean;
   isPending: boolean;
   error: Error | null;
-}) {
+}) => {
   const t = useT();
 
   if (isPending)
@@ -194,4 +194,4 @@ function HistoryBody({
       plotted={plotted}
     />
   );
-}
+};

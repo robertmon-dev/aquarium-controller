@@ -12,15 +12,16 @@ import {
 import { useUplot, type ChartSpec } from "@/components/atoms/Chart/use-uplot";
 import { MetricCard } from "@/components/molecules";
 import "./LightingControl.scss";
+import type { ReactNode } from "react";
 
 const HEIGHT = 180;
 const SPLITS = [0, 360, 720, 1080, 1440];
 
-function hourLabel(minute: number): string {
+const hourLabel = (minute: number): string => {
   return `${String(Math.floor(minute / 60)).padStart(2, "0")}:00`;
-}
+};
 
-function nowMarker(minute: number) {
+const nowMarker = (minute: number) => {
   return (self: uPlot) => {
     const x = self.valToPos(minute, "x", true);
     const { ctx } = self;
@@ -35,15 +36,15 @@ function nowMarker(minute: number) {
     ctx.stroke();
     ctx.restore();
   };
-}
+};
 
-export function SchedulePreview({
+export const SchedulePreview = ({
   schedule,
   nowMinute,
 }: {
   schedule: LightingScheduleDto;
   nowMinute: number;
-}) {
+}): ReactNode => {
   const t = useT();
 
   const host = useUplot(
@@ -111,4 +112,4 @@ export function SchedulePreview({
       <div className="chart" ref={host} />
     </MetricCard>
   );
-}
+};

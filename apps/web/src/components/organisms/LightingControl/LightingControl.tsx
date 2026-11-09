@@ -14,13 +14,13 @@ import { OverrideControls } from "./OverrideControls";
 import { useLocalClock } from "./use-local-clock";
 import "./LightingControl.scss";
 
-export function LightingControl({
+export const LightingControl = ({
   transport,
   lighting,
 }: {
   transport: Transport;
   lighting: LightingMetricsDto;
-}) {
+}) => {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
   const clock = useLocalClock();
@@ -99,4 +99,4 @@ export function LightingControl({
       />
     </>
   );
-}
+};
