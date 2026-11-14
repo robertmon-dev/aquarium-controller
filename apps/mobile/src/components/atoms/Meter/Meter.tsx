@@ -1,12 +1,13 @@
 import { colors, radius, spacing, typography } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import type { MeterProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { MeterProps } from "./types";
 
 const TRACK_HEIGHT = 6;
 
-export function Meter({ value, label, valueText }: MeterProps) {
+export const Meter = ({ value, label, valueText }: MeterProps): ReactNode => {
   const clamped = Math.min(1, Math.max(0, value));
 
   return (
@@ -40,7 +41,11 @@ export function Meter({ value, label, valueText }: MeterProps) {
 
       <View
         accessibilityRole="progressbar"
-        accessibilityValue={{ now: Math.round(clamped * 100), min: 0, max: 100 }}
+        accessibilityValue={{
+          now: Math.round(clamped * 100),
+          min: 0,
+          max: 100,
+        }}
         style={{
           height: TRACK_HEIGHT,
           borderRadius: radius.sm,
@@ -59,4 +64,4 @@ export function Meter({ value, label, valueText }: MeterProps) {
       </View>
     </View>
   );
-}
+};
