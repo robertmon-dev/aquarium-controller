@@ -3,16 +3,17 @@ import { Text, View } from "react-native";
 import { Card, StatusDot } from "@/components/atoms";
 import { MetricList } from "@/components/molecules/MetricList/MetricList";
 import type { MetricCardProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { MetricCardProps } from "./types";
 
-export function MetricCard({
+export const MetricCard = ({
   title,
   status,
   statusLabel,
   metrics,
   children,
-}: MetricCardProps) {
+}: MetricCardProps): ReactNode => {
   return (
     <Card variant="elevated" padding="md" width="full">
       <View style={cardStyles.header}>
@@ -23,4 +24,4 @@ export function MetricCard({
       {children}
     </Card>
   );
-}
+};
