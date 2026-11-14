@@ -3,16 +3,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { Text, View } from "react-native";
 import { Button } from "@/components/atoms";
 import type { DeviceNoticeProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { DeviceNoticeProps } from "./types";
 
-export function DeviceNotice({
+export const DeviceNotice = ({
   icon,
   title,
   message,
   actionLabel,
   onAction,
-}: DeviceNoticeProps) {
+}: DeviceNoticeProps): ReactNode => {
   return (
     <View style={[screenStyles.centered, { gap: spacing.md }]}>
       <Ionicons name={icon} size={64} color={colors.primary} />
@@ -40,4 +41,4 @@ export function DeviceNotice({
       ) : null}
     </View>
   );
-}
+};

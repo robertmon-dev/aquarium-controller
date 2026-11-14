@@ -3,6 +3,7 @@ import { cardStyles, spacing } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import { Slider } from "@/components/atoms";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
 export interface ChannelSlidersProps {
   levels: ChannelLevels;
@@ -10,11 +11,11 @@ export interface ChannelSlidersProps {
   disabled?: boolean;
 }
 
-export function ChannelSliders({
+export const ChannelSliders = ({
   levels,
   onCommit,
   disabled,
-}: ChannelSlidersProps) {
+}: ChannelSlidersProps): ReactNode => {
   const t = useT();
 
   return (
@@ -36,4 +37,4 @@ export function ChannelSliders({
       />
     </View>
   );
-}
+};
