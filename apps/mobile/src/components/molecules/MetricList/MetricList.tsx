@@ -1,10 +1,11 @@
 import { screenStyles, spacing, textDisplayValueStyle } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import type { MetricListProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { Metric, MetricListProps } from "./types";
 
-export function MetricList({ metrics, style }: MetricListProps) {
+export const MetricList = ({ metrics, style }: MetricListProps): ReactNode => {
   return (
     <View style={[{ gap: spacing.xs / 2 }, style]}>
       {metrics.map((metric) => (
@@ -17,4 +18,4 @@ export function MetricList({ metrics, style }: MetricListProps) {
       ))}
     </View>
   );
-}
+};
