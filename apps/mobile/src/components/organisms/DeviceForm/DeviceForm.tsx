@@ -1,6 +1,6 @@
 import type { DeviceConfig } from "@aquarium/api-client";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { View } from "react-native";
 import { Alert, Button, Card } from "@/components/atoms";
@@ -22,7 +22,10 @@ export interface DeviceFormProps {
   onConnected: (device: DeviceConfig) => Promise<void>;
 }
 
-export function DeviceForm({ device, onConnected }: DeviceFormProps) {
+export const DeviceForm = ({
+  device,
+  onConnected,
+}: DeviceFormProps): ReactNode => {
   const t = useT();
   const probe = useDeviceProbe(deviceFetch);
   const schema = useMemo(() => deviceFormSchema(deviceFormMessages(t)), [t]);
@@ -90,4 +93,4 @@ export function DeviceForm({ device, onConnected }: DeviceFormProps) {
       </View>
     </Card>
   );
-}
+};
