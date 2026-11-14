@@ -1,13 +1,13 @@
 import { cardStyles, sliderStyles } from "@aquarium/theme";
 import CommunitySlider from "@react-native-community/slider";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Text, View } from "react-native";
 import { formatPercent } from "@aquarium/view-model";
 import type { SliderProps } from "./types";
 
 export type { SliderProps } from "./types";
 
-export function Slider({
+export const Slider = ({
   label,
   value,
   onCommit,
@@ -15,7 +15,7 @@ export function Slider({
   maximumValue = 100,
   step = 1,
   disabled = false,
-}: SliderProps) {
+}: SliderProps): ReactNode => {
   const [dragging, setDragging] = useState(value);
   const [seen, setSeen] = useState(value);
 
@@ -47,4 +47,4 @@ export function Slider({
       />
     </View>
   );
-}
+};
