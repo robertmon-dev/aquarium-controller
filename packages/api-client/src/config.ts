@@ -1,8 +1,8 @@
-export type DeviceConfig = {
+export interface DeviceConfig {
   host: string;
   port: number;
   token: string;
-};
+}
 
 export type ApiPath =
   | "/api/telemetry"

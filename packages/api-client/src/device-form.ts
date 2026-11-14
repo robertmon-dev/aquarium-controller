@@ -9,7 +9,7 @@ export interface DeviceFormMessages {
   tokenRequired: string;
 }
 
-export function deviceFormSchema(m: DeviceFormMessages) {
+export const deviceFormSchema = (m: DeviceFormMessages) => {
   return z.object({
     host: z
       .string()
@@ -25,7 +25,7 @@ export function deviceFormSchema(m: DeviceFormMessages) {
       .refine((value) => value >= 1 && value <= 65535, m.portRange),
     token: z.string().trim().min(1, m.tokenRequired),
   });
-}
+};
 
 export interface DeviceFormValues {
   host: string;
@@ -35,10 +35,10 @@ export interface DeviceFormValues {
 
 export type ParsedDeviceForm = z.output<ReturnType<typeof deviceFormSchema>>;
 
-export function toDeviceConfig(parsed: ParsedDeviceForm): DeviceConfig {
+export const toDeviceConfig = (parsed: ParsedDeviceForm): DeviceConfig => {
   return {
     host: parsed.host.trim(),
     port: parsed.port,
     token: parsed.token.trim(),
   };
-}
+};

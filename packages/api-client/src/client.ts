@@ -16,7 +16,7 @@ export interface DeviceClient {
   lightingSchedule: (month: number) => Promise<LightingScheduleDto>;
 }
 
-export function createClient(transport: Transport): DeviceClient {
+export const createClient = (transport: Transport): DeviceClient => {
   return {
     telemetry: () => request<TankTelemetryDto>(transport, "/api/telemetry"),
 
@@ -45,4 +45,4 @@ export function createClient(transport: Transport): DeviceClient {
         `/api/lighting/schedule/${month}`,
       ),
   };
-}
+};
