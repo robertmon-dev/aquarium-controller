@@ -1,10 +1,11 @@
 import { Controller, type FieldValues } from "react-hook-form";
 import { Input } from "@/components/atoms";
 import type { FormFieldProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { FormFieldProps } from "./types";
 
-export function FormField<
+export const FormField = <
   T extends FieldValues,
   TContext = unknown,
   TTransformed = T,
@@ -16,7 +17,7 @@ export function FormField<
   keyboardType,
   secureTextEntry,
   helperText,
-}: FormFieldProps<T, TContext, TTransformed>) {
+}: FormFieldProps<T, TContext, TTransformed>): ReactNode => {
   return (
     <Controller
       control={control}
@@ -39,4 +40,4 @@ export function FormField<
       )}
     />
   );
-}
+};
