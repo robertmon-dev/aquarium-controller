@@ -15,14 +15,15 @@ import {
   ProfilePicker,
 } from "@/components/molecules";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
-export function LightingControl({
+export const LightingControl = ({
   transport,
   lighting,
 }: {
   transport: Transport;
   lighting: LightingMetricsDto;
-}) {
+}): ReactNode => {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
   const { confirming } = control.state;
@@ -135,4 +136,4 @@ export function LightingControl({
       </MetricCard>
     </View>
   );
-}
+};
