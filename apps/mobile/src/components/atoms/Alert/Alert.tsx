@@ -7,6 +7,7 @@ import {
 } from "@aquarium/theme";
 import { Pressable, Text, View } from "react-native";
 import type { AlertProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { AlertProps, AlertVariant } from "./types";
 
@@ -17,7 +18,7 @@ export const Alert = ({
   onClose,
   action,
   style,
-}: AlertProps) => {
+}: AlertProps): ReactNode => {
   return (
     <View style={[alertStyle(variant), style]}>
       <View style={{ flex: 1, gap: spacing.xxs }}>
