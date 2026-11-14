@@ -6,14 +6,15 @@ import {
 import { formatDuration, formatHeap, formatRssi } from "@aquarium/view-model";
 import { MetricCard } from "@/components/molecules";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
-export function DeviceInfo({
+export const DeviceInfo = ({
   device,
   transport,
 }: {
   device: DeviceConfig;
   transport: Transport;
-}) {
+}): ReactNode => {
   const t = useT();
   const { data, error, isPending } = useHealth(transport);
 
@@ -52,4 +53,4 @@ export function DeviceInfo({
       ]}
     />
   );
-}
+};
