@@ -1,16 +1,17 @@
 import { chipContainerStyle, chipLabelStyle } from "@aquarium/theme";
 import { Pressable, Text, View } from "react-native";
 import type { ChipProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { ChipProps, ChipVariant } from "./types";
 
-export function Chip({
+export const Chip = ({
   label,
   variant = "default",
   selected = false,
   onPress,
   style,
-}: ChipProps) {
+}: ChipProps): ReactNode => {
   const container = chipContainerStyle(variant, selected);
   const text = <Text style={chipLabelStyle(variant, selected)}>{label}</Text>;
 
@@ -32,4 +33,4 @@ export function Chip({
       {text}
     </Pressable>
   );
-}
+};
