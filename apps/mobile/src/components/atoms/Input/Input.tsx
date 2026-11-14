@@ -1,11 +1,11 @@
 import { colors, inputStyles } from "@aquarium/theme";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Text, TextInput, View } from "react-native";
 import type { InputProps } from "./types";
 
 export type { InputProps } from "./types";
 
-export function Input({
+export const Input = ({
   label,
   error,
   helperText,
@@ -16,7 +16,7 @@ export function Input({
   onFocus,
   onBlur,
   ...rest
-}: InputProps) {
+}: InputProps): ReactNode => {
   const [focused, setFocused] = useState(false);
   const errorMessage = typeof error === "string" ? error : undefined;
   const hasError = error === true || errorMessage !== undefined;
@@ -61,4 +61,4 @@ export function Input({
       ) : null}
     </View>
   );
-}
+};
