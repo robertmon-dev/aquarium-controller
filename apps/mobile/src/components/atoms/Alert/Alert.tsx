@@ -10,14 +10,14 @@ import type { AlertProps } from "./types";
 
 export type { AlertProps, AlertVariant } from "./types";
 
-export function Alert({
+export const Alert = ({
   variant = "info",
   title,
   children,
   onClose,
   action,
   style,
-}: AlertProps) {
+}: AlertProps) => {
   return (
     <View style={[alertStyle(variant), style]}>
       <View style={{ flex: 1, gap: spacing.xxs }}>
@@ -38,4 +38,4 @@ export function Alert({
       ) : null}
     </View>
   );
-}
+};
