@@ -4,7 +4,7 @@ import type { Translate } from "@/i18n";
 export { deviceFormSchema, toDeviceConfig } from "@aquarium/api-client";
 export type { DeviceFormValues, ParsedDeviceForm } from "@aquarium/api-client";
 
-export function deviceFormMessages(t: Translate): DeviceFormMessages {
+export const deviceFormMessages = (t: Translate): DeviceFormMessages => {
   return {
     hostRequired: t("validation.hostRequired"),
     hostNoScheme: t("validation.hostNoScheme"),
@@ -12,4 +12,4 @@ export function deviceFormMessages(t: Translate): DeviceFormMessages {
     portRange: t("validation.portRange"),
     tokenRequired: t("validation.tokenRequired"),
   };
-}
+};
