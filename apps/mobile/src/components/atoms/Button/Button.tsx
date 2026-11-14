@@ -12,10 +12,11 @@ import {
   View,
 } from "react-native";
 import type { ButtonProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { ButtonProps, ButtonSize, ButtonVariant } from "./types";
 
-export function Button({
+export const Button = ({
   variant = "primary",
   size = "md",
   isLoading = false,
@@ -27,7 +28,7 @@ export function Button({
   disabled,
   style,
   ...rest
-}: ButtonProps) {
+}: ButtonProps): ReactNode => {
   const inert = disabled === true || isLoading;
   const labelStyle = buttonLabelStyle(variant, size);
   const gradient = buttonGradient(variant);
@@ -73,4 +74,4 @@ export function Button({
       )}
     </Pressable>
   );
-}
+};
