@@ -14,12 +14,13 @@ import {
 } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 import { HeroCard } from "./HeroCard";
+import type { ReactNode } from "react";
 
-export function TelemetryDashboard({
+export const TelemetryDashboard = ({
   snapshot,
 }: {
   snapshot: TankTelemetryDto;
-}) {
+}): ReactNode => {
   const t = useT();
   const levels = waterLevelCard(snapshot.water_level, t);
   const cards = [
@@ -59,4 +60,4 @@ export function TelemetryDashboard({
       ))}
     </View>
   );
-}
+};
