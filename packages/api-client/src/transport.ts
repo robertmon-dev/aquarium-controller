@@ -35,11 +35,11 @@ export class ApiError extends Error {
   }
 }
 
-export async function request<T>(
+export const request = async <T>(
   transport: Transport,
   path: ApiPath,
   init: RequestInit = {},
-): Promise<T> {
+): Promise<T> => {
   const url = endpointUrl(transport.device, path);
 
   let response: Response;
@@ -91,4 +91,4 @@ export async function request<T>(
       String(cause),
     );
   }
-}
+};
