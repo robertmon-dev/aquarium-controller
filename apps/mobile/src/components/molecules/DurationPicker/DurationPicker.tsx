@@ -3,13 +3,17 @@ import { Text, View } from "react-native";
 import { Chip } from "@/components/atoms";
 import { durationChoices } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
 export interface DurationPickerProps {
   selected: number | null;
   onSelect: (seconds: number | null) => void;
 }
 
-export function DurationPicker({ selected, onSelect }: DurationPickerProps) {
+export const DurationPicker = ({
+  selected,
+  onSelect,
+}: DurationPickerProps): ReactNode => {
   const t = useT();
 
   return (
@@ -27,4 +31,4 @@ export function DurationPicker({ selected, onSelect }: DurationPickerProps) {
       </View>
     </View>
   );
-}
+};
