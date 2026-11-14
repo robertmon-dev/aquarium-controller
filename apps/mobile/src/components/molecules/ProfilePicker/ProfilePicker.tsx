@@ -4,6 +4,7 @@ import { Text, View } from "react-native";
 import { Chip } from "@/components/atoms";
 import { LIGHTING_PROFILES } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
 export interface ProfilePickerProps {
   selected: LightingProfile | null;
@@ -11,11 +12,11 @@ export interface ProfilePickerProps {
   disabled?: boolean;
 }
 
-export function ProfilePicker({
+export const ProfilePicker = ({
   selected,
   onSelect,
   disabled,
-}: ProfilePickerProps) {
+}: ProfilePickerProps): ReactNode => {
   const t = useT();
 
   return (
@@ -33,4 +34,4 @@ export function ProfilePicker({
       </View>
     </View>
   );
-}
+};
