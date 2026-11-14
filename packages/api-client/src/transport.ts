@@ -21,7 +21,7 @@ export class ApiError extends Error {
   readonly status?: number | undefined;
   readonly detail?: string | undefined;
 
-  constructor(
+  public constructor(
     kind: ApiErrorKind,
     message: string,
     status?: number | undefined,
