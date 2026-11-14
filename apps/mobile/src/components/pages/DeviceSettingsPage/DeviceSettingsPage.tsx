@@ -4,8 +4,9 @@ import { LanguageSwitcher } from "@/components/molecules";
 import { DeviceForm, DeviceInfo } from "@/components/organisms";
 import { screenStyles, spacing } from "@aquarium/theme";
 import { useDevice } from "@/components/utility/app-providers";
+import type { ReactNode } from "react";
 
-export function DeviceSettingsPage() {
+export const DeviceSettingsPage = (): ReactNode => {
   const { device, transport, setDevice } = useDevice();
 
   return (
@@ -28,4 +29,4 @@ export function DeviceSettingsPage() {
       <LanguageSwitcher />
     </ScrollView>
   );
-}
+};

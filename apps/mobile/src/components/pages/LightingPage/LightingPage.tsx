@@ -5,14 +5,15 @@ import { ScreenMessage } from "@/components/molecules";
 import { LightingControl } from "@/components/organisms";
 import { DeviceGate } from "@/components/utility/DeviceGate";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
-export function LightingPage() {
+export const LightingPage = (): ReactNode => {
   return (
     <DeviceGate>
       {(transport) => <LightingContent transport={transport} />}
     </DeviceGate>
   );
-}
+};
 
 function LightingContent({ transport }: { transport: Transport }) {
   const t = useT();
