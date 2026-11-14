@@ -15,10 +15,10 @@ export interface HistoryTableModel {
   rows: TableRow[];
 }
 
-export function historyTableModel(
+export const historyTableModel = (
   series: HistorySeries[],
   limit = 200,
-): HistoryTableModel {
+): HistoryTableModel => {
   const times = [
     ...new Set(series.flatMap((one) => one.points.map((p) => p.time))),
   ]
@@ -36,4 +36,4 @@ export function historyTableModel(
       cells: lookups.map((lookup) => lookup.get(time)),
     })),
   };
-}
+};
