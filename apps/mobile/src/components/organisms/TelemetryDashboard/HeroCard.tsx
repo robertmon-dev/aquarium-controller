@@ -3,8 +3,9 @@ import { Text, View } from "react-native";
 import { Card, StatusDot } from "@/components/atoms";
 import { MetricList } from "@/components/molecules";
 import type { HeroCardData } from "@aquarium/view-model";
+import type { ReactNode } from "react";
 
-export function HeroCard({ card }: { card: HeroCardData }) {
+export const HeroCard = ({ card }: { card: HeroCardData }): ReactNode => {
   return (
     <Card variant="levitating" padding="md" width="full">
       <View style={cardStyles.header}>
@@ -20,4 +21,4 @@ export function HeroCard({ card }: { card: HeroCardData }) {
       <MetricList metrics={card.metrics} />
     </Card>
   );
-}
+};
