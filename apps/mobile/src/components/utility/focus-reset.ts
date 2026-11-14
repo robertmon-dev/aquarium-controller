@@ -1,1 +1,1 @@
-export function useFocusReset(): void {}
+export const useFocusReset = (): void => {};

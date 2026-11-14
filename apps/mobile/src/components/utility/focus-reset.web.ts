@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 const STYLE_ID = "aquarium-focus-reset";
 
-export function useFocusReset(): void {
+export const useFocusReset = (): void => {
   useEffect(() => {
     if (document.getElementById(STYLE_ID)) return;
 
@@ -11,4 +11,4 @@ export function useFocusReset(): void {
     style.textContent = "input:focus, textarea:focus { outline: none; }";
     document.head.appendChild(style);
   }, []);
-}
+};
