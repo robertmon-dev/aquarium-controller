@@ -24,7 +24,11 @@ interface DeviceContextValue {
 
 const DeviceContext = createContext<DeviceContextValue | null>(null);
 
-export function AppProviders({ children }: { children: ReactNode }) {
+export const AppProviders = ({
+  children,
+}: {
+  children: ReactNode;
+}): ReactNode => {
   const [device, setDeviceState] = useState<DeviceConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -58,10 +62,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
       </LocaleProvider>
     </QueryClientProvider>
   );
-}
+};
 
-export function useDevice(): DeviceContextValue {
+export const useDevice = (): DeviceContextValue => {
   const value = useContext(DeviceContext);
   if (!value) throw new Error("useDevice must be used inside AppProviders");
   return value;
-}
+};

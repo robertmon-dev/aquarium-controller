@@ -5,11 +5,11 @@ import { DeviceNotice } from "@/components/molecules/DeviceNotice/DeviceNotice";
 import { useDevice } from "@/components/utility/app-providers";
 import { useT } from "@/i18n/use-locale";
 
-export function DeviceGate({
+export const DeviceGate = ({
   children,
 }: {
   children: (transport: Transport) => ReactNode;
-}) {
+}): ReactNode => {
   const t = useT();
   const { transport, loading } = useDevice();
 
@@ -27,4 +27,4 @@ export function DeviceGate({
     );
 
   return <>{children(transport)}</>;
-}
+};
