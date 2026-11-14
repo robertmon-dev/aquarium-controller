@@ -8,16 +8,21 @@ import { ScreenMessage } from "@/components/molecules";
 import { TelemetryDashboard } from "@/components/organisms";
 import { DeviceGate } from "@/components/utility/DeviceGate";
 import { useT } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
-export function TelemetryPage() {
+export const TelemetryPage = (): ReactNode => {
   return (
     <DeviceGate>
       {(transport) => <TelemetryContent transport={transport} />}
     </DeviceGate>
   );
-}
+};
 
-function TelemetryContent({ transport }: { transport: Transport }) {
+const TelemetryContent = ({
+  transport,
+}: {
+  transport: Transport;
+}): ReactNode => {
   const t = useT();
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
@@ -48,9 +53,9 @@ function TelemetryContent({ transport }: { transport: Transport }) {
       {data ? <TelemetryDashboard snapshot={data} /> : null}
     </ScrollView>
   );
-}
+};
 
-function TelemetryError({ error }: { error: Error }) {
+const TelemetryError = ({ error }: { error: Error }): ReactNode => {
   const t = useT();
 
   if (!(error instanceof ApiError)) {
@@ -90,4 +95,4 @@ function TelemetryError({ error }: { error: Error }) {
       {error.detail ?? error.message}
     </Alert>
   );
-}
+};
