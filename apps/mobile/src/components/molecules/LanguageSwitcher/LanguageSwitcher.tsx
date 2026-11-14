@@ -3,8 +3,9 @@ import { Text, View } from "react-native";
 import { Chip } from "@/components/atoms";
 import { LOCALES } from "@/i18n";
 import { useLocale } from "@/i18n/use-locale";
+import type { ReactNode } from "react";
 
-export function LanguageSwitcher() {
+export const LanguageSwitcher = (): ReactNode => {
   const { locale, setLocale, t } = useLocale();
 
   return (
@@ -22,4 +23,4 @@ export function LanguageSwitcher() {
       </View>
     </View>
   );
-}
+};
