@@ -6,10 +6,11 @@ import {
 } from "@aquarium/theme";
 import { Text, View } from "react-native";
 import type { TextDisplayProps } from "./types";
+import type { ReactNode } from "react";
 
 export type { TextDisplayProps, TextDisplayState } from "./types";
 
-export function TextDisplay({
+export const TextDisplay = ({
   label,
   children,
   state = "default",
@@ -17,7 +18,7 @@ export function TextDisplay({
   fullWidth = false,
   maxHeight,
   style,
-}: TextDisplayProps) {
+}: TextDisplayProps): ReactNode => {
   return (
     <View
       style={[
@@ -38,4 +39,4 @@ export function TextDisplay({
       ) : null}
     </View>
   );
-}
+};
