@@ -15,12 +15,30 @@ export { createClient } from "./client";
 export { queryKeys } from "./query-keys";
 export {
   publishTelemetry,
+  useCalibration,
   useClearLightingOverride,
   useHealth,
   useLightingOverride,
   useLightingSchedule,
+  usePatchCalibration,
+  useProbeVoltages,
   useSetLightingOverride,
   useTelemetry,
 } from "./queries";
 export { SseDecoder, streamTelemetry } from "./events";
 export { deviceFormSchema, toDeviceConfig } from "./device-form";
+export {
+  calibrationFormSchema,
+  MAX_MAKEUP_CELSIUS,
+  MAX_TDS_FACTOR,
+  MIN_BUFFER_SPAN_VOLTS,
+  MIN_MAKEUP_CELSIUS,
+  MIN_TDS_FACTOR,
+  toCalibrationFormValues,
+  toCalibrationPatch,
+} from "./calibration-form";
+export type {
+  CalibrationFormMessages,
+  CalibrationFormValues,
+  ParsedCalibrationForm,
+} from "./calibration-form";

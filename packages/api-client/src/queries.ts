@@ -9,8 +9,11 @@ import {
 import { createClient } from "./client";
 import type { DeviceConfig } from "./config";
 import type {
+  Calibration,
+  CalibrationPatch,
   LightingOverride,
   LightingScheduleDto,
+  ProbeVoltagesDto,
   SetOverrideRequest,
   SystemHealthDto,
   TankTelemetryDto,
@@ -96,4 +99,43 @@ export function publishTelemetry(
   snapshot: TankTelemetryDto,
 ): void {
   queryClient.setQueryData(queryKeys.telemetry(device), snapshot);
+}
+
+export function useProbeVoltages(
+  transport: Transport,
+  options: { enabled: boolean },
+): UseQueryResult<ProbeVoltagesDto> {
+  return useQuery({
+    queryKey: queryKeys.probe(transport.device),
+    queryFn: () => createClient(transport).probeVoltages(),
+    enabled: options.enabled,
+    refetchInterval: options.enabled ? 1_000 : false,
+    staleTime: 0,
+  });
+}
+
+export function useCalibration(
+  transport: Transport,
+): UseQueryResult<Calibration> {
+  return useQuery({
+    queryKey: queryKeys.calibration(transport.device),
+    queryFn: () => createClient(transport).calibration(),
+  });
+}
+
+export function usePatchCalibration(
+  transport: Transport,
+): UseMutationResult<Calibration, Error, CalibrationPatch> {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: CalibrationPatch) =>
+      createClient(transport).patchCalibration(body),
+    onSuccess: (applied) => {
+      queryClient.setQueryData(
+        queryKeys.calibration(transport.device),
+        applied,
+      );
+    },
+  });
 }
