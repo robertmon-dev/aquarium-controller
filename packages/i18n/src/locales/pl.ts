@@ -240,6 +240,12 @@ export const pl: DeepString<typeof en> = {
       solenoid: "elektrozawór",
       electrode: "elektroda",
     },
+    tds: {
+      title: "substancje rozpuszczone",
+      ppm: "TDS",
+      ec: "przewodnictwo",
+      beyondRange: "poza zakresem sondy",
+    },
     ato: {
       title: "ato",
       reservoirEmpty: "zbiornik pusty",

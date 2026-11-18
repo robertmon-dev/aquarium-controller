@@ -238,6 +238,12 @@ export const en = {
       solenoid: "solenoid",
       electrode: "electrode",
     },
+    tds: {
+      title: "dissolved solids",
+      ppm: "TDS",
+      ec: "conductivity",
+      beyondRange: "beyond the probe range",
+    },
     ato: {
       title: "ato",
       reservoirEmpty: "reservoir empty",
