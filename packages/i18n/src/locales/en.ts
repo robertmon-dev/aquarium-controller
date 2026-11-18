@@ -272,4 +272,47 @@ export const en = {
     pump: "pump",
     reserve: "reserve",
   },
+  calibration: {
+    title: "probe calibration",
+    expand: "calibrate probes",
+    collapse: "hide calibration",
+    save: "save calibration",
+    saved: "the device accepted the calibration",
+    saveFailed: "the calibration was not saved",
+    notStored: "the device could not store it, so it would be lost on reboot",
+
+    liveVolts: "probe voltage",
+    liveReading: "reading",
+    noProbe: "probe not connected",
+    neverSampled: "the device has not sampled yet",
+    staleReading: "last read {{seconds}}s ago",
+    settling: "settling…",
+    stable: "stable",
+
+    phTitle: "pH probe",
+    neutralVolts: "voltage at pH 7.00",
+    acidVolts: "voltage at pH 4.00",
+    calibratedAtCelsius: "buffer temperature",
+    calibratedAtHelper: "the temperature of the buffer, not of the tank",
+    captureNeutral: "capture as 7.00",
+    captureAcid: "capture as 4.00",
+    electrodeHealth: "electrode health",
+
+    makeupTitle: "top-up tank",
+    makeupTankCelsius: "water temperature",
+    makeupHelper: "no sensor there, so the device uses this value",
+
+    tdsTitle: "TDS probe",
+    tdsFactor: "correction factor",
+    referencePpm: "reference solution ppm",
+    referenceHelper: "fills in the factor from the current reading",
+    referenceNoReading: "no TDS reading to compare against",
+  },
+
+  calibrationValidation: {
+    numberRequired: "enter a number",
+    spanTooSmall: "the two buffer points are too close; measure both buffers",
+    makeupRange: "temperature must be between 0 and 40 °C",
+    factorRange: "factor must be between 0.1 and 10",
+  },
 } as const;

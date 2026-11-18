@@ -274,4 +274,47 @@ export const pl: DeepString<typeof en> = {
     pump: "pompowa",
     reserve: "rezerwa",
   },
+  calibration: {
+    title: "kalibracja sond",
+    expand: "kalibruj sondy",
+    collapse: "ukryj kalibrację",
+    save: "zapisz kalibrację",
+    saved: "urządzenie przyjęło kalibrację",
+    saveFailed: "kalibracja nie została zapisana",
+    notStored: "urządzenie nie zapisało jej, więc zniknęłaby po restarcie",
+
+    liveVolts: "napięcie sondy",
+    liveReading: "odczyt",
+    noProbe: "sonda nie podłączona",
+    neverSampled: "urządzenie jeszcze nie próbkowało",
+    staleReading: "odczyt sprzed {{seconds}}s",
+    settling: "stabilizuje się…",
+    stable: "stabilnie",
+
+    phTitle: "sonda pH",
+    neutralVolts: "napięcie przy pH 7.00",
+    acidVolts: "napięcie przy pH 4.00",
+    calibratedAtCelsius: "temperatura buforu",
+    calibratedAtHelper: "temperatura buforu, nie zbiornika",
+    captureNeutral: "złap jako 7.00",
+    captureAcid: "złap jako 4.00",
+    electrodeHealth: "zdrowie elektrody",
+
+    makeupTitle: "zbiornik podmian",
+    makeupTankCelsius: "temperatura wody",
+    makeupHelper: "nie ma tam czujnika, więc urządzenie bierze tę wartość",
+
+    tdsTitle: "sonda TDS",
+    tdsFactor: "współczynnik korekcji",
+    referencePpm: "ppm roztworu wzorcowego",
+    referenceHelper: "wylicza współczynnik z bieżącego odczytu",
+    referenceNoReading: "brak odczytu TDS do porównania",
+  },
+
+  calibrationValidation: {
+    numberRequired: "podaj liczbę",
+    spanTooSmall: "punkty buforowe są zbyt blisko; zmierz oba bufory",
+    makeupRange: "temperatura musi mieścić się w zakresie 0–40 °C",
+    factorRange: "współczynnik musi mieścić się w zakresie 0,1–10",
+  },
 };
