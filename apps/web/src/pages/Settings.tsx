@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { ScreenMessage } from "@/components/molecules";
 import { DeviceForm } from "@/components/organisms/DeviceForm/DeviceForm";
 import { DeviceInfo } from "@/components/organisms/DeviceInfo/DeviceInfo";
+import { CalibrationPanel } from "@/components/organisms/CalibrationPanel/CalibrationPanel";
 import { useDevice } from "@/providers/AppProviders";
 import { useT } from "@aquarium/i18n/use-locale";
 
@@ -10,7 +11,8 @@ export function Settings() {
   const { device, transport, setDevice, loading } = useDevice();
   const navigate = useNavigate();
 
-  if (loading) return <ScreenMessage loading>{t("deviceInfo.checking")}</ScreenMessage>;
+  if (loading)
+    return <ScreenMessage loading>{t("deviceInfo.checking")}</ScreenMessage>;
 
   return (
     <>
@@ -23,7 +25,10 @@ export function Settings() {
       />
 
       {device && transport ? (
-        <DeviceInfo device={device} transport={transport} />
+        <>
+          <DeviceInfo device={device} transport={transport} />
+          <CalibrationPanel transport={transport} />
+        </>
       ) : null}
     </>
   );
