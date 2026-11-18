@@ -3,22 +3,26 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
+use crate::domain::calibration::Calibration;
 use crate::domain::light::{LightingOverride, LightingTarget};
-use crate::domain::metrics::TankTelemetryDto;
+use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
 use crate::domain::water::WaterLevelSnapshot;
-use crate::ports::inbound::{LightingControl, TelemetryQuery};
+use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
-    LightingOverrideSource, TelemetrySink, WaterLevelSink, WaterLevelSource,
+    CalibrationPersistence, LightingOverrideSource, ProbeVoltageSink, TelemetrySink,
+    WaterLevelSink, WaterLevelSource,
 };
 
 pub struct InMemoryTelemetryStore {
     tx: watch::Sender<TankTelemetryDto>,
+    probes: Mutex<ProbeVoltagesDto>,
 }
 
 impl InMemoryTelemetryStore {
     pub fn new() -> Self {
         Self {
             tx: watch::channel(TankTelemetryDto::empty()).0,
+            probes: Mutex::new(ProbeVoltagesDto::NEVER_SAMPLED),
         }
     }
 }
@@ -48,6 +52,28 @@ impl TelemetryQuery for InMemoryTelemetryStore {
 impl TelemetrySink for Arc<InMemoryTelemetryStore> {
     fn publish(&self, snapshot: TankTelemetryDto) {
         self.as_ref().publish(snapshot);
+    }
+}
+
+impl ProbeVoltageSink for InMemoryTelemetryStore {
+    fn publish_volts(&self, ph: Option<f32>, tds: Option<f32>, sampled_at_epoch_s: u64) {
+        *self.probes.lock().expect("probe voltage mutex poisoned") = ProbeVoltagesDto {
+            ph,
+            tds,
+            sampled_at_epoch_s,
+        };
+    }
+}
+
+impl ProbeVoltageSink for Arc<InMemoryTelemetryStore> {
+    fn publish_volts(&self, ph: Option<f32>, tds: Option<f32>, sampled_at_epoch_s: u64) {
+        self.as_ref().publish_volts(ph, tds, sampled_at_epoch_s);
+    }
+}
+
+impl ProbeVoltageQuery for InMemoryTelemetryStore {
+    fn probe_voltages(&self) -> ProbeVoltagesDto {
+        *self.probes.lock().expect("probe voltage mutex poisoned")
     }
 }
 
@@ -187,6 +213,18 @@ impl WaterLevelSink for Arc<InMemoryWaterLevelStore> {
 impl WaterLevelSource for Arc<InMemoryWaterLevelStore> {
     fn levels(&self) -> WaterLevelSnapshot {
         self.as_ref().levels()
+    }
+}
+
+pub struct VolatileCalibrationStore;
+
+impl CalibrationPersistence for VolatileCalibrationStore {
+    fn load(&self) -> Option<Calibration> {
+        None
+    }
+
+    fn store(&self, _value: &Calibration) -> Result<(), &'static str> {
+        Ok(())
     }
 }
 

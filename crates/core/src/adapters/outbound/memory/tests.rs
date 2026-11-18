@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use super::InMemoryTelemetryStore;
-use crate::domain::metrics::{SystemMode, TankTelemetryDto};
-use crate::ports::inbound::TelemetryQuery;
-use crate::ports::outbound::TelemetrySink;
+use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
+use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
+use crate::ports::outbound::{ProbeVoltageSink, TelemetrySink};
 
 fn snapshot_with_uptime(uptime: u64) -> TankTelemetryDto {
     let mut s = TankTelemetryDto::empty();
@@ -265,4 +267,63 @@ mod water_level {
             WaterLevelState::Wet
         );
     }
+}
+
+#[test]
+fn a_fresh_telemetry_store_reports_that_nothing_was_sampled_yet() {
+    let store = InMemoryTelemetryStore::new();
+
+    assert_eq!(
+        store.probe_voltages(),
+        ProbeVoltagesDto::NEVER_SAMPLED,
+        "a zero timestamp is how the client tells that the device has not sampled"
+    );
+}
+
+#[test]
+fn the_telemetry_store_hands_back_the_last_published_voltages() {
+    let store = InMemoryTelemetryStore::new();
+
+    store.publish_volts(Some(1.52), Some(0.91), 1_750_000_000);
+
+    assert_eq!(
+        store.probe_voltages(),
+        ProbeVoltagesDto {
+            ph: Some(1.52),
+            tds: Some(0.91),
+            sampled_at_epoch_s: 1_750_000_000,
+        }
+    );
+}
+
+#[test]
+fn a_missing_probe_is_published_as_absent_rather_than_zero() {
+    let store = InMemoryTelemetryStore::new();
+
+    store.publish_volts(None, Some(0.91), 1_750_000_000);
+
+    let read = store.probe_voltages();
+
+    assert_eq!(read.ph, None, "zero volts is a reading, absence is not");
+    assert_eq!(read.tds, Some(0.91));
+}
+
+#[test]
+fn publishing_voltages_replaces_the_previous_sample() {
+    let store = InMemoryTelemetryStore::new();
+
+    store.publish_volts(Some(1.50), None, 10);
+    store.publish_volts(Some(1.51), None, 12);
+
+    assert_eq!(store.probe_voltages().sampled_at_epoch_s, 12);
+    assert_eq!(store.probe_voltages().ph, Some(1.51));
+}
+
+#[test]
+fn voltages_published_through_an_arc_reach_the_store() {
+    let store = Arc::new(InMemoryTelemetryStore::new());
+
+    ProbeVoltageSink::publish_volts(&store, Some(1.49), Some(0.80), 7);
+
+    assert_eq!(store.probe_voltages().ph, Some(1.49));
 }
