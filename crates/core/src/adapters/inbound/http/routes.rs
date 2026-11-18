@@ -7,37 +7,50 @@ use picoserve::Router;
 
 use crate::adapters::inbound::http::api::ApiLayer;
 use crate::adapters::inbound::http::handlers;
-use crate::ports::inbound::{LightingControl, TelemetryQuery};
+use crate::ports::inbound::{
+    CalibrationControl, LightingControl, ProbeVoltageQuery, TelemetryQuery,
+};
 
-pub struct AppState<Q, L> {
+pub struct AppState<Q, L, C> {
     pub telemetry: Arc<Q>,
     pub lighting: Arc<L>,
+    pub calibration: Arc<C>,
 }
 
 pub struct LightingState<L>(pub Arc<L>);
 
-impl<Q, L> FromRef<AppState<Q, L>> for Arc<Q> {
-    fn from_ref(input: &AppState<Q, L>) -> Self {
+pub struct CalibrationState<C>(pub Arc<C>);
+
+impl<Q, L, C> FromRef<AppState<Q, L, C>> for Arc<Q> {
+    fn from_ref(input: &AppState<Q, L, C>) -> Self {
         Arc::clone(&input.telemetry)
     }
 }
 
-impl<Q, L> FromRef<AppState<Q, L>> for LightingState<L> {
-    fn from_ref(input: &AppState<Q, L>) -> Self {
+impl<Q, L, C> FromRef<AppState<Q, L, C>> for LightingState<L> {
+    fn from_ref(input: &AppState<Q, L, C>) -> Self {
         LightingState(Arc::clone(&input.lighting))
     }
 }
 
-pub fn router<Q, L>(
+impl<Q, L, C> FromRef<AppState<Q, L, C>> for CalibrationState<C> {
+    fn from_ref(input: &AppState<Q, L, C>) -> Self {
+        CalibrationState(Arc::clone(&input.calibration))
+    }
+}
+
+pub fn router<Q, L, C>(
     telemetry: Arc<Q>,
     lighting: Arc<L>,
+    calibration: Arc<C>,
     token: &'static str,
     sse_keepalive: Duration,
     cors_origin: &'static str,
 ) -> Router<impl PathRouter>
 where
-    Q: TelemetryQuery + 'static,
+    Q: TelemetryQuery + ProbeVoltageQuery + 'static,
     L: LightingControl + 'static,
+    C: CalibrationControl + 'static,
 {
     Router::new()
         .route("/api/telemetry", get(handlers::telemetry::snapshot::<Q>))
@@ -48,6 +61,7 @@ where
             }),
         )
         .route("/api/health", get(handlers::health::probe::<Q>))
+        .route("/api/probe", get(handlers::probe::voltages::<Q>))
         .route(
             "/api/lighting/override",
             get(handlers::lighting::current::<L>)
@@ -58,9 +72,14 @@ where
             ("/api/lighting/schedule", parse_path_segment::<u8>()),
             get(handlers::lighting::schedule),
         )
+        .route(
+            "/api/calibration",
+            get(handlers::calibration::current::<C>).patch(handlers::calibration::patch::<C>),
+        )
         .layer(ApiLayer::new(token, cors_origin))
         .with_state(AppState {
             telemetry,
             lighting,
+            calibration,
         })
 }
