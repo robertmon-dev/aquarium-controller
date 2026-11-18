@@ -339,3 +339,28 @@ fn every_system_mode_has_a_name() {
         assert_eq!(mode_name(&mode), expected);
     }
 }
+
+#[test]
+fn a_tds_reading_becomes_its_own_measurement() {
+    let mut snapshot = TankTelemetryDto::empty();
+    snapshot.timestamp_epoch_s = 1_750_000_000;
+    snapshot.tds.ppm = Some(412.5);
+    snapshot.tds.ec_us_cm = Some(825.0);
+
+    let body = encode(&snapshot).expect("a timestamped snapshot encodes");
+
+    assert!(
+        body.contains("aquarium_tds ppm=412.5,ec=825 1750000000"),
+        "got: {body}"
+    );
+}
+
+#[test]
+fn a_snapshot_without_a_tds_reading_emits_no_tds_measurement() {
+    let mut snapshot = TankTelemetryDto::empty();
+    snapshot.timestamp_epoch_s = 1_750_000_000;
+
+    let body = encode(&snapshot).expect("a timestamped snapshot encodes");
+
+    assert!(!body.contains("aquarium_tds"), "got: {body}");
+}

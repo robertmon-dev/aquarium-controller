@@ -90,6 +90,13 @@ fn filtration(snapshot: &TankTelemetryDto) -> Fields {
     fields
 }
 
+fn tds(snapshot: &TankTelemetryDto) -> Fields {
+    let mut fields = Fields::new();
+    fields.optional_float("ppm", snapshot.tds.ppm);
+    fields.optional_float("ec", snapshot.tds.ec_us_cm);
+    fields
+}
+
 fn ato(snapshot: &TankTelemetryDto) -> Fields {
     let mut fields = Fields::new();
     fields.boolean("sump_low", snapshot.ato.sump_water_low);
@@ -158,6 +165,7 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
     lines.extend(line("aquarium_health", health(snapshot), timestamp_s));
     lines.extend(line("aquarium_lighting", lighting(snapshot), timestamp_s));
     lines.extend(line("aquarium_co2", co2(snapshot), timestamp_s));
+    lines.extend(line("aquarium_tds", tds(snapshot), timestamp_s));
     lines.extend(line(
         "aquarium_filtration",
         filtration(snapshot),
