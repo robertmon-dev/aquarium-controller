@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::calibration::PhCalibration;
 
 const CAL: PhCalibration = PhCalibration {
     neutral_volts: 1.500,
@@ -88,13 +89,10 @@ fn two_identical_calibration_points_are_rejected() {
         calibrated_at_celsius: 25.0,
     };
 
-    assert_eq!(
-        dead.validate(),
-        Err(PhError::InvalidCalibration(
-            "the two buffer points are too close; same buffer measured twice, or a dead electrode"
-        ))
-    );
-    assert!(convert(1.5, 25.0, &dead).is_err());
+    assert!(matches!(
+        convert(1.5, 25.0, &dead),
+        Err(PhError::InvalidCalibration(_))
+    ));
 }
 
 #[test]
@@ -106,7 +104,10 @@ fn a_collapsed_span_is_rejected_even_when_the_points_differ() {
     };
 
     assert!(
-        worn.validate().is_err(),
+        matches!(
+            convert(1.5, 25.0, &worn),
+            Err(PhError::InvalidCalibration(_))
+        ),
         "10 mV over three pH units is dead"
     );
 }
@@ -137,14 +138,4 @@ fn a_voltage_far_off_the_scale_is_rejected() {
         convert(5.0, 25.0, &CAL).is_err(),
         "a shorted input must not produce a plausible-looking pH"
     );
-}
-
-#[test]
-fn volts_per_ph_is_the_span_over_three_units() {
-    assert_close(CAL.volts_per_ph(), 0.05916);
-}
-
-#[test]
-fn volts_per_ph_ignores_board_polarity() {
-    assert_close(INVERTED.volts_per_ph(), 0.05916);
 }
