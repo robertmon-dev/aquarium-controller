@@ -7,9 +7,11 @@ import {
   formatDuration,
   formatHeap,
   formatLitresPerHour,
+  formatMicrosiemens,
   formatPercent,
   formatPercentPair,
   formatPh,
+  formatPpm,
   formatRssi,
 } from "./format";
 
@@ -126,6 +128,32 @@ export function co2Card(s: TankTelemetryDto, t: Translate): CardData {
             ? EM_DASH
             : formatPercent(Math.round(ph_electrode_health * 100)),
       },
+    ],
+  };
+}
+
+export const RATED_MAX_PPM = 1000;
+
+export function tdsCard(s: TankTelemetryDto, t: Translate): CardData {
+  const { ppm, ec_us_cm } = s.tds;
+
+  const status: StatusTone =
+    ppm === null ? "off" : ppm > RATED_MAX_PPM ? "degraded" : "ok";
+
+  const statusLabel =
+    ppm === null
+      ? t("common.off")
+      : ppm > RATED_MAX_PPM
+        ? t("cards.tds.beyondRange")
+        : t("common.ok");
+
+  return {
+    title: t("cards.tds.title"),
+    status,
+    statusLabel,
+    metrics: [
+      { label: t("cards.tds.ppm"), value: formatPpm(ppm) },
+      { label: t("cards.tds.ec"), value: formatMicrosiemens(ec_us_cm) },
     ],
   };
 }
