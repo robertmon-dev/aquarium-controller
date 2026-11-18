@@ -9,4 +9,7 @@ export const queryKeys = {
     ["lighting-override", device.host, device.port] as const,
   lightingSchedule: (device: DeviceConfig, month: number) =>
     ["lighting-schedule", device.host, device.port, month] as const,
+  probe: (device: DeviceConfig) => ["probe", device.host, device.port] as const,
+  calibration: (device: DeviceConfig) =>
+    ["calibration", device.host, device.port] as const,
 };
