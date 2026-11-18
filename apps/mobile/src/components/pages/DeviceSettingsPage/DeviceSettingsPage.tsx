@@ -1,7 +1,11 @@
 import { router } from "expo-router";
 import { ScrollView } from "react-native";
 import { LanguageSwitcher } from "@/components/molecules";
-import { DeviceForm, DeviceInfo } from "@/components/organisms";
+import {
+  CalibrationPanel,
+  DeviceForm,
+  DeviceInfo,
+} from "@/components/organisms";
 import { screenStyles, spacing } from "@aquarium/theme";
 import { useDevice } from "@/components/utility/app-providers";
 import type { ReactNode } from "react";
@@ -23,7 +27,10 @@ export const DeviceSettingsPage = (): ReactNode => {
       />
 
       {device && transport ? (
-        <DeviceInfo device={device} transport={transport} />
+        <>
+          <DeviceInfo device={device} transport={transport} />
+          <CalibrationPanel transport={transport} />
+        </>
       ) : null}
 
       <LanguageSwitcher />
