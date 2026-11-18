@@ -146,3 +146,41 @@ mod ph {
         assert_eq!(ph.value(), 6.85);
     }
 }
+
+use super::Tds;
+
+#[test]
+fn accepts_a_reading_inside_the_rated_range() {
+    let reading = Tds::new(420.0).expect("valid reading");
+
+    assert_eq!(reading.as_ppm(), 420.0);
+    assert!(reading.is_within_rated_range());
+}
+
+#[test]
+fn accepts_a_reading_above_the_rated_range_but_flags_it() {
+    let reading = Tds::new(1_100.0).expect("the board can read past its rating");
+
+    assert!(!reading.is_within_rated_range());
+}
+
+#[test]
+fn accepts_a_dry_probe_reading_zero() {
+    assert!(Tds::new(0.0).is_ok());
+}
+
+#[test]
+fn rejects_a_reading_beyond_what_the_board_can_produce() {
+    assert!(Tds::new(1_300.0).is_err());
+}
+
+#[test]
+fn rejects_a_negative_reading() {
+    assert!(Tds::new(-1.0).is_err());
+}
+
+#[test]
+fn rejects_non_finite_readings() {
+    assert!(Tds::new(f32::NAN).is_err());
+    assert!(Tds::new(f32::INFINITY).is_err());
+}

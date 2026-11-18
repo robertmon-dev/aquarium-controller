@@ -79,6 +79,43 @@ impl fmt::Display for Ph {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Tds(f32);
+
+impl Tds {
+    pub const MIN_PPM: f32 = 0.0;
+    pub const RATED_MAX_PPM: f32 = 1000.0;
+    pub const MAX_PLAUSIBLE_PPM: f32 = 1200.0;
+
+    pub fn new(ppm: f32) -> Result<Self, &'static str> {
+        if !ppm.is_finite() {
+            return Err("TDS reading is not a finite number");
+        }
+
+        if !(Self::MIN_PPM..=Self::MAX_PLAUSIBLE_PPM).contains(&ppm) {
+            return Err("TDS reading is outside the plausible range of the board");
+        }
+
+        Ok(Self(ppm))
+    }
+
+    #[inline]
+    pub fn as_ppm(&self) -> f32 {
+        self.0
+    }
+
+    #[inline]
+    pub fn is_within_rated_range(&self) -> bool {
+        self.0 <= Self::RATED_MAX_PPM
+    }
+}
+
+impl fmt::Display for Tds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.0} ppm", self.0)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -113,6 +150,7 @@ pub struct TankTelemetryDto {
     pub temperature: TemperatureMetricsDto,
     pub filtration: FiltrationMetricsDto,
     pub co2: Co2MetricsDto,
+    pub tds: TdsMetricsDto,
     pub ato: AtoMetricsDto,
     pub lighting: LightingMetricsDto,
     pub water_level: WaterLevelMetricsDto,
@@ -146,6 +184,10 @@ impl TankTelemetryDto {
                 current_ph: None,
                 drop_checker_ph_target: None,
                 ph_electrode_health: None,
+            },
+            tds: TdsMetricsDto {
+                ppm: None,
+                ec_us_cm: None,
             },
             ato: AtoMetricsDto {
                 sump_water_low: false,
@@ -200,6 +242,33 @@ pub struct Co2MetricsDto {
     pub current_ph: Option<f32>,
     pub drop_checker_ph_target: Option<f32>,
     pub ph_electrode_health: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct ProbeVoltagesDto {
+    pub ph: Option<f32>,
+    pub tds: Option<f32>,
+
+    #[cfg_attr(feature = "ts-export", ts(type = "number"))]
+    pub sampled_at_epoch_s: u64,
+}
+
+impl ProbeVoltagesDto {
+    pub const NEVER_SAMPLED: Self = Self {
+        ph: None,
+        tds: None,
+        sampled_at_epoch_s: 0,
+    };
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct TdsMetricsDto {
+    pub ppm: Option<f32>,
+    pub ec_us_cm: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
