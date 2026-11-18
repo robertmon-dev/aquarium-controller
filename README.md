@@ -36,10 +36,10 @@ Both analog probes read through one ADS1115, a 16-bit ADC on I2C. The ESP32-S3 i
 ESP32-S3                               ADS1115 module (address 0x48)
 
 3V3 ─────────────────────────────────  VDD
-GND ──────────────┬──────────────────  GND
-                  └──────────────────  ADDR   (tied low -> 0x48)
+GND ─────────────────────────────────  GND
 GPIO8 (I2C SDA) ─────────────────────  SDA
 GPIO9 (I2C SCL) ─────────────────────  SCL
+                                       ADDR   (module pull-down -> 0x48)
                                        ALRT   (unused, comparator disabled)
 
                                        A0 ──  TDS board analog out
@@ -50,6 +50,7 @@ GPIO9 (I2C SCL) ───────────────────── 
 
 Notes:
 * **Both probe boards must run from the same `3V3` rail as the ADS1115.** Absolute maximum on an analog input is VDD + 0.3 V; a board fed from 5 V can exceed that, and some pH boards drive their output towards the supply rail when the electrode is unplugged. Nothing in firmware can protect the converter from that.
+* `ADDR` needs no wiring: the breakout module pulls it down on board, which selects address `0x48`. Only a bare ADS1115 chip has to have `ADDR` driven explicitly — the die itself has no pull-down, and TI's datasheet requires the pin to sit at `VDD`, `GND`, `SDA` or `SCL` rather than float.
 * Most breakout modules already carry 10 kΩ pull-ups on `SDA`/`SCL`. If yours does not, add 4.7 kΩ from each line to `3V3`.
 * Powering the ADS1115 from 5 V while driving I2C at 3.3 V is not reliable: its logic-high threshold is 0.7 × VDD = 3.5 V, which 3.3 V does not meet.
 * The driver uses PGA ±4.096 V (125 µV per count), single-shot conversions at 128 SPS, and averages 16 samples per reading — about 150 ms per channel. `A2` and `A3` are defined in the driver but unused.
@@ -117,7 +118,7 @@ The firmware addresses each DS18B20 by its ROM, so both ROMs must be known. Flip
 
 Both analog probes need calibration before their readings mean anything. The stored defaults in `settings.rs` are only a starting point — treat a pH value as false until both buffer points have been captured.
 
-**First contact with the hardware.** Set `run_mode: RunMode::AdcProbe` in `crates/firmware/src/settings.rs`, flash, and watch the serial monitor. It prints the raw count and the voltage for `A0` and `A1` every two seconds and starts nothing else — no WiFi, no HTTP — so a wiring fault cannot hide behind a network problem. A count stuck at `0` or `32767` means the input sits on a rail; `ADS1115 did not accept the config write` means nothing answers at `0x48`, which is usually swapped `SDA`/`SCL` or a floating `ADDR` pin.
+**First contact with the hardware.** Set `run_mode: RunMode::AdcProbe` in `crates/firmware/src/settings.rs`, flash, and watch the serial monitor. It prints the raw count and the voltage for `A0` and `A1` every two seconds and starts nothing else — no WiFi, no HTTP — so a wiring fault cannot hide behind a network problem. A count stuck at `0` or `32767` means the input sits on a rail; `ADS1115 did not accept the config write` means nothing answers at `0x48`. Check `SDA`/`SCL` first — swapping them is the usual cause — then power, then whether anything pulls `ADDR` high: a jumper or solder bridge to `VDD` moves the module to `0x49` and the default address stops matching.
 
 **Everything after that happens in the apps.** Switch `run_mode` back to `RunMode::Normal`, set `ph` and `tds` to `ComponentMode::Running`, flash, and open Settings in the mobile or web client. The calibration panel there shows the live probe voltage next to the derived reading and writes to NVS, so a calibration survives a reboot:
 
