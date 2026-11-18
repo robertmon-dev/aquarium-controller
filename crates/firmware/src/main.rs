@@ -9,18 +9,24 @@ use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
 use aquarium_core::application::{
-    MetricsExporter, TelemetryCollector, TelemetryConfig, TelemetrySources, WaterLevelSampler,
+    CalibrationService, MetricsExporter, TelemetryCollector, TelemetryConfig, TelemetrySources,
+    WaterLevelSampler,
 };
 use aquarium_core::domain::metrics::TankTelemetryDto;
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
-    Clock, LightingOverrideSource, MetricsWriter, PhReader, SystemHealthProvider, TelemetrySink,
-    TemperatureReader, WaterLevelPins, WaterLevelSink, WaterLevelSource,
+    CalibrationSource, Clock, LightingOverrideSource, MetricsWriter, PhReader, ProbeVoltageSink,
+    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader, WaterLevelPins,
+    WaterLevelSink, WaterLevelSource,
 };
+use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
     convert_all, read_scratchpad, search_roms, temperature_from_scratchpad, RomAddress,
 };
+use esp_idf_hal::gpio::{InputPin, OutputPin};
+use esp_idf_hal::i2c::{I2c, I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -31,9 +37,10 @@ use tokio::task::LocalSet;
 use tokio::time::{sleep, MissedTickBehavior};
 use tracing::{error, info};
 
+use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
 use aquarium_controller::adapters::outbound::influx::InfluxWriter;
-use aquarium_controller::adapters::outbound::ph::PhProbe;
+use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 use aquarium_controller::infrastructure::clock::SystemClock;
@@ -44,6 +51,9 @@ use aquarium_controller::settings::{RunMode, Settings};
 const SETTINGS: Settings = Settings::from_env();
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+const I2C_BAUDRATE_KHZ: u32 = 400;
+const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 
 const DISCOVERY_SENSOR_LIMIT: usize = 8;
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
@@ -109,6 +119,18 @@ async fn run() -> anyhow::Result<()> {
         return discover_roms(&mut bus).await;
     }
 
+    if matches!(SETTINGS.run_mode, RunMode::AdcProbe) {
+        let mut front_end = analog_front_end(
+            peripherals.i2c0,
+            peripherals.pins.gpio8,
+            peripherals.pins.gpio9,
+            Some(Channel::A1),
+            Some(Channel::A0),
+        )?;
+
+        return probe_adc(&mut front_end).await;
+    }
+
     let temperature = if components.temperature.is_initialized() {
         let bus =
             OneWireBus::new(peripherals.pins.gpio4).context("Failed to initialize 1-Wire bus")?;
@@ -127,13 +149,19 @@ async fn run() -> anyhow::Result<()> {
         TemperatureSource::Disabled
     };
 
+    let nvs_partition = EspDefaultNvsPartition::take().context("NVS partition already taken")?;
+
     let wifi = if components.wifi.is_initialized() {
         let sys_loop = EspSystemEventLoop::take().context("System event loop already taken")?;
-        let nvs = EspDefaultNvsPartition::take().context("NVS partition already taken")?;
 
         Some(
-            WifiManager::new(peripherals.modem, sys_loop, nvs, &SETTINGS.wifi)
-                .context("Failed to initialize WiFi")?,
+            WifiManager::new(
+                peripherals.modem,
+                sys_loop,
+                nvs_partition.clone(),
+                &SETTINGS.wifi,
+            )
+            .context("Failed to initialize WiFi")?,
         )
     } else {
         None
@@ -184,21 +212,43 @@ async fn run() -> anyhow::Result<()> {
         (None, _) => None,
     };
 
-    let ph = if components.ph.is_initialized() {
-        let probe = PhProbe::new(
-            peripherals.adc1,
-            peripherals.pins.gpio1,
-            SETTINGS.sensors.ph.samples_per_reading,
-        )
-        .context("Failed to initialize the pH probe")?;
+    let calibration = Arc::new(CalibrationService::new(
+        SETTINGS.sensors.calibration,
+        NvsCalibration::new(nvs_partition)
+            .context("Failed to open the calibration namespace in NVS")?,
+    ));
 
-        if components.ph.is_running() {
-            info!("pH probe ready");
-            Some(probe)
-        } else {
-            info!("pH probe initialized but not wired into telemetry");
-            None
-        }
+    info!(
+        makeup_tank_celsius = calibration.calibration().makeup_tank_celsius,
+        tds_factor = calibration.calibration().tds_factor,
+        "Calibration loaded"
+    );
+
+    let analog = if components.ph.is_initialized() || components.tds.is_initialized() {
+        let front_end = analog_front_end(
+            peripherals.i2c0,
+            peripherals.pins.gpio8,
+            peripherals.pins.gpio9,
+            SETTINGS
+                .sensors
+                .analog
+                .ph_channel
+                .filter(|_| components.ph.is_running()),
+            SETTINGS
+                .sensors
+                .analog
+                .tds_channel
+                .filter(|_| components.tds.is_running()),
+        )
+        .context("Failed to initialize the ADS1115 front end")?;
+
+        info!(
+            ph = components.ph.is_running(),
+            tds = components.tds.is_running(),
+            "ADS1115 front end ready"
+        );
+
+        Some(front_end)
     } else {
         None
     };
@@ -213,12 +263,12 @@ async fn run() -> anyhow::Result<()> {
                 health: EspSystemHealth,
                 overrides: Arc::clone(&lighting),
                 levels: Arc::clone(&levels),
-                ph,
+                analog,
+                calibration: Arc::clone(&calibration),
             },
             Arc::clone(&store),
             TelemetryConfig {
                 target_celsius: SETTINGS.sensors.target_celsius,
-                ph: SETTINGS.sensors.ph.calibration,
                 ph_nominal_volts_per_ph: SETTINGS.sensors.ph.nominal_volts_per_ph,
             },
         ))
@@ -280,6 +330,7 @@ async fn run() -> anyhow::Result<()> {
             listener,
             Arc::clone(&store),
             Arc::clone(&lighting),
+            Arc::clone(&calibration),
             HttpConfig {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
@@ -368,17 +419,18 @@ where
     }
 }
 
-async fn sensor_task<R, C, H, S, O, W, P>(
-    mut collector: TelemetryCollector<R, C, H, S, O, W, P>,
+async fn sensor_task<R, C, H, S, O, W, A, K>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K>,
     lighting_changed: Arc<Notify>,
 ) where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink,
+    S: TelemetrySink + ProbeVoltageSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
-    P: PhReader,
+    A: PhReader + TdsReader,
+    K: CalibrationSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -387,6 +439,45 @@ async fn sensor_task<R, C, H, S, O, W, P>(
         tokio::select! {
             _ = ticker.tick() => collector.sample().await,
             _ = lighting_changed.notified() => collector.republish(),
+        }
+    }
+}
+
+fn analog_front_end<'d>(
+    i2c: impl I2c + 'd,
+    sda: impl InputPin + OutputPin + 'd,
+    scl: impl InputPin + OutputPin + 'd,
+    ph_channel: Option<Channel>,
+    tds_channel: Option<Channel>,
+) -> anyhow::Result<AnalogFrontEnd<'d>> {
+    let analog = &SETTINGS.sensors.analog;
+    let config = I2cConfig::new().baudrate(I2C_BAUDRATE_KHZ.kHz().into());
+
+    let driver = I2cDriver::new(i2c, sda, scl, &config)
+        .context("Failed to initialize the I2C bus for the ADS1115")?;
+
+    Ok(AnalogFrontEnd::new(
+        Ads1115Bus::new(driver, analog.address, analog.gain, analog.data_rate),
+        ph_channel,
+        tds_channel,
+        analog.samples_per_reading,
+    ))
+}
+
+async fn probe_adc(front_end: &mut AnalogFrontEnd<'_>) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(PROBE_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    info!("ADC probe: A0 is the TDS probe, A1 is the pH probe");
+
+    loop {
+        ticker.tick().await;
+
+        for (label, channel) in [("A0 tds", Channel::A0), ("A1 ph", Channel::A1)] {
+            match front_end.probe(channel).await {
+                Ok((raw, volts)) => info!(raw, volts, "{label}"),
+                Err(reason) => error!(reason, "{label}"),
+            }
         }
     }
 }
