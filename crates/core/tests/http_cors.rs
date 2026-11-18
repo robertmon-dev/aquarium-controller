@@ -54,7 +54,7 @@ async fn a_preflight_allows_every_method_the_api_serves() {
                 .await
                 .to_lowercase();
 
-            for method in ["get", "put", "delete"] {
+            for method in ["get", "put", "patch", "delete"] {
                 assert!(
                     response.contains(method),
                     "allow-methods must cover {method}, got: {response}"
