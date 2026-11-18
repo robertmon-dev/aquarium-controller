@@ -7,6 +7,8 @@ export interface DeviceConfig {
 export type ApiPath =
   | "/api/telemetry"
   | "/api/health"
+  | "/api/probe"
+  | "/api/calibration"
   | "/api/lighting/override"
   | `/api/lighting/schedule/${number}`;
 
