@@ -6,9 +6,11 @@ import {
   filtrationCard,
   lightingCard,
   systemCard,
+  tdsCard,
   temperatureCard,
 } from "./cards";
 import { translator } from "@aquarium/i18n";
+import { EM_DASH } from "./format";
 
 const t = translator("en");
 
@@ -213,5 +215,53 @@ describe("systemCard", () => {
     expect(
       systemCard({ ...snapshot, system_mode: "maintenance" }, t).status,
     ).toBe("degraded");
+  });
+});
+
+describe("tdsCard", () => {
+  it("shows parts per million alongside conductivity", () => {
+    const card = tdsCard(snapshot, t);
+
+    expect(card.metrics.find((m) => m.label === "TDS")?.value).toBe("413 ppm");
+    expect(card.metrics.find((m) => m.label === "conductivity")?.value).toBe(
+      "825 \u00b5S/cm",
+    );
+    expect(card.status).toBe("ok");
+  });
+
+  it("is off with no reading rather than showing a zero", () => {
+    const card = tdsCard(
+      { ...snapshot, tds: { ppm: null, ec_us_cm: null } },
+      t,
+    );
+
+    expect(card.status).toBe("off");
+    expect(card.metrics[0]?.value).toBe(EM_DASH);
+  });
+
+  it("flags a reading past the rated range instead of presenting it as healthy", () => {
+    const card = tdsCard(
+      { ...snapshot, tds: { ppm: 1100, ec_us_cm: 2200 } },
+      t,
+    );
+
+    expect(card.status).toBe("degraded");
+    expect(card.statusLabel).toBe(t("cards.tds.beyondRange"));
+  });
+
+  it("treats the rated maximum itself as healthy", () => {
+    const card = tdsCard(
+      { ...snapshot, tds: { ppm: 1000, ec_us_cm: 2000 } },
+      t,
+    );
+
+    expect(card.status).toBe("ok");
+  });
+
+  it("reports a dry probe as a real zero", () => {
+    const card = tdsCard({ ...snapshot, tds: { ppm: 0, ec_us_cm: 0 } }, t);
+
+    expect(card.status).toBe("ok");
+    expect(card.metrics[0]?.value).toBe("0 ppm");
   });
 });
