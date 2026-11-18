@@ -65,3 +65,17 @@ export { useDeviceProbe } from "./use-device-probe";
 export type { DeviceProbe } from "./use-device-probe";
 
 export { useTelemetryStream } from "./use-telemetry-stream";
+
+export {
+  appendSample,
+  probeAge,
+  probeStability,
+  STABILITY_SPREAD_VOLTS,
+  STABILITY_WINDOW,
+  tdsFactorFromReference,
+} from "./probe-calibration";
+export type { ProbeStability, TdsFactorInput } from "./probe-calibration";
+
+export { useProbeSamples } from "./use-probe-samples";
+export type { ProbeSamples, ProbeVoltageReading } from "./use-probe-samples";
+export { describeCalibrationFailure } from "./calibration-failure";

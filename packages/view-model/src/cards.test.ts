@@ -34,6 +34,7 @@ const snapshot: TankTelemetryDto = {
     drop_checker_ph_target: 6.8,
     ph_electrode_health: 0.93,
   },
+  tds: { ppm: 412.5, ec_us_cm: 825 },
   ato: {
     sump_water_low: false,
     reservoir_empty: false,
