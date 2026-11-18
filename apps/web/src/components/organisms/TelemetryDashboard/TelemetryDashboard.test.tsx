@@ -21,13 +21,18 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
       heater_active: false,
       sensors_healthy: true,
     },
-    filtration: { flow_rate_lph: 420, flow_ok: true, filter_relay_active: true },
+    filtration: {
+      flow_rate_lph: 420,
+      flow_ok: true,
+      filter_relay_active: true,
+    },
     co2: {
       solenoid_open: false,
       current_ph: 6.85,
       drop_checker_ph_target: 6.8,
       ph_electrode_health: 0.94,
     },
+    tds: { ppm: 412.5, ec_us_cm: 825 },
     ato: {
       sump_water_low: false,
       reservoir_empty: false,
