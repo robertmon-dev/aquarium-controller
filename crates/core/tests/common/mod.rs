@@ -8,7 +8,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
-use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
+use aquarium_core::adapters::outbound::memory::{
+    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore,
+};
+use aquarium_core::application::CalibrationService;
+use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 
 pub const TOKEN: &str = "test-token";
 pub const ORIGIN: &str = "http://localhost:8081";
@@ -23,6 +27,20 @@ pub fn config() -> HttpConfig {
     }
 }
 
+pub type TestCalibration = CalibrationService<VolatileCalibrationStore>;
+
+pub fn calibration_defaults() -> Calibration {
+    Calibration {
+        ph: PhCalibration {
+            neutral_volts: 1.500,
+            acid_volts: 1.67748,
+            calibrated_at_celsius: 25.0,
+        },
+        makeup_tank_celsius: 25.0,
+        tds_factor: 1.0,
+    }
+}
+
 pub async fn start(store: Arc<InMemoryTelemetryStore>) -> SocketAddr {
     start_with_lighting(store, Arc::new(InMemoryLightingStore::new())).await
 }
@@ -31,10 +49,23 @@ pub async fn start_with_lighting(
     store: Arc<InMemoryTelemetryStore>,
     lighting: Arc<InMemoryLightingStore>,
 ) -> SocketAddr {
+    let calibration = Arc::new(CalibrationService::new(
+        calibration_defaults(),
+        VolatileCalibrationStore,
+    ));
+
+    start_with_calibration(store, lighting, calibration).await
+}
+
+pub async fn start_with_calibration(
+    store: Arc<InMemoryTelemetryStore>,
+    lighting: Arc<InMemoryLightingStore>,
+    calibration: Arc<TestCalibration>,
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
 
-    tokio::task::spawn_local(http::run(listener, store, lighting, config()));
+    tokio::task::spawn_local(http::run(listener, store, lighting, calibration, config()));
 
     addr
 }
