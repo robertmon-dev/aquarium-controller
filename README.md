@@ -9,19 +9,18 @@
 Both probes sit on one 1-Wire bus. A single 4.7 kΩ pull-up between `3V3` and the data line serves the whole bus — do not add one per probe.
 
 ```text
-         [4.7 kΩ pull-up]
-         ┌─────[===]─────┐
-         │               │
-ESP32-S3 │               │          Junction (solder joint or terminal block)        Probe 1 (sump)
-3V3 ─────┴───────────────┼──────────●──────────────────────────────────────────────  Red (VCC)
-                         │          └──────────────────────────────────────────────  Red (VCC)              -> Probe 2 (main tank)
-                         │
-GPIO 4 ──────────────────┴──────────●──────────────────────────────────────────────  Yellow / White (DATA)
-(1-Wire data)                       └──────────────────────────────────────────────  Yellow / White (DATA)  -> Probe 2
+ESP32-S3                               Junction                      Both probes
 
-GND ────────────────────────────────●──────────────────────────────────────────────  Black / Blue (GND)
-                                    └──────────────────────────────────────────────  Black / Blue (GND)     -> Probe 2
+3V3 ──────────────┬──────────────────  VCC  ───────────────────────  Red
+                  │
+              [4.7 kΩ]
+                  │
+GPIO4 ────────────┴──────────────────  DATA ───────────────────────  Yellow / White
+(1-Wire data)
+GND ─────────────────────────────────  GND  ───────────────────────  Black / Blue
 ```
+
+The junction is a solder joint or a terminal block: each of the three lines is shared, and both probes hang off it in parallel — sump and main tank are wired identically.
 
 Notes:
 * Probes are powered normally (VCC wired), not parasitically. The bus driver still detects parasite-powered devices and reports them.
