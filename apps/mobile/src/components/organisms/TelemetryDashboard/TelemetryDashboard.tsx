@@ -9,6 +9,7 @@ import {
   filtrationCard,
   lightingCard,
   systemCard,
+  tdsCard,
   temperatureCard,
   waterLevelCard,
 } from "@aquarium/view-model";
@@ -26,6 +27,7 @@ export const TelemetryDashboard = ({
   const cards = [
     filtrationCard(snapshot, t),
     co2Card(snapshot, t),
+    tdsCard(snapshot, t),
     atoCard(snapshot, t),
     lightingCard(snapshot, t),
     systemCard(snapshot, t),
