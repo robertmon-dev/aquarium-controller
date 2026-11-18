@@ -1,26 +1,28 @@
+use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::light::{self, LightingSchedule};
 use crate::domain::metrics::{
     LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
 };
 use crate::ports::outbound::{
-    Clock, LightingOverrideSource, PhReader, SystemHealthProvider, TelemetrySink,
-    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
+    CalibrationSource, Clock, LightingOverrideSource, PhReader, ProbeVoltageSink,
+    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader, TemperatureSensorRole,
+    WaterLevelSource,
 };
-use crate::protocol::ph::{self, PhCalibration};
+use crate::protocol::{ph, tds};
 
-pub struct TelemetrySources<R, C, H, O, W, P> {
+pub struct TelemetrySources<R, C, H, O, W, A, K> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
     pub overrides: O,
     pub levels: W,
-    pub ph: P,
+    pub analog: A,
+    pub calibration: K,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TelemetryConfig {
     pub target_celsius: f32,
-    pub ph: PhCalibration,
     pub ph_nominal_volts_per_ph: f32,
 }
 
@@ -29,28 +31,30 @@ struct Readings {
     tank: Option<f32>,
     sump: Option<f32>,
     ph_volts: Option<f32>,
+    tds_volts: Option<f32>,
 }
 
-pub struct TelemetryCollector<R, C, H, S, O, W, P> {
-    sources: TelemetrySources<R, C, H, O, W, P>,
+pub struct TelemetryCollector<R, C, H, S, O, W, A, K> {
+    sources: TelemetrySources<R, C, H, O, W, A, K>,
     sink: S,
     lighting: LightingSchedule,
     config: TelemetryConfig,
     last: Readings,
 }
 
-impl<R, C, H, S, O, W, P> TelemetryCollector<R, C, H, S, O, W, P>
+impl<R, C, H, S, O, W, A, K> TelemetryCollector<R, C, H, S, O, W, A, K>
 where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink,
+    S: TelemetrySink + ProbeVoltageSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
-    P: PhReader,
+    A: PhReader + TdsReader,
+    K: CalibrationSource,
 {
     pub fn new(
-        sources: TelemetrySources<R, C, H, O, W, P>,
+        sources: TelemetrySources<R, C, H, O, W, A, K>,
         sink: S,
         config: TelemetryConfig,
     ) -> Self {
@@ -65,7 +69,15 @@ where
 
     pub async fn sample(&mut self) {
         self.last = self.read_sensors().await;
-        self.publish();
+
+        let snapshot = self.compose(self.last);
+
+        self.sink.publish_volts(
+            self.last.ph_volts,
+            self.last.tds_volts,
+            snapshot.timestamp_epoch_s,
+        );
+        self.sink.publish(snapshot);
     }
 
     pub fn republish(&self) {
@@ -77,13 +89,15 @@ where
     }
 
     async fn read_sensors(&mut self) -> Readings {
-        let ph_volts = self.sources.ph.read_volts().await.ok();
+        let ph_volts = PhReader::read_volts(&mut self.sources.analog).await.ok();
+        let tds_volts = TdsReader::read_volts(&mut self.sources.analog).await.ok();
 
         if self.sources.temperature.trigger_conversion().await.is_err() {
             return Readings {
                 tank: None,
                 sump: None,
                 ph_volts,
+                tds_volts,
             };
         }
 
@@ -107,6 +121,7 @@ where
             tank,
             sump,
             ph_volts,
+            tds_volts,
         }
     }
 
@@ -115,7 +130,9 @@ where
             tank,
             sump,
             ph_volts,
+            tds_volts,
         } = readings;
+        let calibration = self.sources.calibration.calibration();
         let mut dto = TankTelemetryDto::empty();
 
         dto.timestamp_epoch_s = self.sources.clock.epoch_seconds().unwrap_or(0);
@@ -129,8 +146,13 @@ where
         dto.temperature.target_celsius = self.config.target_celsius;
         dto.temperature.sensors_healthy = tank.is_some() && sump.is_some();
 
-        dto.co2.current_ph = self.resolve_ph(ph_volts, tank);
-        dto.co2.ph_electrode_health = self.electrode_health();
+        dto.co2.current_ph = self.resolve_ph(ph_volts, sump, &calibration.ph);
+        dto.co2.ph_electrode_health = self.electrode_health(&calibration.ph);
+
+        if let Some(reading) = self.resolve_tds(tds_volts, &calibration) {
+            dto.tds.ppm = Some(reading.ppm.as_ppm());
+            dto.tds.ec_us_cm = Some(reading.ec_us_cm);
+        }
 
         dto.lighting = self.evaluate_lighting();
         let levels = self.sources.levels.levels();
@@ -140,21 +162,39 @@ where
         dto
     }
 
-    fn resolve_ph(&self, volts: Option<f32>, tank_celsius: Option<f32>) -> Option<f32> {
+    fn resolve_ph(
+        &self,
+        volts: Option<f32>,
+        sump_celsius: Option<f32>,
+        cal: &PhCalibration,
+    ) -> Option<f32> {
         let volts = volts?;
-        let celsius = tank_celsius.unwrap_or(self.config.target_celsius);
+        let celsius = sump_celsius.unwrap_or(self.config.target_celsius);
 
-        ph::convert(volts, celsius, &self.config.ph)
+        ph::convert(volts, celsius, cal)
             .ok()
             .map(|reading| reading.value())
     }
 
-    fn electrode_health(&self) -> Option<f32> {
-        if self.config.ph.validate().is_err() || self.config.ph_nominal_volts_per_ph <= 0.0 {
+    fn resolve_tds(
+        &self,
+        volts: Option<f32>,
+        calibration: &Calibration,
+    ) -> Option<tds::TdsReading> {
+        tds::convert(
+            volts?,
+            calibration.makeup_tank_celsius,
+            calibration.tds_factor,
+        )
+        .ok()
+    }
+
+    fn electrode_health(&self, cal: &PhCalibration) -> Option<f32> {
+        if cal.validate().is_err() || self.config.ph_nominal_volts_per_ph <= 0.0 {
             return None;
         }
 
-        Some(self.config.ph.volts_per_ph() / self.config.ph_nominal_volts_per_ph)
+        Some(cal.volts_per_ph() / self.config.ph_nominal_volts_per_ph)
     }
 
     fn evaluate_lighting(&self) -> LightingMetricsDto {

@@ -1,14 +1,19 @@
 use std::sync::Mutex;
 
 use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
+use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
-use crate::domain::metrics::{LightingProfile, TankTelemetryDto, WaterTemperature};
+use crate::domain::metrics::{
+    LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
+};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
-    Clock, LightingOverrideSource, PhReader, SystemHealthProvider, TelemetrySink, TemperatureError,
-    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
+    CalibrationSource, Clock, LightingOverrideSource, PhReader, ProbeVoltageSink,
+    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureError, TemperatureReader,
+    TemperatureSensorRole, WaterLevelSource,
 };
-use crate::protocol::ph::{self, PhCalibration, PhError};
+use crate::protocol::ph::{self, PhError};
+use crate::protocol::tds::{self, TdsError};
 
 struct FakeReader {
     tank: Option<f32>,
@@ -144,22 +149,68 @@ impl WaterLevelSource for FakeLevels {
     }
 }
 
-struct FakePh(Option<f32>);
+struct FakeAnalog {
+    ph_volts: Option<f32>,
+    tds_volts: Option<f32>,
+}
 
-impl FakePh {
-    fn at(volts: f32) -> Self {
-        Self(Some(volts))
+impl FakeAnalog {
+    fn nothing_attached() -> Self {
+        Self {
+            ph_volts: None,
+            tds_volts: None,
+        }
     }
 
-    fn unavailable() -> Self {
-        Self(None)
+    fn ph_at(volts: f32) -> Self {
+        Self {
+            ph_volts: Some(volts),
+            tds_volts: None,
+        }
+    }
+
+    fn tds_at(volts: f32) -> Self {
+        Self {
+            ph_volts: None,
+            tds_volts: Some(volts),
+        }
     }
 }
 
-impl PhReader for FakePh {
+impl PhReader for FakeAnalog {
     async fn read_volts(&mut self) -> Result<f32, PhError> {
+        self.ph_volts
+            .ok_or(PhError::Unavailable("fake: no pH probe attached"))
+    }
+}
+
+impl TdsReader for FakeAnalog {
+    async fn read_volts(&mut self) -> Result<f32, TdsError> {
+        self.tds_volts
+            .ok_or(TdsError::Unavailable("fake: no TDS probe attached"))
+    }
+}
+
+struct FakeCalibration(Calibration);
+
+impl FakeCalibration {
+    fn standard() -> Self {
+        Self(Calibration {
+            ph: CAL,
+            makeup_tank_celsius: 25.0,
+            tds_factor: 1.0,
+        })
+    }
+
+    fn with(mut self, change: impl FnOnce(&mut Calibration)) -> Self {
+        change(&mut self.0);
+        self
+    }
+}
+
+impl CalibrationSource for FakeCalibration {
+    fn calibration(&self) -> Calibration {
         self.0
-            .ok_or(PhError::Unavailable("fake: no probe attached"))
     }
 }
 
@@ -174,7 +225,6 @@ const NOMINAL_VOLTS_PER_PH: f32 = 0.05916;
 fn config() -> TelemetryConfig {
     TelemetryConfig {
         target_celsius: 27.0,
-        ph: CAL,
         ph_nominal_volts_per_ph: NOMINAL_VOLTS_PER_PH,
     }
 }
@@ -191,11 +241,14 @@ impl SystemHealthProvider for FakeHealth {
 }
 
 #[derive(Default)]
-struct RecordingSink(Mutex<Vec<TankTelemetryDto>>);
+struct RecordingSink {
+    snapshots: Mutex<Vec<TankTelemetryDto>>,
+    volts: Mutex<Vec<ProbeVoltagesDto>>,
+}
 
 impl RecordingSink {
     fn last(&self) -> TankTelemetryDto {
-        self.0
+        self.snapshots
             .lock()
             .unwrap()
             .last()
@@ -204,13 +257,36 @@ impl RecordingSink {
     }
 
     fn count(&self) -> usize {
-        self.0.lock().unwrap().len()
+        self.snapshots.lock().unwrap().len()
+    }
+
+    fn last_volts(&self) -> ProbeVoltagesDto {
+        self.volts
+            .lock()
+            .unwrap()
+            .last()
+            .copied()
+            .expect("the sink received no voltages")
+    }
+
+    fn volts_count(&self) -> usize {
+        self.volts.lock().unwrap().len()
     }
 }
 
 impl TelemetrySink for &RecordingSink {
     fn publish(&self, snapshot: TankTelemetryDto) {
-        self.0.lock().unwrap().push(snapshot);
+        self.snapshots.lock().unwrap().push(snapshot);
+    }
+}
+
+impl ProbeVoltageSink for &RecordingSink {
+    fn publish_volts(&self, ph: Option<f32>, tds: Option<f32>, sampled_at_epoch_s: u64) {
+        self.volts.lock().unwrap().push(ProbeVoltagesDto {
+            ph,
+            tds,
+            sampled_at_epoch_s,
+        });
     }
 }
 
@@ -221,7 +297,8 @@ type Subject<'a> = TelemetryCollector<
     &'a RecordingSink,
     FakeOverrides,
     FakeLevels,
-    FakePh,
+    FakeAnalog,
+    FakeCalibration,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -260,23 +337,25 @@ fn build(
     overrides: FakeOverrides,
     levels: FakeLevels,
 ) -> Subject<'_> {
-    with_ph(
+    with_analog(
         reader,
         clock,
         sink,
         overrides,
         levels,
-        FakePh::unavailable(),
+        FakeAnalog::nothing_attached(),
+        FakeCalibration::standard(),
     )
 }
 
-fn with_ph(
+fn with_analog(
     reader: FakeReader,
     clock: FakeClock,
     sink: &RecordingSink,
     overrides: FakeOverrides,
     levels: FakeLevels,
-    ph: FakePh,
+    analog: FakeAnalog,
+    calibration: FakeCalibration,
 ) -> Subject<'_> {
     TelemetryCollector::new(
         TelemetrySources {
@@ -285,21 +364,28 @@ fn with_ph(
             health: FakeHealth,
             overrides,
             levels,
-            ph,
+            analog,
+            calibration,
         },
         sink,
         config(),
     )
 }
 
-fn ph_subject(sink: &RecordingSink, reader: FakeReader, ph: FakePh) -> Subject<'_> {
-    with_ph(
+fn analog_subject(
+    sink: &RecordingSink,
+    reader: FakeReader,
+    analog: FakeAnalog,
+    calibration: FakeCalibration,
+) -> Subject<'_> {
+    with_analog(
         reader,
         FakeClock::synced_at_noon_in_june(),
         sink,
         FakeOverrides::none(),
         FakeLevels::all_dry(),
-        ph,
+        analog,
+        calibration,
     )
 }
 
@@ -633,9 +719,14 @@ async fn publishes_ph_converted_from_the_probe_voltage() {
         conversions: 0,
     };
 
-    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
-        .sample()
-        .await;
+    analog_subject(
+        &sink,
+        reader,
+        FakeAnalog::ph_at(CAL.acid_volts),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
 
     let expected = ph::convert(CAL.acid_volts, 25.0, &CAL)
         .expect("valid")
@@ -647,59 +738,75 @@ async fn publishes_ph_converted_from_the_probe_voltage() {
 async fn an_unavailable_probe_reports_no_ph_rather_than_a_stand_in() {
     let sink = RecordingSink::default();
 
-    ph_subject(&sink, FakeReader::healthy(), FakePh::unavailable())
-        .sample()
-        .await;
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::nothing_attached(),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
 
     assert_eq!(sink.last().co2.current_ph, None);
 }
 
 #[tokio::test]
-async fn compensation_uses_the_tank_temperature_not_the_sump() {
+async fn ph_compensation_uses_the_sump_temperature_not_the_tank() {
     let sink = RecordingSink::default();
     let reader = FakeReader {
-        tank: Some(25.0),
-        sump: Some(60.0),
+        tank: Some(60.0),
+        sump: Some(25.0),
         trigger_fails: false,
         conversions: 0,
     };
 
-    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
-        .sample()
-        .await;
+    analog_subject(
+        &sink,
+        reader,
+        FakeAnalog::ph_at(CAL.acid_volts),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
 
-    let from_tank = ph::convert(CAL.acid_volts, 25.0, &CAL)
+    let from_sump = ph::convert(CAL.acid_volts, 25.0, &CAL)
         .expect("valid")
         .value();
-    let from_sump = ph::convert(CAL.acid_volts, 60.0, &CAL)
+    let from_tank = ph::convert(CAL.acid_volts, 60.0, &CAL)
         .expect("valid")
         .value();
 
     let reported = sink.last().co2.current_ph.expect("a reading");
-    assert_close(reported, from_tank);
+    assert_close(reported, from_sump);
     assert!(
-        (reported - from_sump).abs() > 0.1,
-        "the sump temperature must not drive pH compensation"
+        (reported - from_tank).abs() > 0.1,
+        "the pH probe sits in the sump, so the tank temperature must not drive compensation"
     );
 }
 
 #[tokio::test]
-async fn without_a_tank_reading_compensation_falls_back_to_the_target() {
+async fn without_a_sump_reading_ph_compensation_falls_back_to_the_target() {
     let sink = RecordingSink::default();
     let reader = FakeReader {
-        tank: None,
-        sump: Some(26.0),
+        tank: Some(26.0),
+        sump: None,
         trigger_fails: false,
         conversions: 0,
     };
 
-    ph_subject(&sink, reader, FakePh::at(CAL.acid_volts))
-        .sample()
-        .await;
+    analog_subject(
+        &sink,
+        reader,
+        FakeAnalog::ph_at(CAL.acid_volts),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
 
     let expected = ph::convert(CAL.acid_volts, config().target_celsius, &CAL)
         .expect("valid")
         .value();
+
     assert_close(sink.last().co2.current_ph.expect("a reading"), expected);
 }
 
@@ -707,9 +814,14 @@ async fn without_a_tank_reading_compensation_falls_back_to_the_target() {
 async fn reports_electrode_wear_against_the_nominal_slope() {
     let sink = RecordingSink::default();
 
-    ph_subject(&sink, FakeReader::healthy(), FakePh::at(CAL.neutral_volts))
-        .sample()
-        .await;
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::ph_at(CAL.neutral_volts),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
 
     let health = sink.last().co2.ph_electrode_health.expect("a ratio");
     assert_close(health, 1.0);
@@ -724,9 +836,14 @@ async fn a_worn_electrode_reports_a_ratio_below_one() {
         calibrated_at_celsius: 25.0,
     };
 
-    let mut subject = ph_subject(&sink, FakeReader::healthy(), FakePh::at(1.5));
-    subject.config.ph = worn;
-    subject.sample().await;
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::ph_at(1.5),
+        FakeCalibration::standard().with(|cal| cal.ph = worn),
+    )
+    .sample()
+    .await;
 
     let health = sink.last().co2.ph_electrode_health.expect("a ratio");
     assert!(
@@ -738,10 +855,231 @@ async fn a_worn_electrode_reports_a_ratio_below_one() {
 #[tokio::test]
 async fn republish_keeps_the_last_ph_reading() {
     let sink = RecordingSink::default();
-    let mut subject = ph_subject(&sink, FakeReader::healthy(), FakePh::at(CAL.acid_volts));
+    let mut subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::ph_at(CAL.acid_volts),
+        FakeCalibration::standard(),
+    );
 
     subject.sample().await;
     subject.republish();
 
     assert!(sink.last().co2.current_ph.is_some());
+}
+
+#[tokio::test]
+async fn a_tds_reading_reaches_telemetry_in_ppm_and_conductivity() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(2.16),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    let expected = tds::convert(2.16, 25.0, 1.0).expect("valid");
+    let published = sink.last();
+
+    assert_close(published.tds.ppm.expect("a reading"), expected.ppm.as_ppm());
+    assert_close(
+        published.tds.ec_us_cm.expect("a reading"),
+        expected.ec_us_cm,
+    );
+}
+
+#[tokio::test]
+async fn an_unavailable_tds_probe_reports_nothing_rather_than_a_stand_in() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::nothing_attached(),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.last().tds.ppm, None);
+    assert_eq!(sink.last().tds.ec_us_cm, None);
+}
+
+#[tokio::test]
+async fn tds_compensation_uses_the_makeup_tank_temperature_from_calibration() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(1.0),
+        FakeCalibration::standard().with(|cal| cal.makeup_tank_celsius = 15.0),
+    )
+    .sample()
+    .await;
+
+    let expected = tds::convert(1.0, 15.0, 1.0).expect("valid");
+    let at_reference = tds::convert(1.0, 25.0, 1.0).expect("valid");
+    let reported = sink.last().tds.ppm.expect("a reading");
+
+    assert_close(reported, expected.ppm.as_ppm());
+    assert!(
+        (reported - at_reference.ppm.as_ppm()).abs() > 1.0,
+        "the makeup tank temperature from calibration must drive compensation, \
+         not the 25 C reference"
+    );
+}
+
+#[tokio::test]
+async fn the_tds_factor_from_calibration_scales_the_reading() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(1.0),
+        FakeCalibration::standard().with(|cal| cal.tds_factor = 1.5),
+    )
+    .sample()
+    .await;
+
+    let expected = tds::convert(1.0, 25.0, 1.5).expect("valid");
+
+    assert_close(
+        sink.last().tds.ppm.expect("a reading"),
+        expected.ppm.as_ppm(),
+    );
+}
+
+#[tokio::test]
+async fn a_dead_ph_probe_does_not_suppress_the_tds_reading() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(1.5),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    let published = sink.last();
+
+    assert_eq!(published.co2.current_ph, None);
+    assert!(published.tds.ppm.is_some());
+}
+
+#[tokio::test]
+async fn ph_calibration_comes_from_the_port_not_the_static_config() {
+    let sink = RecordingSink::default();
+    let shifted = PhCalibration {
+        neutral_volts: 1.400,
+        acid_volts: 1.57748,
+        calibrated_at_celsius: 25.0,
+    };
+
+    let reader = FakeReader {
+        tank: Some(25.0),
+        sump: Some(25.0),
+        trigger_fails: false,
+        conversions: 0,
+    };
+
+    analog_subject(
+        &sink,
+        reader,
+        FakeAnalog::ph_at(shifted.neutral_volts),
+        FakeCalibration::standard().with(|cal| cal.ph = shifted),
+    )
+    .sample()
+    .await;
+
+    assert_close(sink.last().co2.current_ph.expect("a reading"), 7.0);
+}
+
+#[tokio::test]
+async fn sampling_publishes_the_raw_probe_voltages() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog {
+            ph_volts: Some(1.52),
+            tds_volts: Some(0.91),
+        },
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    let volts = sink.last_volts();
+
+    assert_close(volts.ph.expect("a pH voltage"), 1.52);
+    assert_close(volts.tds.expect("a TDS voltage"), 0.91);
+}
+
+#[tokio::test]
+async fn the_published_voltages_carry_the_same_timestamp_as_the_snapshot() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::ph_at(1.5),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(
+        sink.last_volts().sampled_at_epoch_s,
+        sink.last().timestamp_epoch_s,
+        "a client comparing the two would otherwise see the voltages as stale or from the future"
+    );
+}
+
+#[tokio::test]
+async fn a_probe_that_failed_publishes_no_voltage_rather_than_zero() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(0.91),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    let volts = sink.last_volts();
+
+    assert_eq!(volts.ph, None, "zero volts is a reading, absence is not");
+    assert_close(volts.tds.expect("a TDS voltage"), 0.91);
+}
+
+#[tokio::test]
+async fn republishing_does_not_restamp_the_probe_voltages() {
+    let sink = RecordingSink::default();
+    let subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::ph_at(1.5),
+        FakeCalibration::standard(),
+    );
+    let mut subject = subject;
+
+    subject.sample().await;
+    subject.republish();
+
+    assert_eq!(sink.count(), 2, "republish does emit a snapshot");
+    assert_eq!(
+        sink.volts_count(),
+        1,
+        "a lighting change is not a new probe reading, so the voltages must keep their timestamp"
+    );
 }
