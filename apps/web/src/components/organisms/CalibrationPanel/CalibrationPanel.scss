@@ -1,0 +1,67 @@
+.calibration {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+
+  &__title {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: $text-main;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.9rem;
+    border: 1px solid $border-color;
+    border-radius: 0.6rem;
+  }
+
+  &__section-title {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: $text-main;
+  }
+
+  &__live {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.75rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__live-value {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: $text-main;
+  }
+
+  &__live-label {
+    font-size: 0.75rem;
+    color: $text-muted;
+  }
+
+  &__row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.75rem;
+    align-items: start;
+  }
+
+  &__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  &__footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+}
