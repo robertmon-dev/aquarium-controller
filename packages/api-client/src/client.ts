@@ -1,6 +1,9 @@
 import type {
+  Calibration,
+  CalibrationPatch,
   LightingOverride,
   LightingScheduleDto,
+  ProbeVoltagesDto,
   SetOverrideRequest,
   SystemHealthDto,
   TankTelemetryDto,
@@ -14,6 +17,9 @@ export interface DeviceClient {
   setLightingOverride: (body: SetOverrideRequest) => Promise<LightingOverride>;
   clearLightingOverride: () => Promise<void>;
   lightingSchedule: (month: number) => Promise<LightingScheduleDto>;
+  probeVoltages: () => Promise<ProbeVoltagesDto>;
+  calibration: () => Promise<Calibration>;
+  patchCalibration: (body: CalibrationPatch) => Promise<Calibration>;
 }
 
 export const createClient = (transport: Transport): DeviceClient => {
@@ -44,5 +50,15 @@ export const createClient = (transport: Transport): DeviceClient => {
         transport,
         `/api/lighting/schedule/${month}`,
       ),
+
+    probeVoltages: () => request<ProbeVoltagesDto>(transport, "/api/probe"),
+
+    calibration: () => request<Calibration>(transport, "/api/calibration"),
+
+    patchCalibration: (body) =>
+      request<Calibration>(transport, "/api/calibration", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
   };
 };

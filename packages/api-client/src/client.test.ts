@@ -26,15 +26,13 @@ describe("createClient", () => {
   });
 
   it("gets system health", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(
-        jsonResponse({
-          uptime_seconds: 10,
-          wifi_rssi_dbm: -55,
-          free_heap_kb: 120,
-        }),
-      );
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        uptime_seconds: 10,
+        wifi_rssi_dbm: -55,
+        free_heap_kb: 120,
+      }),
+    );
     const client = createClient({ device, fetchImpl });
 
     await expect(client.health()).resolves.toEqual({
@@ -103,5 +101,60 @@ describe("createClient", () => {
     await client.clearLightingOverride();
 
     expect(fetchImpl.mock.calls[0]![1].method).toBe("DELETE");
+  });
+});
+
+describe("createClient calibration", () => {
+  it("gets the probe voltages", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ph: 1.52, tds: 0.91, sampled_at_epoch_s: 7 }),
+      );
+    const client = createClient({ device, fetchImpl });
+
+    const probes = await client.probeVoltages();
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe("http://10.0.0.2:80/api/probe");
+    expect(probes.ph).toBe(1.52);
+  });
+
+  it("gets the stored calibration", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ph: { neutral_volts: 1.5, acid_volts: 1.6, calibrated_at_celsius: 25 },
+        makeup_tank_celsius: 22,
+        tds_factor: 1.2,
+      }),
+    );
+    const client = createClient({ device, fetchImpl });
+
+    const calibration = await client.calibration();
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe(
+      "http://10.0.0.2:80/api/calibration",
+    );
+    expect(calibration.tds_factor).toBe(1.2);
+  });
+
+  it("patches the calibration with PATCH, not PUT", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ph: { neutral_volts: 1.5, acid_volts: 1.6, calibrated_at_celsius: 25 },
+        makeup_tank_celsius: 22,
+        tds_factor: 1,
+      }),
+    );
+    const client = createClient({ device, fetchImpl });
+
+    await client.patchCalibration({
+      ph: null,
+      makeup_tank_celsius: 22,
+      tds_factor: null,
+    });
+
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("PATCH");
+    expect(String(init.body)).toContain("makeup_tank_celsius");
   });
 });
