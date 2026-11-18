@@ -12,6 +12,14 @@ export function formatLitresPerHour(value: number | null): string {
   return value === null ? EM_DASH : `${Math.round(value)} L/h`;
 }
 
+export function formatPpm(value: number | null): string {
+  return value === null ? EM_DASH : `${Math.round(value)} ppm`;
+}
+
+export function formatMicrosiemens(value: number | null): string {
+  return value === null ? EM_DASH : `${Math.round(value)} \u00b5S/cm`;
+}
+
 export function formatPercent(value: number | null): string {
   return value === null ? EM_DASH : `${value}%`;
 }

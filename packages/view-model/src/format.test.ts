@@ -5,9 +5,11 @@ import {
   formatDuration,
   formatHeap,
   formatLitresPerHour,
+  formatMicrosiemens,
   formatPercent,
   formatPercentPair,
   formatPh,
+  formatPpm,
   formatRssi,
 } from "./format";
 
@@ -88,5 +90,29 @@ describe("formatHeap", () => {
 describe("formatRssi", () => {
   it("renders dBm", () => {
     expect(formatRssi(-54)).toBe("-54 dBm");
+  });
+});
+
+describe("formatPpm", () => {
+  it("rounds to whole parts per million", () => {
+    expect(formatPpm(219.6)).toBe("220 ppm");
+  });
+
+  it("renders a dash when there is no reading", () => {
+    expect(formatPpm(null)).toBe(EM_DASH);
+  });
+
+  it("keeps a dry probe at zero rather than showing a dash", () => {
+    expect(formatPpm(0)).toBe("0 ppm");
+  });
+});
+
+describe("formatMicrosiemens", () => {
+  it("rounds to whole microsiemens per centimetre", () => {
+    expect(formatMicrosiemens(439.85)).toBe("440 \u00b5S/cm");
+  });
+
+  it("renders a dash when there is no reading", () => {
+    expect(formatMicrosiemens(null)).toBe(EM_DASH);
   });
 });
