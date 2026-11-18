@@ -13,7 +13,9 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
-use crate::ports::inbound::{LightingControl, TelemetryQuery};
+use crate::ports::inbound::{
+    CalibrationControl, LightingControl, ProbeVoltageQuery, TelemetryQuery,
+};
 
 const HTTP_BUFFER_BYTES: usize = 2048;
 
@@ -24,19 +26,22 @@ pub struct HttpConfig {
     pub cors_origin: &'static str,
 }
 
-pub async fn run<Q, L>(
+pub async fn run<Q, L, C>(
     listener: TcpListener,
     telemetry: Arc<Q>,
     lighting: Arc<L>,
+    calibration: Arc<C>,
     config: HttpConfig,
 ) -> !
 where
-    Q: TelemetryQuery + 'static,
+    Q: TelemetryQuery + ProbeVoltageQuery + 'static,
     L: LightingControl + 'static,
+    C: CalibrationControl + 'static,
 {
     let router: &'static _ = Box::leak(Box::new(routes::router(
         telemetry,
         lighting,
+        calibration,
         config.token,
         config.sse_keepalive,
         config.cors_origin,
