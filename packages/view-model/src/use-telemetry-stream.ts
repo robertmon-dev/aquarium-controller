@@ -15,13 +15,6 @@ import {
 
 const RETRY_MS = 3_000;
 
-/**
- * One stream for the whole app, feeding snapshots into the query cache. Shared
- * because both clients had this loop byte-for-byte identical apart from import
- * order — the same retry delay, the same terminal treatment of a rejected
- * token. The transport carries its own fetch, so nothing platform-specific
- * leaks in here.
- */
 export function useTelemetryStream(transport: Transport | null): StreamStatus {
   const queryClient = useQueryClient();
   const [state, dispatch] = useReducer(streamReducer, initialStreamState);
