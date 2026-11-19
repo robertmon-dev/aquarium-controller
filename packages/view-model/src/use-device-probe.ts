@@ -20,11 +20,6 @@ export interface DeviceProbe {
   dismiss: () => void;
 }
 
-/**
- * `fetchImpl` is injected rather than reached for: the web app uses
- * `globalThis.fetch` and the mobile app uses `expo/fetch`, so a global here
- * would quietly bypass what one of them chose.
- */
 export function useDeviceProbe(fetchImpl: FetchImpl): DeviceProbe {
   const t = useT();
   const [state, dispatch] = useReducer(probeReducer, initialProbe);
