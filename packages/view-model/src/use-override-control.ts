@@ -46,12 +46,6 @@ export interface OverrideControl {
   pickProfile: (profile: LightingProfile) => void;
   setChannel: (channel: keyof ChannelLevels, value: number) => void;
   commitChannels: () => void;
-  /**
-   * Sets both channels and sends them in one call. React Native's slider
-   * reports only a finished value, so there is no drag to accumulate — and
-   * committing from the argument rather than from reducer state avoids reading
-   * a `dirty` flag that the same handler just set.
-   */
   commitLevels: (levels: ChannelLevels) => void;
   confirmRestore: () => void;
   cancelRestore: () => void;
