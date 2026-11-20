@@ -17,8 +17,6 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
     temperature: {
       tank_celsius: 26.5,
       sump_celsius: 26,
-      target_celsius: 27,
-      heater_active: false,
       sensors_healthy: true,
     },
     filtration: {
@@ -52,6 +50,22 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
       main_tank: { wet: true, faulty: false },
       sump_reserve: { wet: false, faulty: false },
       sensors_healthy: true,
+    },
+    heaters: {
+      tank: {
+        active: false,
+        mode: "auto",
+        fault: null,
+        override_expires_in_s: null,
+        target_celsius: 27,
+      },
+      sump: {
+        active: false,
+        mode: "auto",
+        fault: null,
+        override_expires_in_s: null,
+        target_celsius: 26,
+      },
     },
     leak_detected: false,
     ...overrides,
