@@ -2,6 +2,14 @@ import { z } from "zod";
 import type { TankTelemetryDto } from "./generated";
 import { ApiError } from "./transport";
 
+const heaterStatusGuard = z.object({
+  active: z.boolean(),
+  mode: z.enum(["auto", "manual_on", "manual_off"]),
+  fault: z.enum(["sensor_fault", "over_temperature", "unavailable"]).nullable(),
+  override_expires_in_s: z.number().nullable(),
+  target_celsius: z.number(),
+});
+
 const telemetryGuard = z.object({
   timestamp_epoch_s: z.number(),
   system_mode: z.enum(["normal", "maintenance", "emergency_lockout"]),
@@ -13,9 +21,11 @@ const telemetryGuard = z.object({
   temperature: z.object({
     tank_celsius: z.number().nullable(),
     sump_celsius: z.number().nullable(),
-    target_celsius: z.number(),
-    heater_active: z.boolean(),
     sensors_healthy: z.boolean(),
+  }),
+  heaters: z.object({
+    tank: heaterStatusGuard,
+    sump: heaterStatusGuard,
   }),
   lighting: z.object({
     profile: z.enum(["off", "sunrise", "daylight", "sunset", "moonlight"]),

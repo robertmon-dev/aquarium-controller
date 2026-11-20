@@ -8,9 +8,23 @@ const valid = {
   temperature: {
     tank_celsius: 25.5,
     sump_celsius: null,
-    target_celsius: 26,
-    heater_active: false,
     sensors_healthy: true,
+  },
+  heaters: {
+    tank: {
+      active: true,
+      mode: "auto",
+      fault: null,
+      override_expires_in_s: null,
+      target_celsius: 26,
+    },
+    sump: {
+      active: false,
+      mode: "manual_off",
+      fault: "sensor_fault",
+      override_expires_in_s: 120,
+      target_celsius: 25,
+    },
   },
   lighting: {
     profile: "daylight",
@@ -40,6 +54,25 @@ describe("assertTelemetry", () => {
     void temperature;
 
     expect(() => assertTelemetry(rest)).toThrow(/temperature/);
+  });
+
+  it("rejects a snapshot missing the heaters block", () => {
+    const { heaters, ...rest } = valid;
+    void heaters;
+
+    expect(() => assertTelemetry(rest)).toThrow(/heaters/);
+  });
+
+  it("rejects an unknown heater mode", () => {
+    const snapshot = {
+      ...valid,
+      heaters: {
+        ...valid.heaters,
+        tank: { ...valid.heaters.tank, mode: "turbo" },
+      },
+    };
+
+    expect(() => assertTelemetry(snapshot)).toThrow(/heaters\.tank\.mode/);
   });
 
   it("rejects an unknown system mode", () => {
