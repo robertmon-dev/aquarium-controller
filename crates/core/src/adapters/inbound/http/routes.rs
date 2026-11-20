@@ -2,47 +2,58 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use picoserve::extract::{FromRef, State};
-use picoserve::routing::{get, parse_path_segment, PathRouter};
+use picoserve::routing::{get, parse_path_segment, put, PathRouter};
 use picoserve::Router;
 
 use crate::adapters::inbound::http::api::ApiLayer;
 use crate::adapters::inbound::http::handlers;
+use crate::domain::heater::HeaterId;
 use crate::ports::inbound::{
-    CalibrationControl, LightingControl, ProbeVoltageQuery, TelemetryQuery,
+    CalibrationControl, HeaterControl, LightingControl, ProbeVoltageQuery, TelemetryQuery,
 };
 
-pub struct AppState<Q, L, C> {
+pub struct AppState<Q, L, C, H> {
     pub telemetry: Arc<Q>,
     pub lighting: Arc<L>,
     pub calibration: Arc<C>,
+    pub heaters: Arc<H>,
 }
 
 pub struct LightingState<L>(pub Arc<L>);
 
 pub struct CalibrationState<C>(pub Arc<C>);
 
-impl<Q, L, C> FromRef<AppState<Q, L, C>> for Arc<Q> {
-    fn from_ref(input: &AppState<Q, L, C>) -> Self {
+pub struct HeaterState<H>(pub Arc<H>);
+
+impl<Q, L, C, H> FromRef<AppState<Q, L, C, H>> for Arc<Q> {
+    fn from_ref(input: &AppState<Q, L, C, H>) -> Self {
         Arc::clone(&input.telemetry)
     }
 }
 
-impl<Q, L, C> FromRef<AppState<Q, L, C>> for LightingState<L> {
-    fn from_ref(input: &AppState<Q, L, C>) -> Self {
+impl<Q, L, C, H> FromRef<AppState<Q, L, C, H>> for LightingState<L> {
+    fn from_ref(input: &AppState<Q, L, C, H>) -> Self {
         LightingState(Arc::clone(&input.lighting))
     }
 }
 
-impl<Q, L, C> FromRef<AppState<Q, L, C>> for CalibrationState<C> {
-    fn from_ref(input: &AppState<Q, L, C>) -> Self {
+impl<Q, L, C, H> FromRef<AppState<Q, L, C, H>> for HeaterState<H> {
+    fn from_ref(input: &AppState<Q, L, C, H>) -> Self {
+        HeaterState(Arc::clone(&input.heaters))
+    }
+}
+
+impl<Q, L, C, H> FromRef<AppState<Q, L, C, H>> for CalibrationState<C> {
+    fn from_ref(input: &AppState<Q, L, C, H>) -> Self {
         CalibrationState(Arc::clone(&input.calibration))
     }
 }
 
-pub fn router<Q, L, C>(
+pub fn router<Q, L, C, H>(
     telemetry: Arc<Q>,
     lighting: Arc<L>,
     calibration: Arc<C>,
+    heaters: Arc<H>,
     token: &'static str,
     sse_keepalive: Duration,
     cors_origin: &'static str,
@@ -51,6 +62,7 @@ where
     Q: TelemetryQuery + ProbeVoltageQuery + 'static,
     L: LightingControl + 'static,
     C: CalibrationControl + 'static,
+    H: HeaterControl + 'static,
 {
     Router::new()
         .route("/api/telemetry", get(handlers::telemetry::snapshot::<Q>))
@@ -76,10 +88,25 @@ where
             "/api/calibration",
             get(handlers::calibration::current::<C>).patch(handlers::calibration::patch::<C>),
         )
+        .route("/api/heaters", get(handlers::heaters::status::<H>))
+        .route(
+            "/api/heaters/settings",
+            get(handlers::heaters::settings::<H>).patch(handlers::heaters::patch_settings::<H>),
+        )
+        .route(
+            (
+                "/api/heaters",
+                parse_path_segment::<HeaterId>(),
+                "/override",
+            ),
+            put(handlers::heaters::set_override::<H>)
+                .delete(handlers::heaters::clear_override::<H>),
+        )
         .layer(ApiLayer::new(token, cors_origin))
         .with_state(AppState {
             telemetry,
             lighting,
             calibration,
+            heaters,
         })
 }
