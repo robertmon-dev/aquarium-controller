@@ -157,4 +157,60 @@ describe("createClient calibration", () => {
     expect(init.method).toBe("PATCH");
     expect(String(init.body)).toContain("makeup_tank_celsius");
   });
+
+  it("gets the heater status", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ tank: {}, sump: {} }));
+    const client = createClient({ device, fetchImpl });
+
+    await client.heaters();
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe("http://10.0.0.2:80/api/heaters");
+  });
+
+  it("patches heater settings", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}));
+    const client = createClient({ device, fetchImpl });
+
+    await client.patchHeaterSettings({
+      tank: null,
+      sump: null,
+      cutoff_celsius: 29.5,
+    });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/heaters/settings");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({
+      tank: null,
+      sump: null,
+      cutoff_celsius: 29.5,
+    });
+  });
+
+  it("puts a heater override on the heater's own path", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}));
+    const client = createClient({ device, fetchImpl });
+
+    await client.setHeaterOverride("sump", { state: "on", duration_s: 600 });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/heaters/sump/override");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ state: "on", duration_s: 600 });
+  });
+
+  it("deletes a heater override", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const client = createClient({ device, fetchImpl });
+
+    await client.clearHeaterOverride("tank");
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/heaters/tank/override");
+    expect(init.method).toBe("DELETE");
+  });
 });

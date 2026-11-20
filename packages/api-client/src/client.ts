@@ -1,9 +1,15 @@
 import type {
   Calibration,
   CalibrationPatch,
+  HeaterId,
+  HeaterSettings,
+  HeaterSettingsPatch,
+  HeaterStatus,
+  HeatersStatus,
   LightingOverride,
   LightingScheduleDto,
   ProbeVoltagesDto,
+  SetHeaterOverrideRequest,
   SetOverrideRequest,
   SystemHealthDto,
   TankTelemetryDto,
@@ -20,6 +26,14 @@ export interface DeviceClient {
   probeVoltages: () => Promise<ProbeVoltagesDto>;
   calibration: () => Promise<Calibration>;
   patchCalibration: (body: CalibrationPatch) => Promise<Calibration>;
+  heaters: () => Promise<HeatersStatus>;
+  heaterSettings: () => Promise<HeaterSettings>;
+  patchHeaterSettings: (body: HeaterSettingsPatch) => Promise<HeaterSettings>;
+  setHeaterOverride: (
+    id: HeaterId,
+    body: SetHeaterOverrideRequest,
+  ) => Promise<HeaterStatus>;
+  clearHeaterOverride: (id: HeaterId) => Promise<void>;
 }
 
 export const createClient = (transport: Transport): DeviceClient => {
@@ -59,6 +73,28 @@ export const createClient = (transport: Transport): DeviceClient => {
       request<Calibration>(transport, "/api/calibration", {
         method: "PATCH",
         body: JSON.stringify(body),
+      }),
+
+    heaters: () => request<HeatersStatus>(transport, "/api/heaters"),
+
+    heaterSettings: () =>
+      request<HeaterSettings>(transport, "/api/heaters/settings"),
+
+    patchHeaterSettings: (body) =>
+      request<HeaterSettings>(transport, "/api/heaters/settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+    setHeaterOverride: (id, body) =>
+      request<HeaterStatus>(transport, `/api/heaters/${id}/override`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+
+    clearHeaterOverride: (id) =>
+      request<void>(transport, `/api/heaters/${id}/override`, {
+        method: "DELETE",
       }),
   };
 };
