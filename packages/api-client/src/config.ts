@@ -1,3 +1,5 @@
+import type { HeaterId } from "./generated";
+
 export interface DeviceConfig {
   host: string;
   port: number;
@@ -9,6 +11,9 @@ export type ApiPath =
   | "/api/health"
   | "/api/probe"
   | "/api/calibration"
+  | "/api/heaters"
+  | "/api/heaters/settings"
+  | `/api/heaters/${HeaterId}/override`
   | "/api/lighting/override"
   | `/api/lighting/schedule/${number}`;
 
