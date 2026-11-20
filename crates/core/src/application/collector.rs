@@ -4,13 +4,13 @@ use crate::domain::metrics::{
     LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
 };
 use crate::ports::outbound::{
-    CalibrationSource, Clock, LightingOverrideSource, PhReader, ProbeVoltageSink,
-    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader, TemperatureSensorRole,
-    WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
+    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader,
+    TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
-pub struct TelemetrySources<R, C, H, O, W, A, K> {
+pub struct TelemetrySources<R, C, H, O, W, A, K, T> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
@@ -18,6 +18,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K> {
     pub levels: W,
     pub analog: A,
     pub calibration: K,
+    pub heaters: T,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,15 +35,15 @@ struct Readings {
     tds_volts: Option<f32>,
 }
 
-pub struct TelemetryCollector<R, C, H, S, O, W, A, K> {
-    sources: TelemetrySources<R, C, H, O, W, A, K>,
+pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T> {
+    sources: TelemetrySources<R, C, H, O, W, A, K, T>,
     sink: S,
     lighting: LightingSchedule,
     config: TelemetryConfig,
     last: Readings,
 }
 
-impl<R, C, H, S, O, W, A, K> TelemetryCollector<R, C, H, S, O, W, A, K>
+impl<R, C, H, S, O, W, A, K, T> TelemetryCollector<R, C, H, S, O, W, A, K, T>
 where
     R: TemperatureReader,
     C: Clock,
@@ -52,9 +53,10 @@ where
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
+    T: HeaterStatusSource,
 {
     pub fn new(
-        sources: TelemetrySources<R, C, H, O, W, A, K>,
+        sources: TelemetrySources<R, C, H, O, W, A, K, T>,
         sink: S,
         config: TelemetryConfig,
     ) -> Self {
@@ -143,7 +145,6 @@ where
 
         dto.temperature.tank_celsius = tank;
         dto.temperature.sump_celsius = sump;
-        dto.temperature.target_celsius = self.config.target_celsius;
         dto.temperature.sensors_healthy = tank.is_some() && sump.is_some();
 
         dto.co2.current_ph = self.resolve_ph(ph_volts, sump, &calibration.ph);
@@ -158,6 +159,7 @@ where
         let levels = self.sources.levels.levels();
         dto.water_level = WaterLevelMetricsDto::from(&levels);
         dto.ato.sump_water_low = levels.sump_water_low();
+        dto.heaters = self.sources.heaters.heater_status();
 
         dto
     }

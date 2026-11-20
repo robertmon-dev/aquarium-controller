@@ -2,15 +2,16 @@ use std::sync::Mutex;
 
 use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use crate::domain::calibration::{Calibration, PhCalibration};
+use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{
     LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
-    CalibrationSource, Clock, LightingOverrideSource, PhReader, ProbeVoltageSink,
-    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureError, TemperatureReader,
-    TemperatureSensorRole, WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
+    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureError,
+    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
 use crate::protocol::tds::{self, TdsError};
@@ -214,6 +215,14 @@ impl CalibrationSource for FakeCalibration {
     }
 }
 
+struct FakeHeaters(HeatersStatus);
+
+impl HeaterStatusSource for FakeHeaters {
+    fn heater_status(&self) -> HeatersStatus {
+        self.0
+    }
+}
+
 const CAL: PhCalibration = PhCalibration {
     neutral_volts: 1.500,
     acid_volts: 1.67748,
@@ -299,6 +308,7 @@ type Subject<'a> = TelemetryCollector<
     FakeLevels,
     FakeAnalog,
     FakeCalibration,
+    FakeHeaters,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -366,6 +376,7 @@ fn with_analog(
             levels,
             analog,
             calibration,
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
         },
         sink,
         config(),
@@ -410,7 +421,6 @@ async fn publishes_both_sensor_readings() {
     let s = sink.last();
     assert_eq!(s.temperature.tank_celsius, Some(26.5));
     assert_eq!(s.temperature.sump_celsius, Some(26.0));
-    assert_eq!(s.temperature.target_celsius, 27.0);
     assert!(s.temperature.sensors_healthy);
 }
 
@@ -1082,4 +1092,38 @@ async fn republishing_does_not_restamp_the_probe_voltages() {
         1,
         "a lighting change is not a new probe reading, so the voltages must keep their timestamp"
     );
+}
+
+#[tokio::test]
+async fn the_heater_status_is_copied_into_the_snapshot() {
+    let sink = RecordingSink::default();
+    let heaters = HeatersStatus {
+        tank: HeaterStatus {
+            active: true,
+            mode: HeaterMode::ManualOn,
+            fault: None,
+            override_expires_in_s: Some(300),
+            target_celsius: 27.0,
+        },
+        sump: HeaterStatus::unavailable(26.0),
+    };
+
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(heaters),
+        },
+        &sink,
+        config(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.last().heaters, heaters);
 }
