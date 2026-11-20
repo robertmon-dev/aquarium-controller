@@ -9,15 +9,15 @@ use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
 use aquarium_core::application::{
-    CalibrationService, MetricsExporter, TelemetryCollector, TelemetryConfig, TelemetrySources,
-    WaterLevelSampler,
+    heater_loop, CalibrationService, HeaterController, HeaterService, MetricsExporter,
+    TelemetryCollector, TelemetryConfig, TelemetrySources, WaterLevelSampler,
 };
 use aquarium_core::domain::metrics::TankTelemetryDto;
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
-    CalibrationSource, Clock, LightingOverrideSource, MetricsWriter, PhReader, ProbeVoltageSink,
-    SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader, WaterLevelPins,
-    WaterLevelSink, WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, MetricsWriter, PhReader,
+    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader,
+    WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -41,6 +41,8 @@ use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEn
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
 use aquarium_controller::adapters::outbound::influx::InfluxWriter;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
+use aquarium_controller::adapters::outbound::nvs_heater::NvsHeaterSettings;
+use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 use aquarium_controller::infrastructure::clock::SystemClock;
@@ -214,7 +216,7 @@ async fn run() -> anyhow::Result<()> {
 
     let calibration = Arc::new(CalibrationService::new(
         SETTINGS.sensors.calibration,
-        NvsCalibration::new(nvs_partition)
+        NvsCalibration::new(nvs_partition.clone())
             .context("Failed to open the calibration namespace in NVS")?,
     ));
 
@@ -223,6 +225,43 @@ async fn run() -> anyhow::Result<()> {
         tds_factor = calibration.calibration().tds_factor,
         "Calibration loaded"
     );
+
+    let heaters = Arc::new(HeaterService::new(
+        SETTINGS.heaters.defaults,
+        NvsHeaterSettings::new(nvs_partition)
+            .context("Failed to open the heater namespace in NVS")?,
+    ));
+    let heaters_republish = Arc::new(Notify::new());
+
+    let ssr = if components.heaters.is_initialized() {
+        Some(
+            SsrOutputs::new(peripherals.pins.gpio17, peripherals.pins.gpio18)
+                .context("Failed to initialize the heater SSR outputs")?,
+        )
+    } else {
+        None
+    };
+
+    let (heater_task, _idle_ssr) = match (ssr, components.heaters.is_running()) {
+        (Some(outputs), true) => {
+            info!("Heater control running");
+            (
+                Some(heater_loop(
+                    HeaterController::new(outputs, Arc::clone(&heaters)),
+                    store.subscribe(),
+                    heaters.change_signal(),
+                    Arc::clone(&heaters_republish),
+                    SETTINGS.heaters.watchdog,
+                )),
+                None,
+            )
+        }
+        (Some(outputs), false) => {
+            info!("Heater outputs held low but not controlled");
+            (None, Some(outputs))
+        }
+        (None, _) => (None, None),
+    };
 
     let analog = if components.ph.is_initialized() || components.tds.is_initialized() {
         let front_end = analog_front_end(
@@ -265,6 +304,7 @@ async fn run() -> anyhow::Result<()> {
                 levels: Arc::clone(&levels),
                 analog,
                 calibration: Arc::clone(&calibration),
+                heaters: Arc::clone(&heaters),
             },
             Arc::clone(&store),
             TelemetryConfig {
@@ -277,7 +317,11 @@ async fn run() -> anyhow::Result<()> {
     };
 
     let telemetry_loop = match (collector, components.telemetry.is_running()) {
-        (Some(collector), true) => Some(sensor_task(collector, lighting.change_signal())),
+        (Some(collector), true) => Some(sensor_task(
+            collector,
+            lighting.change_signal(),
+            Arc::clone(&heaters_republish),
+        )),
         (Some(_), false) => {
             info!("Telemetry collector built but not sampling");
             None
@@ -331,6 +375,7 @@ async fn run() -> anyhow::Result<()> {
             Arc::clone(&store),
             Arc::clone(&lighting),
             Arc::clone(&calibration),
+            Arc::clone(&heaters),
             HttpConfig {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
@@ -352,6 +397,7 @@ async fn run() -> anyhow::Result<()> {
         optional(level_loop),
         optional(export_loop),
         optional(server),
+        optional(heater_task),
         optional(wifi_loop),
         optional(health_loop),
     );
@@ -419,9 +465,10 @@ where
     }
 }
 
-async fn sensor_task<R, C, H, S, O, W, A, K>(
-    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K>,
+async fn sensor_task<R, C, H, S, O, W, A, K, T>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T>,
     lighting_changed: Arc<Notify>,
+    heaters_changed: Arc<Notify>,
 ) where
     R: TemperatureReader,
     C: Clock,
@@ -431,6 +478,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K>(
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
+    T: HeaterStatusSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -439,6 +487,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K>(
         tokio::select! {
             _ = ticker.tick() => collector.sample().await,
             _ = lighting_changed.notified() => collector.republish(),
+            _ = heaters_changed.notified() => collector.republish(),
         }
     }
 }

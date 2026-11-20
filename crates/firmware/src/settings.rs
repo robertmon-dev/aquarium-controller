@@ -1,11 +1,13 @@
 use std::time::Duration;
 
+use aquarium_core::domain::calibration::{Calibration, PhCalibration};
+use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
+use aquarium_core::protocol::ads1115::{Channel, DataRate, Gain, DEFAULT_ADDRESS};
 use aquarium_core::secret::Secret;
 use esp_idf_svc::wifi::AuthMethod;
 
 use crate::adapters::outbound::ds18b20::RomAddress;
 use crate::adapters::outbound::influx::InfluxSettings;
-use crate::adapters::outbound::ph::PhCalibration;
 use crate::adapters::outbound::xkc_y25::{FilterConfig, Polarity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +36,8 @@ pub struct ComponentSettings {
     pub water_level: ComponentMode,
     pub influx: ComponentMode,
     pub ph: ComponentMode,
+    pub tds: ComponentMode,
+    pub heaters: ComponentMode,
     pub health: ComponentMode,
 }
 
@@ -41,6 +45,7 @@ pub struct ComponentSettings {
 pub enum RunMode {
     Normal,
     RomDiscovery,
+    AdcProbe,
 }
 
 #[derive(Debug)]
@@ -51,6 +56,13 @@ pub struct Settings {
     pub http: HttpSettings,
     pub sensors: SensorSettings,
     pub influx: Option<InfluxSettings>,
+    pub heaters: HeaterControlSettings,
+}
+
+#[derive(Debug)]
+pub struct HeaterControlSettings {
+    pub defaults: HeaterSettings,
+    pub watchdog: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -77,13 +89,23 @@ pub struct SensorSettings {
     pub target_celsius: f32,
     pub level: LevelSettings,
     pub ph: PhSettings,
+    pub analog: AnalogSettings,
+    pub calibration: Calibration,
 }
 
 #[derive(Debug)]
 pub struct PhSettings {
-    pub calibration: PhCalibration,
     pub nominal_volts_per_ph: f32,
+}
+
+#[derive(Debug)]
+pub struct AnalogSettings {
+    pub address: u8,
+    pub gain: Gain,
+    pub data_rate: DataRate,
     pub samples_per_reading: u16,
+    pub ph_channel: Option<Channel>,
+    pub tds_channel: Option<Channel>,
 }
 
 #[derive(Debug)]
@@ -105,6 +127,8 @@ impl Settings {
                 water_level: ComponentMode::Off,
                 influx: ComponentMode::Off,
                 ph: ComponentMode::Off,
+                tds: ComponentMode::Off,
+                heaters: ComponentMode::Off,
                 health: ComponentMode::Running,
             },
             wifi: WifiSettings {
@@ -125,13 +149,24 @@ impl Settings {
                 sump_rom: [0x28, 0x9D, 0x32, 0x08, 0x7D, 0x25, 0x0B, 0x1F],
                 target_celsius: 27.0,
                 ph: PhSettings {
-                    calibration: PhCalibration {
+                    nominal_volts_per_ph: 0.05916,
+                },
+                analog: AnalogSettings {
+                    address: DEFAULT_ADDRESS,
+                    gain: Gain::Fsr4_096,
+                    data_rate: DataRate::Sps128,
+                    samples_per_reading: 16,
+                    ph_channel: Some(Channel::A1),
+                    tds_channel: Some(Channel::A0),
+                },
+                calibration: Calibration {
+                    ph: PhCalibration {
                         neutral_volts: 1.500,
                         acid_volts: 1.67748,
                         calibrated_at_celsius: 25.0,
                     },
-                    nominal_volts_per_ph: 0.05916,
-                    samples_per_reading: 64,
+                    makeup_tank_celsius: 25.0,
+                    tds_factor: 1.0,
                 },
                 level: LevelSettings {
                     poll_interval: Duration::from_millis(100),
@@ -144,6 +179,20 @@ impl Settings {
                 },
             },
             influx: influx_from_env(),
+            heaters: HeaterControlSettings {
+                defaults: HeaterSettings {
+                    tank: ZoneSettings {
+                        target_celsius: 27.0,
+                        hysteresis_celsius: 0.3,
+                    },
+                    sump: ZoneSettings {
+                        target_celsius: 27.0,
+                        hysteresis_celsius: 0.3,
+                    },
+                    cutoff_celsius: 30.0,
+                },
+                watchdog: Duration::from_secs(6),
+            },
         }
     }
 }
