@@ -92,6 +92,28 @@ Notes:
 * The polynomial is DFRobot's, derived for a board fed from 5 V. On `3V3` expect a scale shift; `tds_factor` corrects it against a reference solution and is set over the API, not recompiled.
 * The probe has no polarity and is excited with AC, so it does not electroplate. It does not read anything useful in air: with the electrodes bridged by nothing, the board reports an open-circuit voltage, not a low concentration.
 
+### Heater SSRs (Fotek SSR-40 DA)
+
+Each heater is switched by its own solid-state relay on the mains side. The ESP32 drives only the relay's DC input.
+
+```text
+ESP32-S3                               SSR (input side)              Mains side
+
+GPIO17 ──[1 kΩ]──┬── base/gate         SSR 1  + ── 5V                1-2 ── tank heater (via outlet)
+                 └──[10 kΩ]── GND             − ── collector/drain
+GPIO18 ──[1 kΩ]──┬── base/gate         SSR 2  + ── 5V                1-2 ── sump heater (via outlet)
+                 └──[10 kΩ]── GND             − ── collector/drain
+GND ──────────────── emitter/source
+```
+
+Notes:
+* The 10 kΩ pull-down holds each relay off while the ESP32 resets — a GPIO floats until the firmware drives it low.
+* An NPN (2N2222) or logic-level N-MOSFET (AO3400) between GPIO and the SSR input is optional but recommended: many SSR-40 DA units are clones that switch unreliably from 3.3 V. Logic is not inverted — GPIO high turns the heater on.
+* An SSR usually fails shorted, which keeps a heater on regardless of firmware. Keep each heater's own thermostat set 1–2 °C above the target as the last line of defence.
+* Mount the SSRs on a heatsink: the triac drops about 1–1.5 V at load current.
+* Firmware safeguards: a reading at or above `cutoff_celsius` or a missing reading turns a heater off even under a manual ON override, and both heaters switch off if no telemetry snapshot arrives for 6 s. Targets, hysteresis and the cutoff live in NVS and are set over `PATCH /api/heaters/settings`; overrides live in RAM and do not survive a reboot.
+* Enable control with `components.heaters` in `crates/firmware/src/settings.rs`.
+
 ### Pin map
 
 | Peripheral | Pin(s) | Mode |
@@ -106,6 +128,8 @@ Notes:
 | XKC-Y25 — sump pump chamber | `GPIO13` | input, internal pull-up, active-low |
 | XKC-Y25 — main tank | `GPIO14` | input, internal pull-up, active-low |
 | XKC-Y25 — ATO reservoir | `GPIO15` | input, internal pull-up, active-low |
+| Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, external 10 kΩ pull-down |
+| Heater SSR — sump | `GPIO18` | push-pull output, low at boot, external 10 kΩ pull-down |
 
 Board configuration lives in `sdkconfig.defaults`: 240 MHz, 8 MiB flash, octal PSRAM at 80 MHz, and a 128 KiB main-task stack (one `picoserve` connection costs roughly 78 KiB of stack on that task).
 
