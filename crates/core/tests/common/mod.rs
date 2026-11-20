@@ -9,10 +9,11 @@ use tokio::net::{TcpListener, TcpStream};
 
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore,
+    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore, VolatileHeaterStore,
 };
-use aquarium_core::application::CalibrationService;
+use aquarium_core::application::{CalibrationService, HeaterService};
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
+use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
 
 pub const TOKEN: &str = "test-token";
 pub const ORIGIN: &str = "http://localhost:8081";
@@ -57,15 +58,64 @@ pub async fn start_with_lighting(
     start_with_calibration(store, lighting, calibration).await
 }
 
+pub type TestHeaters = HeaterService<VolatileHeaterStore>;
+
+pub fn heater_defaults() -> HeaterSettings {
+    HeaterSettings {
+        tank: ZoneSettings {
+            target_celsius: 27.0,
+            hysteresis_celsius: 0.5,
+        },
+        sump: ZoneSettings {
+            target_celsius: 26.0,
+            hysteresis_celsius: 0.5,
+        },
+        cutoff_celsius: 30.0,
+    }
+}
+
+pub fn heaters() -> Arc<TestHeaters> {
+    Arc::new(HeaterService::new(heater_defaults(), VolatileHeaterStore))
+}
+
 pub async fn start_with_calibration(
     store: Arc<InMemoryTelemetryStore>,
     lighting: Arc<InMemoryLightingStore>,
     calibration: Arc<TestCalibration>,
 ) -> SocketAddr {
+    start_with_all(store, lighting, calibration, heaters()).await
+}
+
+pub async fn start_with_heaters(heaters: Arc<TestHeaters>) -> SocketAddr {
+    start_with_all(
+        Arc::new(InMemoryTelemetryStore::new()),
+        Arc::new(InMemoryLightingStore::new()),
+        Arc::new(CalibrationService::new(
+            calibration_defaults(),
+            VolatileCalibrationStore,
+        )),
+        heaters,
+    )
+    .await
+}
+
+pub async fn start_with_all(
+    store: Arc<InMemoryTelemetryStore>,
+    lighting: Arc<InMemoryLightingStore>,
+    calibration: Arc<TestCalibration>,
+    heaters: Arc<TestHeaters>,
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
 
-    tokio::task::spawn_local(http::run(listener, store, lighting, calibration, config()));
+    tokio::task::spawn_local(http::run(
+        listener,
+        store,
+        lighting,
+        calibration,
+        heaters,
+        config(),
+    ));
 
     addr
 }
