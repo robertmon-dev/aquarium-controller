@@ -97,18 +97,17 @@ Notes:
 Each heater is switched by its own solid-state relay on the mains side. The ESP32 drives only the relay's DC input.
 
 ```text
-ESP32-S3                               SSR (input side)              Mains side
+ESP32-S3                               SSR input side                Mains side
 
-GPIO17 ──[1 kΩ]──┬── base/gate         SSR 1  + ── 5V                1-2 ── tank heater (via outlet)
-                 └──[10 kΩ]── GND             − ── collector/drain
-GPIO18 ──[1 kΩ]──┬── base/gate         SSR 2  + ── 5V                1-2 ── sump heater (via outlet)
-                 └──[10 kΩ]── GND             − ── collector/drain
-GND ──────────────── emitter/source
+GPIO17 ──────────────────────────────  SSR 1  3 (+)                  1-2 ── tank heater (via outlet)
+GND    ──────────────────────────────         4 (−)
+GPIO18 ──────────────────────────────  SSR 2  3 (+)                  1-2 ── sump heater (via outlet)
+GND    ──────────────────────────────         4 (−)
 ```
 
 Notes:
-* The 10 kΩ pull-down holds each relay off while the ESP32 resets — a GPIO floats until the firmware drives it low.
-* An NPN (2N2222) or logic-level N-MOSFET (AO3400) between GPIO and the SSR input is optional but recommended: many SSR-40 DA units are clones that switch unreliably from 3.3 V. Logic is not inverted — GPIO high turns the heater on.
+* The GPIO drives the SSR input directly — no resistors. The input has its own current limiter, and its LED path to `−` keeps the line low while the ESP32 resets, so a floating pin cannot switch the relay on.
+* 3.3 V sits at the bottom of the SSR-40 DA's 3–32 V input range. Run `RunMode::SsrProbe` (toggles both outputs every 2 s, no WiFi or HTTP) and confirm the input LED lights brightly and a mains-side load actually switches. If a clone stays dim or misses, drive the input through an NPN or logic-level N-MOSFET from 5 V instead.
 * An SSR usually fails shorted, which keeps a heater on regardless of firmware. Keep each heater's own thermostat set 1–2 °C above the target as the last line of defence.
 * Mount the SSRs on a heatsink: the triac drops about 1–1.5 V at load current.
 * Firmware safeguards: a reading at or above `cutoff_celsius` or a missing reading turns a heater off even under a manual ON override, and both heaters switch off if no telemetry snapshot arrives for 6 s. Targets, hysteresis and the cutoff live in NVS and are set over `PATCH /api/heaters/settings`; overrides live in RAM and do not survive a reboot.
@@ -128,8 +127,8 @@ Notes:
 | XKC-Y25 — sump pump chamber | `GPIO13` | input, internal pull-up, active-low |
 | XKC-Y25 — main tank | `GPIO14` | input, internal pull-up, active-low |
 | XKC-Y25 — ATO reservoir | `GPIO15` | input, internal pull-up, active-low |
-| Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, external 10 kΩ pull-down |
-| Heater SSR — sump | `GPIO18` | push-pull output, low at boot, external 10 kΩ pull-down |
+| Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
+| Heater SSR — sump | `GPIO18` | push-pull output, low at boot, drives the SSR input directly |
 
 Board configuration lives in `sdkconfig.defaults`: 240 MHz, 8 MiB flash, octal PSRAM at 80 MHz, and a 128 KiB main-task stack (one `picoserve` connection costs roughly 78 KiB of stack on that task).
 
@@ -245,6 +244,11 @@ All routes sit behind a bearer-token layer: `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/api/lighting/override` | Current override, or `204` when none is active |
 | `PUT` | `/api/lighting/override` | Set an override; `400` on an invalid target or a zero duration |
 | `DELETE` | `/api/lighting/override` | Clear the override (`204`) |
+| `GET` | `/api/heaters` | Status of both heaters (`tank`, `sump`) |
+| `GET` | `/api/heaters/settings` | Stored thermostat settings: per-heater target and hysteresis, shared cutoff |
+| `PATCH` | `/api/heaters/settings` | Partial update, merged and validated as a whole; `400` on values the device rejects, `500` when it cannot write them to NVS |
+| `PUT` | `/api/heaters/{tank\|sump}/override` | Force a heater `on` or `off`; `on` needs `duration_s` of 1–3600, `off` without one lasts until cleared; `400` otherwise, `404` on an unknown heater |
+| `DELETE` | `/api/heaters/{tank\|sump}/override` | Return the heater to the thermostat (`204`) |
 
 ```bash
 curl -H "Authorization: Bearer $API_TOKEN" http://192.168.1.50/api/telemetry
@@ -262,11 +266,21 @@ curl -H "Authorization: Bearer $API_TOKEN" http://192.168.1.50/api/probe
 curl -X PATCH http://192.168.1.50/api/calibration \
   -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
   -d '{"makeup_tank_celsius":22.0,"tds_factor":1.23}'
+
+curl -X PUT http://192.168.1.50/api/heaters/tank/override \
+  -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"state":"on","duration_s":600}'
+
+curl -X PATCH http://192.168.1.50/api/heaters/settings \
+  -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"sump":{"target_celsius":26.5,"hysteresis_celsius":0.3}}'
 ```
 
-A `PATCH` carries only the fields being changed. The three pH points are one unit: send all of them or none, because the device validates them together and will not accept half a calibration.
+A `PATCH` carries only the fields being changed. The three pH points are one unit: send all of them or none, because the device validates them together and will not accept half a calibration. The same holds for a heater zone in `/api/heaters/settings`: `target_celsius` and `hysteresis_celsius` travel together.
 
-A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank/sump/target, heater state, sensor health), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
+Limits: targets 15–32 °C, hysteresis 0.1–2.0 °C, and a cutoff of at most 35 °C that must sit above both targets. A manual `on` never beats the safeguards — at or above the cutoff, or without a temperature reading, the heater stays off and its status says why. Overrides live in RAM; with `components.heaters` not running the API still accepts them, but nothing acts on them and the status reports `unavailable`.
+
+A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).
