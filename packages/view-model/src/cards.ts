@@ -41,13 +41,8 @@ export function temperatureCard(
   s: TankTelemetryDto,
   t: Translate,
 ): HeroCardData {
-  const {
-    tank_celsius,
-    sump_celsius,
-    target_celsius,
-    heater_active,
-    sensors_healthy,
-  } = s.temperature;
+  const { tank_celsius, sump_celsius, sensors_healthy } = s.temperature;
+  const tankHeater = s.heaters.tank;
 
   return {
     title: t("cards.temperature.title"),
@@ -58,9 +53,12 @@ export function temperatureCard(
     metrics: [
       {
         label: t("cards.temperature.target"),
-        value: formatCelsius(target_celsius),
+        value: formatCelsius(tankHeater.target_celsius),
       },
-      { label: t("cards.temperature.heater"), value: onOff(t, heater_active) },
+      {
+        label: t("cards.temperature.heater"),
+        value: onOff(t, tankHeater.active),
+      },
       {
         label: t("cards.temperature.sump"),
         value: formatCelsius(sump_celsius),

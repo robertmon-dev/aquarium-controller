@@ -25,8 +25,6 @@ const snapshot: TankTelemetryDto = {
   temperature: {
     tank_celsius: 25.5,
     sump_celsius: 25.1,
-    target_celsius: 27,
-    heater_active: true,
     sensors_healthy: true,
   },
   filtration: { flow_rate_lph: 640, flow_ok: true, filter_relay_active: true },
@@ -56,6 +54,22 @@ const snapshot: TankTelemetryDto = {
     main_tank: { wet: true, faulty: false },
     sump_reserve: { wet: false, faulty: false },
     sensors_healthy: true,
+  },
+  heaters: {
+    tank: {
+      active: true,
+      mode: "auto",
+      fault: null,
+      override_expires_in_s: null,
+      target_celsius: 27,
+    },
+    sump: {
+      active: false,
+      mode: "auto",
+      fault: null,
+      override_expires_in_s: null,
+      target_celsius: 26,
+    },
   },
   leak_detected: false,
 };
