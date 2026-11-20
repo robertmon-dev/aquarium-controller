@@ -73,12 +73,21 @@ fn mode_name(mode: &SystemMode) -> &'static str {
 }
 
 fn temperature(snapshot: &TankTelemetryDto) -> Fields {
+    let heaters = &snapshot.heaters;
+    let faults = [heaters.tank, heaters.sump]
+        .iter()
+        .filter(|heater| heater.fault.is_some())
+        .count();
+
     let mut fields = Fields::new();
     fields.optional_float("tank_c", snapshot.temperature.tank_celsius);
     fields.optional_float("sump_c", snapshot.temperature.sump_celsius);
-    fields.float("target_c", snapshot.temperature.target_celsius);
     fields.boolean("healthy", snapshot.temperature.sensors_healthy);
-    fields.boolean("heater", snapshot.temperature.heater_active);
+    fields.float("target_tank_c", heaters.tank.target_celsius);
+    fields.float("target_sump_c", heaters.sump.target_celsius);
+    fields.boolean("heater_tank", heaters.tank.active);
+    fields.boolean("heater_sump", heaters.sump.active);
+    fields.integer("heater_fault", faults);
     fields
 }
 

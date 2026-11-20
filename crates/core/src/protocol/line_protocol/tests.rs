@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
 
 fn populated() -> TankTelemetryDto {
@@ -11,7 +12,22 @@ fn populated() -> TankTelemetryDto {
 
     dto.temperature.tank_celsius = Some(26.5);
     dto.temperature.sump_celsius = Some(26.0);
-    dto.temperature.target_celsius = 27.0;
+    dto.heaters = HeatersStatus {
+        tank: HeaterStatus {
+            active: false,
+            mode: HeaterMode::Auto,
+            fault: None,
+            override_expires_in_s: None,
+            target_celsius: 27.0,
+        },
+        sump: HeaterStatus {
+            active: true,
+            mode: HeaterMode::Auto,
+            fault: None,
+            override_expires_in_s: None,
+            target_celsius: 26.5,
+        },
+    };
     dto.temperature.sensors_healthy = true;
 
     dto.lighting.profile = LightingProfile::Daylight;
@@ -65,7 +81,7 @@ fn temperature_fields_are_encoded_with_their_types() {
 
     assert!(
         encoded.contains(
-            "aquarium_temperature tank_c=26.5,sump_c=26,target_c=27,healthy=true,heater=false 1750000000"
+            "aquarium_temperature tank_c=26.5,sump_c=26,healthy=true,target_tank_c=27,target_sump_c=26.5,heater_tank=false,heater_sump=true,heater_fault=0i 1750000000"
         ),
         "got: {encoded}"
     );
@@ -128,7 +144,7 @@ fn a_missing_reading_omits_the_field_rather_than_writing_zero() {
     let encoded = encode(&dto).expect("encodes");
 
     assert!(
-        !encoded.contains("tank_c="),
+        !encoded.contains(" tank_c="),
         "a dead sensor must not read as 0 degrees: {encoded}"
     );
     assert!(encoded.contains("sump_c=26"), "got: {encoded}");
@@ -137,12 +153,12 @@ fn a_missing_reading_omits_the_field_rather_than_writing_zero() {
 #[test]
 fn a_non_finite_value_is_omitted() {
     let mut dto = populated();
-    dto.temperature.target_celsius = f32::NAN;
+    dto.heaters.tank.target_celsius = f32::NAN;
 
     let encoded = encode(&dto).expect("encodes");
 
     assert!(!encoded.contains("NaN"), "got: {encoded}");
-    assert!(!encoded.contains("target_c="), "got: {encoded}");
+    assert!(!encoded.contains("target_tank_c="), "got: {encoded}");
 }
 
 #[test]
@@ -275,11 +291,13 @@ fn ato_is_exported_with_the_fill_duration_as_an_integer() {
 #[test]
 fn the_heater_state_is_exported() {
     let mut dto = populated();
-    dto.temperature.heater_active = true;
+    dto.heaters.tank.active = true;
+    dto.heaters.sump.fault = Some(HeaterFault::SensorFault);
 
     let encoded = encode(&dto).expect("encodes");
 
-    assert!(encoded.contains("heater=true"), "got: {encoded}");
+    assert!(encoded.contains("heater_tank=true"), "got: {encoded}");
+    assert!(encoded.contains("heater_fault=1i"), "got: {encoded}");
 }
 
 #[test]
