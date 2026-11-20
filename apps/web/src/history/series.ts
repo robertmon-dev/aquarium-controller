@@ -14,7 +14,7 @@ export const CHARTS: ChartSpec[] = [
     id: "temperature",
     measurement: "aquarium_temperature",
     fields: ["tank_c", "sump_c"],
-    reference: "target_c",
+    reference: "target_tank_c",
     unit: "°C",
     kind: "line",
   },
@@ -64,7 +64,7 @@ export const CHARTS: ChartSpec[] = [
   {
     id: "actuators",
     measurement: "aquarium_temperature",
-    fields: ["heater"],
+    fields: ["heater_tank", "heater_sump"],
     unit: "",
     kind: "strip",
   },
