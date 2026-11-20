@@ -4,13 +4,14 @@ use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
 use crate::domain::calibration::Calibration;
+use crate::domain::heater::HeaterSettings;
 use crate::domain::light::{LightingOverride, LightingTarget};
 use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
 use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
-    CalibrationPersistence, LightingOverrideSource, ProbeVoltageSink, TelemetrySink,
-    WaterLevelSink, WaterLevelSource,
+    CalibrationPersistence, HeaterPersistence, LightingOverrideSource, ProbeVoltageSink,
+    TelemetrySink, WaterLevelSink, WaterLevelSource,
 };
 
 pub struct InMemoryTelemetryStore {
@@ -224,6 +225,18 @@ impl CalibrationPersistence for VolatileCalibrationStore {
     }
 
     fn store(&self, _value: &Calibration) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
+pub struct VolatileHeaterStore;
+
+impl HeaterPersistence for VolatileHeaterStore {
+    fn load(&self) -> Option<HeaterSettings> {
+        None
+    }
+
+    fn store(&self, _value: &HeaterSettings) -> Result<(), &'static str> {
         Ok(())
     }
 }
