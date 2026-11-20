@@ -1,5 +1,6 @@
 pub mod calibration;
 pub mod clock;
+pub mod heater;
 pub mod lighting;
 pub mod metrics_export;
 pub mod ph;
@@ -12,6 +13,7 @@ pub mod water_level;
 
 pub use calibration::{CalibrationPersistence, CalibrationSource};
 pub use clock::Clock;
+pub use heater::{HeaterOutputs, HeaterPersistence, HeaterStatusSource};
 pub use lighting::LightingOverrideSource;
 pub use metrics_export::{ExportError, MetricsWriter};
 pub use ph::PhReader;
