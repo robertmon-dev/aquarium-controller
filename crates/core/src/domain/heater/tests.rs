@@ -133,6 +133,14 @@ fn statuses_round_trip_through_json_in_snake_case() {
     );
 }
 
+#[test]
+fn an_output_error_is_named_in_snake_case() {
+    assert_eq!(
+        serde_json::to_string(&HeaterFault::OutputError).expect("serializes"),
+        r#""output_error""#
+    );
+}
+
 const CUTOFF: f32 = 30.0;
 
 fn tank() -> ZoneSettings {

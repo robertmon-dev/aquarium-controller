@@ -1,3 +1,5 @@
+use tokio::time::Instant;
+
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::light::{self, LightingSchedule};
 use crate::domain::metrics::{
@@ -6,7 +8,8 @@ use crate::domain::metrics::{
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
     ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
+    TemperatureReader, TemperatureSample, TemperatureSampleSink, TemperatureSensorRole,
+    WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
@@ -49,7 +52,7 @@ where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink + ProbeVoltageSink,
+    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
@@ -72,7 +75,14 @@ where
     }
 
     pub async fn sample(&mut self) {
+        let measured_at = Instant::now();
         self.last = self.read_sensors().await;
+
+        self.sink.publish_temperature(TemperatureSample {
+            tank_celsius: self.last.tank,
+            sump_celsius: self.last.sump,
+            measured_at,
+        });
 
         let snapshot = self.compose(self.last);
 

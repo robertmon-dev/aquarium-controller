@@ -1,3 +1,7 @@
+use core::time::Duration;
+
+use tokio::time::Instant;
+
 use crate::domain::metrics::WaterTemperature;
 use crate::ports::outbound::temperature::{TemperatureError, TemperatureSensorRole};
 
@@ -7,6 +11,7 @@ const CMD_MATCH_ROM: u8 = 0x55;
 const CMD_SKIP_ROM: u8 = 0xCC;
 const CMD_CONVERT_T: u8 = 0x44;
 const CMD_READ_SCRATCHPAD: u8 = 0xBE;
+const CMD_READ_POWER_SUPPLY: u8 = 0xB4;
 
 pub const SCRATCHPAD_BYTES: usize = 9;
 const POWER_ON_RESET_RAW: i16 = 0x0550;
@@ -245,6 +250,64 @@ pub fn read_scratchpad<L: OneWireLine>(
     }
 
     Ok(scratchpad)
+}
+
+pub fn probe_bus<L: OneWireLine>(line: &mut L) -> Result<(), TemperatureError> {
+    line.reset()?;
+    line.write_byte(CMD_SKIP_ROM);
+    line.write_byte(CMD_READ_POWER_SUPPLY);
+
+    if line.read_bit() {
+        Ok(())
+    } else {
+        Err(TemperatureError::BusError(
+            "Parasite-powered DS18B20 detected; sensors must be powered from VDD",
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BusRecovery {
+    initial: Duration,
+    max: Duration,
+    delay: Duration,
+    retry_at: Option<Instant>,
+}
+
+impl BusRecovery {
+    pub const fn new(initial: Duration, max: Duration, now: Instant) -> Self {
+        Self {
+            initial,
+            max,
+            delay: initial,
+            retry_at: Some(now),
+        }
+    }
+
+    pub const fn is_ready(&self) -> bool {
+        self.retry_at.is_none()
+    }
+
+    pub fn attempt_due(&self, now: Instant) -> bool {
+        self.retry_at.is_some_and(|at| now >= at)
+    }
+
+    pub fn succeeded(&mut self) {
+        self.retry_at = None;
+        self.delay = self.initial;
+    }
+
+    pub fn failed(&mut self, now: Instant) -> Duration {
+        let delay = self.delay;
+        self.retry_at = Some(now + delay);
+        self.delay = (delay * 2).min(self.max);
+        delay
+    }
+
+    pub fn lost(&mut self, now: Instant) {
+        self.retry_at = Some(now);
+        self.delay = self.initial;
+    }
 }
 
 #[cfg(test)]

@@ -438,3 +438,102 @@ fn temperature_from_scratchpad_still_detects_power_on_reset() {
         Err(TemperatureError::PowerOnResetValue)
     ));
 }
+
+#[test]
+fn probing_an_externally_powered_bus_succeeds_after_a_power_check() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let mut bus = FakeBus::new(&[rom]);
+    bus.responses.push_back(true);
+
+    probe_bus(&mut bus).unwrap();
+
+    assert_eq!(bus.commands, vec![0xCC, 0xB4]);
+}
+
+#[test]
+fn probing_refuses_a_parasite_powered_sensor() {
+    let rom = rom_with_crc([0x28, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01]);
+    let mut bus = FakeBus::new(&[rom]);
+    bus.responses.push_back(false);
+
+    assert!(matches!(
+        probe_bus(&mut bus),
+        Err(TemperatureError::BusError(_))
+    ));
+}
+
+#[test]
+fn probing_an_empty_bus_reports_the_missing_presence_pulse() {
+    let mut bus = FakeBus::new(&[]);
+
+    assert!(matches!(
+        probe_bus(&mut bus),
+        Err(TemperatureError::BusError(_))
+    ));
+    assert!(bus.commands.is_empty());
+}
+
+mod recovery {
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
+    use super::super::BusRecovery;
+
+    const INITIAL: Duration = Duration::from_secs(5);
+    const MAX: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn a_fresh_bus_is_down_and_due_for_an_attempt() {
+        let now = Instant::now();
+        let recovery = BusRecovery::new(INITIAL, MAX, now);
+
+        assert!(!recovery.is_ready());
+        assert!(recovery.attempt_due(now));
+    }
+
+    #[test]
+    fn failed_attempts_back_off_from_five_seconds_to_a_minute() {
+        let mut now = Instant::now();
+        let mut recovery = BusRecovery::new(INITIAL, MAX, now);
+        let mut delays = Vec::new();
+
+        for _ in 0..6 {
+            let delay = recovery.failed(now);
+            assert!(!recovery.attempt_due(now + delay - Duration::from_millis(1)));
+            now += delay;
+            assert!(recovery.attempt_due(now));
+            delays.push(delay.as_secs());
+        }
+
+        assert_eq!(delays, vec![5, 10, 20, 40, 60, 60]);
+    }
+
+    #[test]
+    fn success_makes_the_bus_ready_and_stops_attempts() {
+        let now = Instant::now();
+        let mut recovery = BusRecovery::new(INITIAL, MAX, now);
+        recovery.failed(now);
+        recovery.failed(now);
+
+        recovery.succeeded();
+
+        assert!(recovery.is_ready());
+        assert!(!recovery.attempt_due(now + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn a_lost_bus_is_probed_at_once_and_backs_off_from_the_start_again() {
+        let now = Instant::now();
+        let mut recovery = BusRecovery::new(INITIAL, MAX, now);
+        recovery.failed(now);
+        recovery.failed(now);
+        recovery.succeeded();
+
+        recovery.lost(now);
+
+        assert!(!recovery.is_ready());
+        assert!(recovery.attempt_due(now));
+        assert_eq!(recovery.failed(now), INITIAL);
+    }
+}

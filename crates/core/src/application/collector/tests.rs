@@ -13,7 +13,8 @@ use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
     ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureError, TemperatureReader, TemperatureSensorRole, WaterLevelSource,
+    TemperatureError, TemperatureReader, TemperatureSample, TemperatureSampleSink,
+    TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
 use crate::protocol::tds::{self, TdsError};
@@ -254,8 +255,19 @@ fn config() -> TelemetryConfig {
 struct FakeHealth;
 
 impl SystemHealthProvider for FakeHealth {
-    fn wifi_rssi_dbm(&self) -> i8 {
-        -57
+    fn wifi_rssi_dbm(&self) -> Option<i8> {
+        Some(-57)
+    }
+    fn free_heap_kb(&self) -> u32 {
+        180
+    }
+}
+
+struct OfflineHealth;
+
+impl SystemHealthProvider for OfflineHealth {
+    fn wifi_rssi_dbm(&self) -> Option<i8> {
+        None
     }
     fn free_heap_kb(&self) -> u32 {
         180
@@ -266,6 +278,7 @@ impl SystemHealthProvider for FakeHealth {
 struct RecordingSink {
     snapshots: Mutex<Vec<TankTelemetryDto>>,
     volts: Mutex<Vec<ProbeVoltagesDto>>,
+    temperatures: Mutex<Vec<TemperatureSample>>,
 }
 
 impl RecordingSink {
@@ -299,6 +312,12 @@ impl RecordingSink {
 impl TelemetrySink for &RecordingSink {
     fn publish(&self, snapshot: TankTelemetryDto) {
         self.snapshots.lock().unwrap().push(snapshot);
+    }
+}
+
+impl TemperatureSampleSink for &RecordingSink {
+    fn publish_temperature(&self, sample: TemperatureSample) {
+        self.temperatures.lock().unwrap().push(sample);
     }
 }
 
@@ -495,7 +514,32 @@ async fn carries_system_health_and_timestamp() {
     let s = sink.last();
     assert_eq!(s.timestamp_epoch_s, 1_750_000_000);
     assert_eq!(s.system_health.uptime_seconds, 3600);
-    assert_eq!(s.system_health.wifi_rssi_dbm, -57);
+    assert_eq!(s.system_health.wifi_rssi_dbm, Some(-57));
+}
+
+#[tokio::test]
+async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
+    let sink = RecordingSink::default();
+
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: OfflineHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
+        },
+        &sink,
+        config(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.last().system_health.wifi_rssi_dbm, None);
 }
 
 #[tokio::test]
@@ -639,6 +683,30 @@ async fn republish_reuses_the_last_readings() {
     c.republish();
 
     assert_eq!(sink.last().temperature.tank_celsius, Some(26.5));
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_a_sample_publishes_temperatures_stamped_when_measured() {
+    let sink = RecordingSink::default();
+    let mut c = collector(
+        FakeReader::healthy(),
+        FakeClock::synced_at_noon_in_june(),
+        &sink,
+    );
+    let measured_at = tokio::time::Instant::now();
+
+    c.sample().await;
+    tokio::time::advance(std::time::Duration::from_millis(1_900)).await;
+    c.republish();
+
+    assert_eq!(
+        *sink.temperatures.lock().unwrap(),
+        vec![TemperatureSample {
+            tank_celsius: Some(26.5),
+            sump_celsius: Some(26.0),
+            measured_at,
+        }]
+    );
 }
 
 #[tokio::test]
@@ -1110,6 +1178,87 @@ async fn republishing_does_not_restamp_the_probe_voltages() {
 }
 
 #[tokio::test]
+async fn a_tds_voltage_the_board_cannot_produce_reaches_telemetry_as_no_reading() {
+    let sink = RecordingSink::default();
+
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(3.3),
+        FakeCalibration::standard().with(|cal| cal.tds_factor = 0.1),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.last().tds.ppm, None);
+    assert_eq!(sink.last().tds.ec_us_cm, None);
+    assert_close(sink.last_volts().tds.expect("the raw voltage"), 3.3);
+}
+
+#[tokio::test]
+async fn a_failed_ph_conversion_blanks_only_ph_and_lends_no_voltage_to_tds() {
+    let sink = RecordingSink::default();
+    let mut subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog {
+            ph_volts: Some(1.52),
+            tds_volts: Some(0.91),
+        },
+        FakeCalibration::standard(),
+    );
+
+    subject.sample().await;
+    subject.sources.analog.ph_volts = None;
+    subject.sources.analog.tds_volts = Some(1.2);
+    subject.sample().await;
+
+    let volts = sink.last_volts();
+    let snapshot = sink.last();
+    let expected = tds::convert(1.2, 25.0, 1.0).expect("valid");
+
+    assert_eq!(volts.ph, None);
+    assert_close(volts.tds.expect("a TDS voltage"), 1.2);
+    assert_eq!(snapshot.co2.current_ph, None);
+    assert_close(snapshot.tds.ppm.expect("a reading"), expected.ppm.as_ppm());
+}
+
+#[tokio::test]
+async fn both_analog_channels_recover_after_the_bus_drops_out() {
+    let sink = RecordingSink::default();
+    let mut subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog {
+            ph_volts: Some(1.52),
+            tds_volts: Some(0.91),
+        },
+        FakeCalibration::standard(),
+    );
+
+    subject.sample().await;
+    subject.sources.analog = FakeAnalog::nothing_attached();
+    subject.sample().await;
+
+    let dropped = sink.last_volts();
+    assert_eq!((dropped.ph, dropped.tds), (None, None));
+    assert_eq!(sink.last().co2.current_ph, None);
+    assert_eq!(sink.last().tds.ppm, None);
+
+    subject.sources.analog = FakeAnalog {
+        ph_volts: Some(1.5),
+        tds_volts: Some(1.1),
+    };
+    subject.sample().await;
+
+    let recovered = sink.last_volts();
+    assert_close(recovered.ph.expect("pH is back"), 1.5);
+    assert_close(recovered.tds.expect("TDS is back"), 1.1);
+    assert!(sink.last().co2.current_ph.is_some());
+    assert!(sink.last().tds.ppm.is_some());
+}
+
+#[tokio::test]
 async fn the_heater_status_is_copied_into_the_snapshot() {
     let sink = RecordingSink::default();
     let heaters = HeatersStatus {
@@ -1155,6 +1304,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
         operation_kind: Some(OperationKind::TopOff),
         operation_state: OperationState::Refilling,
         circulation_starved: true,
+        level_sensors_suspect: true,
     };
 
     TelemetryCollector::new(

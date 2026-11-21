@@ -165,6 +165,7 @@ pub enum HeaterFault {
     SensorFault,
     OverTemperature,
     Unavailable,
+    OutputError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

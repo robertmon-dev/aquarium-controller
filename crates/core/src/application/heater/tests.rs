@@ -4,10 +4,10 @@ use std::time::Duration;
 use super::*;
 use crate::adapters::outbound::memory::VolatileHeaterStore;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterSettingsPatch, ZoneSettings};
-use crate::domain::metrics::TankTelemetryDto;
 use crate::ports::inbound::{HeaterControl, HeaterSettingsError};
 use crate::ports::outbound::HeaterOutputs;
 use crate::ports::outbound::HeaterStatusSource;
+use crate::ports::outbound::TemperatureSample;
 use tokio::sync::{watch, Notify};
 
 fn defaults() -> HeaterSettings {
@@ -308,6 +308,8 @@ async fn remaining_seconds_round_up_so_an_active_override_never_reads_zero() {
 #[derive(Clone, Default)]
 struct FakeOutputs {
     log: Arc<Mutex<Vec<(HeaterId, bool)>>>,
+    pins: Arc<Mutex<[bool; 2]>>,
+    refusing_off: Arc<Mutex<Option<HeaterId>>>,
     stuck: Option<HeaterId>,
     broken: bool,
 }
@@ -327,6 +329,24 @@ impl FakeOutputs {
         }
     }
 
+    fn pin(&self, id: HeaterId) -> bool {
+        self.pins.lock().unwrap()[id.index()]
+    }
+
+    fn refuse_off(&self, id: Option<HeaterId>) {
+        *self.refusing_off.lock().unwrap() = id;
+    }
+
+    fn writes(&self, id: HeaterId) -> Vec<bool> {
+        self.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(heater, _)| *heater == id)
+            .map(|(_, on)| *on)
+            .collect()
+    }
+
     fn last(&self, id: HeaterId) -> Option<bool> {
         self.log
             .lock()
@@ -342,9 +362,12 @@ impl HeaterOutputs for FakeOutputs {
     fn set(&mut self, id: HeaterId, on: bool) -> Result<(), &'static str> {
         self.log.lock().unwrap().push((id, on));
 
-        if self.broken || (on && self.stuck == Some(id)) {
+        let refused_off = !on && *self.refusing_off.lock().unwrap() == Some(id);
+
+        if self.broken || (on && self.stuck == Some(id)) || refused_off {
             Err("fake: the SSR pin is stuck")
         } else {
+            self.pins.lock().unwrap()[id.index()] = on;
             Ok(())
         }
     }
@@ -356,11 +379,12 @@ fn shared_service() -> Arc<TestService> {
     Arc::new(HeaterService::new(defaults(), VolatileHeaterStore))
 }
 
-fn snapshot(tank: Option<f32>, sump: Option<f32>) -> TankTelemetryDto {
-    let mut dto = TankTelemetryDto::empty();
-    dto.temperature.tank_celsius = tank;
-    dto.temperature.sump_celsius = sump;
-    dto
+fn snapshot(tank: Option<f32>, sump: Option<f32>) -> TemperatureSample {
+    TemperatureSample {
+        tank_celsius: tank,
+        sump_celsius: sump,
+        measured_at: Instant::now(),
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -445,7 +469,8 @@ async fn a_stuck_output_is_driven_off_and_reported_inactive() {
     assert_eq!(outputs.last(HeaterId::Tank), Some(false));
     assert!(!service.status().tank.active);
     assert!(service.status().sump.active);
-    assert_eq!(service.status().tank.fault, None);
+    assert_eq!(service.status().tank.fault, Some(HeaterFault::OutputError));
+    assert_eq!(service.status().sump.fault, None);
     assert!(!controller.tick(Some(&snapshot(Some(20.0), Some(20.0)))));
 }
 
@@ -460,6 +485,54 @@ async fn an_output_that_fails_even_to_turn_off_is_reported_inactive() {
     let status = service.status();
     assert!(!status.tank.active);
     assert!(!status.sump.active);
+    assert_eq!(status.tank.fault, Some(HeaterFault::OutputError));
+    assert_eq!(status.sump.fault, Some(HeaterFault::OutputError));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_off_write_reports_the_heater_still_on_and_retries_off_every_tick() {
+    let outputs = FakeOutputs::default();
+    let service = shared_service();
+    let mut controller = HeaterController::new(outputs.clone(), Arc::clone(&service));
+    controller.tick(Some(&snapshot(Some(20.0), Some(27.0))));
+    assert!(outputs.pin(HeaterId::Tank));
+
+    outputs.refuse_off(Some(HeaterId::Tank));
+    assert!(controller.tick(Some(&snapshot(Some(27.5), Some(27.0)))));
+
+    assert!(outputs.pin(HeaterId::Tank));
+    let status = service.status().tank;
+    assert!(status.active);
+    assert_eq!(status.fault, Some(HeaterFault::OutputError));
+
+    let before = outputs.writes(HeaterId::Tank).len();
+    controller.tick(Some(&snapshot(Some(20.0), Some(27.0))));
+    assert_eq!(&outputs.writes(HeaterId::Tank)[before..], &[false]);
+    assert_eq!(service.status().tank.fault, Some(HeaterFault::OutputError));
+    assert!(service.status().tank.active);
+
+    outputs.refuse_off(None);
+    controller.tick(Some(&snapshot(Some(27.5), Some(27.0))));
+
+    assert!(!outputs.pin(HeaterId::Tank));
+    let status = service.status().tank;
+    assert!(!status.active);
+    assert_eq!(status.fault, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_off_on_a_safety_trip_is_reported_as_an_output_error() {
+    let outputs = FakeOutputs::default();
+    let service = shared_service();
+    let mut controller = HeaterController::new(outputs.clone(), Arc::clone(&service));
+    controller.tick(Some(&snapshot(Some(20.0), Some(27.0))));
+
+    outputs.refuse_off(Some(HeaterId::Tank));
+    controller.tick(None);
+
+    let status = service.status().tank;
+    assert!(status.active);
+    assert_eq!(status.fault, Some(HeaterFault::OutputError));
 }
 
 #[tokio::test(start_paused = true)]
@@ -474,7 +547,7 @@ async fn tick_reports_a_change_only_when_an_output_or_fault_moved() {
 const WATCHDOG: Duration = Duration::from_secs(6);
 
 struct Loop {
-    tx: watch::Sender<TankTelemetryDto>,
+    tx: watch::Sender<Option<TemperatureSample>>,
     outputs: FakeOutputs,
     service: Arc<TestService>,
     republish: Arc<Notify>,
@@ -482,7 +555,7 @@ struct Loop {
 }
 
 fn spawn_loop() -> Loop {
-    let (tx, rx) = watch::channel(TankTelemetryDto::empty());
+    let (tx, rx) = watch::channel(None);
     let outputs = FakeOutputs::default();
     let service = shared_service();
     let republish = Arc::new(Notify::new());
@@ -514,7 +587,9 @@ async fn expect_republish(republish: &Notify) {
 async fn a_fresh_snapshot_drives_the_outputs_and_requests_a_republish() {
     let subject = spawn_loop();
 
-    subject.tx.send_replace(snapshot(Some(20.0), Some(27.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(27.0))));
     expect_republish(&subject.republish).await;
 
     assert_eq!(subject.outputs.last(HeaterId::Tank), Some(true));
@@ -524,7 +599,9 @@ async fn a_fresh_snapshot_drives_the_outputs_and_requests_a_republish() {
 #[tokio::test(start_paused = true)]
 async fn silence_past_the_watchdog_turns_both_heaters_off() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
     let early = tokio::time::timeout(
@@ -550,7 +627,9 @@ async fn silence_past_the_watchdog_turns_both_heaters_off() {
 #[tokio::test(start_paused = true)]
 async fn an_api_change_applies_at_once_to_the_latest_snapshot() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
     subject
@@ -566,10 +645,14 @@ async fn an_api_change_applies_at_once_to_the_latest_snapshot() {
 #[tokio::test(start_paused = true)]
 async fn an_unchanged_snapshot_does_not_request_a_republish() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
-    subject.tx.send_replace(snapshot(Some(20.1), Some(20.1)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.1), Some(20.1))));
 
     let quiet = tokio::time::timeout(Duration::from_secs(1), subject.republish.notified()).await;
     assert!(
@@ -581,7 +664,9 @@ async fn an_unchanged_snapshot_does_not_request_a_republish() {
 #[tokio::test(start_paused = true)]
 async fn a_closed_telemetry_channel_leaves_both_heaters_off() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
     drop(subject.tx);
@@ -595,7 +680,9 @@ async fn a_closed_telemetry_channel_leaves_both_heaters_off() {
 #[tokio::test(start_paused = true)]
 async fn an_api_wake_requests_a_republish_even_when_no_output_changes() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
     subject
@@ -609,7 +696,9 @@ async fn an_api_wake_requests_a_republish_even_when_no_output_changes() {
 #[tokio::test(start_paused = true)]
 async fn api_wakes_cannot_postpone_the_watchdog() {
     let subject = spawn_loop();
-    subject.tx.send_replace(snapshot(Some(20.0), Some(20.0)));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(20.0))));
     expect_republish(&subject.republish).await;
 
     for round in 0..3 {
@@ -637,4 +726,68 @@ async fn api_wakes_cannot_postpone_the_watchdog() {
             Some(HeaterFault::SensorFault)
         );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timed_on_override_ends_on_time_without_a_new_sample() {
+    let subject = spawn_loop();
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(28.0), Some(28.0))));
+    expect_republish(&subject.republish).await;
+
+    subject
+        .service
+        .set_override(HeaterId::Tank, OverrideState::On, Some(1))
+        .unwrap();
+    expect_republish(&subject.republish).await;
+    assert!(subject.service.status().tank.active);
+
+    tokio::time::advance(Duration::from_millis(1_001)).await;
+    tokio::task::yield_now().await;
+
+    assert!(!subject.service.status().tank.active);
+    assert_eq!(subject.outputs.last(HeaterId::Tank), Some(false));
+    assert_eq!(subject.service.status().tank.mode, HeaterMode::Auto);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_republished_sample_keeps_its_original_age() {
+    let subject = spawn_loop();
+    let cold = snapshot(Some(20.0), Some(20.0));
+    subject.tx.send_replace(Some(cold));
+    expect_republish(&subject.republish).await;
+    assert!(subject.service.status().tank.active);
+
+    tokio::time::advance(Duration::from_millis(1_900)).await;
+    subject.tx.send_replace(Some(cold));
+    tokio::task::yield_now().await;
+
+    tokio::time::advance(Duration::from_millis(4_200)).await;
+    tokio::task::yield_now().await;
+
+    for id in HeaterId::ALL {
+        assert_eq!(
+            subject.service.status().get(id).fault,
+            Some(HeaterFault::SensorFault)
+        );
+        assert!(!subject.service.status().get(id).active);
+        assert_eq!(subject.outputs.last(id), Some(false));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sample_that_arrives_already_stale_is_not_trusted() {
+    let subject = spawn_loop();
+    let measured = snapshot(Some(20.0), Some(20.0));
+
+    tokio::time::advance(WATCHDOG).await;
+    subject.tx.send_replace(Some(measured));
+    tokio::task::yield_now().await;
+
+    assert_eq!(
+        subject.service.status().tank.fault,
+        Some(HeaterFault::SensorFault)
+    );
+    assert_eq!(subject.outputs.last(HeaterId::Tank), Some(false));
 }

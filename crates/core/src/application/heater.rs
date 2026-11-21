@@ -5,12 +5,13 @@ use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
 use crate::domain::heater::{
-    decide, validate_override, HeaterFault, HeaterId, HeaterMode, HeaterSettings,
+    decide, validate_override, Decision, HeaterFault, HeaterId, HeaterMode, HeaterSettings,
     HeaterSettingsPatch, HeaterStatus, HeatersStatus, OverrideState,
 };
-use crate::domain::metrics::TankTelemetryDto;
 use crate::ports::inbound::{HeaterControl, HeaterSettingsError};
-use crate::ports::outbound::{HeaterOutputs, HeaterPersistence, HeaterStatusSource};
+use crate::ports::outbound::{
+    HeaterOutputs, HeaterPersistence, HeaterStatusSource, TemperatureSample,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct StoredOverride {
@@ -99,6 +100,16 @@ impl<P: HeaterPersistence> HeaterService<P> {
         self.lock()
             .live_override(id, Instant::now())
             .map(|over| over.state)
+    }
+
+    pub fn next_override_expiry(&self) -> Option<Instant> {
+        let now = Instant::now();
+        let mut state = self.lock();
+
+        HeaterId::ALL
+            .into_iter()
+            .filter_map(|id| state.live_override(id, now)?.expires_at)
+            .min()
     }
 
     pub fn is_on(&self, id: HeaterId) -> bool {
@@ -223,65 +234,104 @@ impl<P: HeaterPersistence> HeaterStatusSource for Arc<HeaterService<P>> {
 pub struct HeaterController<O, P> {
     outputs: O,
     service: Arc<HeaterService<P>>,
+    levels: [bool; 2],
+    uncertain: [bool; 2],
 }
 
 impl<O: HeaterOutputs, P: HeaterPersistence> HeaterController<O, P> {
     pub fn new(outputs: O, service: Arc<HeaterService<P>>) -> Self {
-        Self { outputs, service }
+        Self {
+            outputs,
+            service,
+            levels: [false; 2],
+            uncertain: [false; 2],
+        }
     }
 
-    pub fn tick(&mut self, snapshot: Option<&TankTelemetryDto>) -> bool {
+    pub fn tick(&mut self, sample: Option<&TemperatureSample>) -> bool {
         let settings = self.service.settings();
         let mut changed = false;
 
         for id in HeaterId::ALL {
             let decision = decide(
-                snapshot.and_then(|snapshot| reading(snapshot, id)),
+                sample.and_then(|sample| reading(sample, id)),
                 settings.zone(id),
                 settings.cutoff_celsius,
                 self.service.active_override(id),
                 self.service.is_on(id),
             );
 
-            let on = self.drive(id, decision.on);
-            changed |= self.service.record(id, on, decision.fault);
+            let output = self.drive(id, decision);
+            changed |= self.service.record(id, output.on, output.fault);
         }
 
         changed
     }
 
-    fn drive(&mut self, id: HeaterId, on: bool) -> bool {
-        match self.outputs.set(id, on) {
-            Ok(()) => on,
+    fn drive(&mut self, id: HeaterId, decision: Decision) -> Output {
+        let index = id.index();
+
+        if self.uncertain[index] {
+            if let Err(reason) = self.write(id, false) {
+                tracing::error!(heater = id.name(), reason, "heater output still not off");
+                return self.output_error(id);
+            }
+
+            self.uncertain[index] = false;
+        }
+
+        match self.write(id, decision.on) {
+            Ok(()) => Output {
+                on: decision.on,
+                fault: decision.fault,
+            },
             Err(reason) => {
                 tracing::error!(heater = id.name(), reason, "heater output failed");
 
-                if on {
-                    if let Err(reason) = self.outputs.set(id, false) {
-                        tracing::error!(
-                            heater = id.name(),
-                            reason,
-                            "heater output could not be forced off"
-                        );
-                    }
+                let off = if decision.on {
+                    self.write(id, false)
+                } else {
+                    Err(reason)
+                };
+
+                if let Err(reason) = off {
+                    tracing::error!(
+                        heater = id.name(),
+                        reason,
+                        "heater output could not be forced off"
+                    );
+                    self.uncertain[index] = true;
                 }
 
-                false
+                self.output_error(id)
             }
+        }
+    }
+
+    fn write(&mut self, id: HeaterId, on: bool) -> Result<(), &'static str> {
+        self.outputs.set(id, on)?;
+        self.levels[id.index()] = on;
+        Ok(())
+    }
+
+    fn output_error(&self, id: HeaterId) -> Output {
+        Output {
+            on: self.levels[id.index()],
+            fault: Some(HeaterFault::OutputError),
         }
     }
 }
 
-fn reading(snapshot: &TankTelemetryDto, id: HeaterId) -> Option<f32> {
+fn reading(sample: &TemperatureSample, id: HeaterId) -> Option<f32> {
     match id {
-        HeaterId::Tank => snapshot.temperature.tank_celsius,
-        HeaterId::Sump => snapshot.temperature.sump_celsius,
+        HeaterId::Tank => sample.tank_celsius,
+        HeaterId::Sump => sample.sump_celsius,
     }
 }
 
 pub async fn heater_loop<O, P>(
     mut controller: HeaterController<O, P>,
-    mut snapshots: watch::Receiver<TankTelemetryDto>,
+    mut samples: watch::Receiver<Option<TemperatureSample>>,
     api_changed: Arc<Notify>,
     republish: Arc<Notify>,
     watchdog: Duration,
@@ -289,36 +339,43 @@ pub async fn heater_loop<O, P>(
     O: HeaterOutputs,
     P: HeaterPersistence,
 {
-    let mut latest: Option<TankTelemetryDto> = None;
-    let mut deadline = Instant::now() + watchdog;
+    let mut latest: Option<TemperatureSample> = None;
+    let mut stale_at = Some(Instant::now() + watchdog);
 
     loop {
-        let api_wake = tokio::select! {
-            received = snapshots.changed() => {
+        let wake_at = [stale_at, controller.service.next_override_expiry()]
+            .into_iter()
+            .flatten()
+            .min();
+
+        let announce = tokio::select! {
+            received = samples.changed() => {
                 if received.is_err() {
                     controller.tick(None);
                     return;
                 }
 
-                latest = Some(snapshots.borrow_and_update().clone());
-                deadline = Instant::now() + watchdog;
+                latest = *samples.borrow_and_update();
                 false
             }
             () = api_changed.notified() => true,
-            () = tokio::time::sleep_until(deadline) => {
-                latest = None;
-                deadline = Instant::now() + watchdog;
-                false
-            }
+            () = sleep_until_some(wake_at) => true,
         };
 
-        if Instant::now() >= deadline {
-            latest = None;
-        }
+        let now = Instant::now();
+        let fresh = latest.filter(|sample| now < sample.measured_at + watchdog);
+        stale_at = fresh.map(|sample| sample.measured_at + watchdog);
 
-        if controller.tick(latest.as_ref()) || api_wake {
+        if controller.tick(fresh.as_ref()) || announce {
             republish.notify_one();
         }
+    }
+}
+
+async fn sleep_until_some(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => core::future::pending().await,
     }
 }
 

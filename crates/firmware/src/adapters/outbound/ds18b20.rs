@@ -16,14 +16,15 @@ mod hw {
         TemperatureError, TemperatureReader, TemperatureSensorRole,
     };
     use aquarium_core::protocol::ds18b20::{
-        convert_all, parse_scratchpad, read_scratchpad, validate_rom, OneWireLine, RomAddress,
+        convert_all, parse_scratchpad, probe_bus, read_scratchpad, validate_rom, BusRecovery,
+        OneWireLine, RomAddress,
     };
-
-    const CMD_SKIP_ROM: u8 = 0xCC;
-    const CMD_READ_POWER_SUPPLY: u8 = 0xB4;
+    use tracing::{info, warn};
 
     const CONVERSION_TIMEOUT: Duration = Duration::from_millis(800);
     const CONVERSION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+    const RETRY_MIN: Duration = Duration::from_secs(5);
+    const RETRY_MAX: Duration = Duration::from_secs(60);
 
     pub struct OneWireBus<'d> {
         pin: PinDriver<'d, InputOutput>,
@@ -40,13 +41,6 @@ mod hw {
                 .map_err(|_| TemperatureError::BusError("Failed to release 1-Wire line"))?;
 
             Ok(Self { pin: driver })
-        }
-
-        pub fn has_parasite_powered_device(&mut self) -> Result<bool, TemperatureError> {
-            self.reset()?;
-            self.write_byte(CMD_SKIP_ROM);
-            self.write_byte(CMD_READ_POWER_SUPPLY);
-            Ok(!self.read_bit())
         }
     }
 
@@ -121,11 +115,12 @@ mod hw {
     pub struct Ds18b20Adapter<'d> {
         bus: OneWireBus<'d>,
         sensors: [(TemperatureSensorRole, RomAddress); 2],
+        recovery: BusRecovery,
     }
 
     impl<'d> Ds18b20Adapter<'d> {
         pub fn new(
-            mut bus: OneWireBus<'d>,
+            bus: OneWireBus<'d>,
             tank_rom: RomAddress,
             sump_rom: RomAddress,
         ) -> Result<Self, TemperatureError> {
@@ -138,19 +133,42 @@ mod hw {
                 ));
             }
 
-            if bus.has_parasite_powered_device()? {
-                return Err(TemperatureError::BusError(
-                    "Parasite-powered DS18B20 detected; sensors must be powered from VDD",
-                ));
-            }
-
-            Ok(Self {
+            let mut adapter = Self {
                 bus,
                 sensors: [
                     (TemperatureSensorRole::MainTank, tank_rom),
                     (TemperatureSensorRole::Sump, sump_rom),
                 ],
-            })
+                recovery: BusRecovery::new(RETRY_MIN, RETRY_MAX, Instant::now()),
+            };
+
+            let _ = adapter.ensure_bus();
+
+            Ok(adapter)
+        }
+
+        fn ensure_bus(&mut self) -> Result<(), TemperatureError> {
+            if self.recovery.is_ready() {
+                return Ok(());
+            }
+
+            let now = Instant::now();
+            if !self.recovery.attempt_due(now) {
+                return Err(TemperatureError::BusError("1-Wire bus unavailable"));
+            }
+
+            match probe_bus(&mut self.bus) {
+                Ok(()) => {
+                    self.recovery.succeeded();
+                    info!("DS18B20 bus available");
+                    Ok(())
+                }
+                Err(error) => {
+                    let retry_in = self.recovery.failed(now);
+                    warn!(%error, retry_in_s = retry_in.as_secs(), "DS18B20 bus unavailable");
+                    Err(error)
+                }
+            }
         }
 
         fn rom_for(&self, role: TemperatureSensorRole) -> Result<RomAddress, TemperatureError> {
@@ -164,7 +182,13 @@ mod hw {
 
     impl<'d> TemperatureReader for Ds18b20Adapter<'d> {
         async fn trigger_conversion(&mut self) -> Result<(), TemperatureError> {
-            convert_all(&mut self.bus)?;
+            self.ensure_bus()?;
+
+            if let Err(error) = convert_all(&mut self.bus) {
+                warn!(%error, "DS18B20 bus lost");
+                self.recovery.lost(Instant::now());
+                return Err(error);
+            }
 
             let deadline = Instant::now() + CONVERSION_TIMEOUT;
             loop {
