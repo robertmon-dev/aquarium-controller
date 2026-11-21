@@ -1,9 +1,11 @@
 pub mod ads1115;
 pub mod ds18b20;
 pub mod influx;
+pub mod nvs_blob;
 pub mod nvs_calibration;
 pub mod nvs_heater;
 pub mod nvs_pump;
+pub mod pump_storage;
 pub mod relay;
 pub mod ssr;
 pub mod temperature;

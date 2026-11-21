@@ -158,6 +158,12 @@ erase: check-port ## Erase the whole flash, including NVS (WiFi credentials)
 	@printf 'Continue? [y/N] '; read ans; [ "$$ans" = "y" ] || exit 1
 	@$(ESP_ENV) cd $(FW_DIR) && espflash erase-flash --port $(PORT)
 
+.PHONY: erase-nvs
+erase-nvs: check-port ## Erase only the NVS partition (settings, calibration, pump state, WiFi)
+	@$(WARN) "this wipes heater settings, calibration, pump schedules and checkpoints, WiFi data"
+	@printf 'Continue? [y/N] '; read ans; [ "$$ans" = "y" ] || exit 1
+	@$(ESP_ENV) cd $(FW_DIR) && espflash erase-parts --port $(PORT) --partition-table partitions.csv nvs
+
 # ==============================================================================
 # Tests
 # ==============================================================================

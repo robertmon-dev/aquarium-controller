@@ -21,7 +21,8 @@ use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
     CalibrationSource, Clock, HeaterOutputs, HeaterStatusSource, LightingOverrideSource,
     MetricsWriter, PhReader, ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader,
-    TelemetrySink, TemperatureReader, WaterLevelPins, WaterLevelSink, WaterLevelSource,
+    TelemetrySink, TemperatureReader, TemperatureSampleSink, WaterLevelPins, WaterLevelSink,
+    WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -35,7 +36,7 @@ use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::sys::{self, link_patches};
+use esp_idf_svc::sys::{self, link_patches, EspError};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::LocalSet;
@@ -48,6 +49,7 @@ use aquarium_controller::adapters::outbound::influx::InfluxWriter;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::nvs_heater::NvsHeaterSettings;
 use aquarium_controller::adapters::outbound::nvs_pump::NvsPumpStore;
+use aquarium_controller::adapters::outbound::pump_storage::PumpStorage;
 use aquarium_controller::adapters::outbound::relay::RelayOutputs;
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
@@ -60,6 +62,7 @@ use aquarium_controller::settings::{RunMode, Settings};
 const SETTINGS: Settings = Settings::from_env();
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+const NVS_ALARM_INTERVAL: Duration = Duration::from_secs(30);
 
 const PUMP_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
 const PUMP_WATCHDOG_CHECK: Duration = Duration::from_secs(2);
@@ -196,7 +199,11 @@ async fn run() -> anyhow::Result<()> {
         TemperatureSource::Disabled
     };
 
-    let nvs_partition = EspDefaultNvsPartition::take().context("NVS partition already taken")?;
+    let (nvs_partition, nvs_alarm) = match EspDefaultNvsPartition::take_with(false) {
+        Ok(partition) => (Some(partition), None),
+        Err(error) => (None, Some(nvs_unavailable_alarm(error))),
+    };
+    let nvs_available = nvs_partition.is_some();
 
     let wifi = if components.wifi.is_initialized() {
         let sys_loop = EspSystemEventLoop::take().context("System event loop already taken")?;
@@ -301,7 +308,7 @@ async fn run() -> anyhow::Result<()> {
             (
                 Some(heater_loop(
                     HeaterController::new(outputs, Arc::clone(&heaters)),
-                    store.subscribe(),
+                    store.subscribe_temperature(),
                     heaters.change_signal(),
                     Arc::clone(&heaters_republish),
                     SETTINGS.heaters.watchdog,
@@ -325,14 +332,21 @@ async fn run() -> anyhow::Result<()> {
     };
     let pumps = Arc::new(PumpService::new(
         SETTINGS.pumps.defaults.clone(),
-        NvsPumpStore::new(nvs_partition).context("Failed to open the pump namespace in NVS")?,
+        match nvs_partition {
+            Some(partition) => PumpStorage::Nvs(
+                NvsPumpStore::new(partition).context("Failed to open the pump namespace in NVS")?,
+            ),
+            None => PumpStorage::Unavailable,
+        },
         Arc::clone(&clock),
         pump_events,
     ));
     let pumps_republish = Arc::new(Notify::new());
     let pump_heartbeat = Arc::new(AtomicU32::new(0));
 
-    let pump_watchdog_task = if components.pumps.is_running() {
+    let pumps_automated = components.pumps.is_running() && nvs_available;
+
+    let pump_watchdog_task = if pumps_automated {
         let config = TWDTConfig {
             duration: PUMP_WATCHDOG_TIMEOUT,
             panic_on_trigger: true,
@@ -350,7 +364,7 @@ async fn run() -> anyhow::Result<()> {
         None
     };
 
-    let (pump_task, _idle_relays) = match (relays, components.pumps.is_running()) {
+    let (pump_task, _idle_relays) = match (relays, pumps_automated) {
         (Some(outputs), true) => {
             info!("Pump control running");
             (
@@ -513,9 +527,24 @@ async fn run() -> anyhow::Result<()> {
         optional(pump_watchdog_task),
         optional(wifi_loop),
         optional(health_loop),
+        optional(nvs_alarm),
     );
 
     Ok(())
+}
+
+async fn nvs_unavailable_alarm(error: EspError) {
+    let mut ticker = tokio::time::interval(NVS_ALARM_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    loop {
+        ticker.tick().await;
+        error!(
+            %error,
+            "NVS partition unusable and left untouched: defaults in use, nothing is saved, \
+             pump automation stopped; erase it deliberately as described in the README"
+        );
+    }
 }
 
 async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
@@ -626,7 +655,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K, T, P>(
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink + ProbeVoltageSink,
+    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
@@ -690,18 +719,17 @@ async fn probe_ssr(outputs: &mut SsrOutputs<'_>) -> anyhow::Result<()> {
     let mut ticker = tokio::time::interval(PROBE_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    info!("SSR probe: GPIO17 is the tank SSR, GPIO18 is the sump SSR");
-
-    let mut on = false;
+    info!("SSR probe: one channel at a time, GPIO17 tank SSR, then GPIO18 sump SSR");
 
     loop {
-        ticker.tick().await;
-        on = !on;
+        for (id, gpio) in [(HeaterId::Tank, 17), (HeaterId::Sump, 18)] {
+            for on in [true, false] {
+                ticker.tick().await;
 
-        for id in HeaterId::ALL {
-            match outputs.set(id, on) {
-                Ok(()) => info!(heater = id.name(), on, "SSR"),
-                Err(reason) => error!(heater = id.name(), reason, "SSR"),
+                match outputs.set(id, on) {
+                    Ok(()) => info!(heater = id.name(), gpio, on, "SSR {}", id.name()),
+                    Err(reason) => error!(heater = id.name(), gpio, reason, "SSR {}", id.name()),
+                }
             }
         }
     }

@@ -34,13 +34,13 @@ impl WifiManager {
     pub fn new<M: WifiModemPeripheral + 'static>(
         modem: M,
         sys_loop: EspSystemEventLoop,
-        nvs: EspDefaultNvsPartition,
+        nvs: Option<EspDefaultNvsPartition>,
         config: &WifiSettings,
     ) -> Result<Self, WifiError> {
         let timer_service = EspTaskTimerService::new()?;
 
         let mut wifi = AsyncWifi::wrap(
-            EspWifi::new(modem, sys_loop.clone(), Some(nvs))?,
+            EspWifi::new(modem, sys_loop.clone(), nvs)?,
             sys_loop,
             timer_service,
         )?;
