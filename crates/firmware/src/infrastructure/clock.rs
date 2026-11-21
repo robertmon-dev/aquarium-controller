@@ -11,9 +11,10 @@ extern "C" {
 }
 
 pub struct SystemClock {
-    _sntp: EspSntp<'static>,
+    _sntp: Option<EspSntp<'static>>,
     booted_at: SystemTime,
     sntp_handle: SntpStatus,
+    sntp_enabled: bool,
 }
 
 struct SntpStatus;
@@ -28,17 +29,24 @@ impl SntpStatus {
 }
 
 impl SystemClock {
-    pub fn new(timezone: &str) -> Result<Self, EspError> {
+    pub fn new(timezone: &str, start_sntp: bool) -> Result<Self, EspError> {
         std::env::set_var("TZ", timezone);
         unsafe { tzset() };
 
-        let sntp = EspSntp::new(&SntpConf::default())?;
-        info!(timezone, "SNTP started");
+        let sntp = if start_sntp {
+            let sntp = EspSntp::new(&SntpConf::default())?;
+            info!(timezone, "SNTP started");
+            Some(sntp)
+        } else {
+            info!(timezone, "SNTP not started: WiFi is not initialized");
+            None
+        };
 
         Ok(Self {
             _sntp: sntp,
             booted_at: SystemTime::now(),
             sntp_handle: SntpStatus,
+            sntp_enabled: start_sntp,
         })
     }
 
@@ -58,7 +66,7 @@ impl SystemClock {
 
 impl Clock for SystemClock {
     fn epoch_seconds(&self) -> Option<u64> {
-        if !self.sntp_handle.is_synced() {
+        if !self.sntp_enabled || !self.sntp_handle.is_synced() {
             return None;
         }
 
