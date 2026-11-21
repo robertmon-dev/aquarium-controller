@@ -300,7 +300,10 @@ export const en = {
     mechanical: "mechanical",
     biological: "biological",
     pump: "pump",
+    returnChamber: "return chamber",
     reserve: "reserve",
+    reservoirReady: "reservoir ready",
+    reservoirFull: "reservoir full",
   },
   calibration: {
     title: "probe calibration",

@@ -302,7 +302,10 @@ export const pl: DeepString<typeof en> = {
     mechanical: "mechaniczna",
     biological: "biologiczna",
     pump: "pompowa",
+    returnChamber: "komora pompy",
     reserve: "rezerwa",
+    reservoirReady: "zapas na podmianę",
+    reservoirFull: "zbiornik pełny",
   },
   calibration: {
     title: "kalibracja sond",
