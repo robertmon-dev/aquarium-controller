@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -7,14 +8,15 @@ use serde::Serialize;
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::domain::cron::CronExpr;
+use crate::domain::cron::{CivilTime, CronExpr, Firing};
 use crate::domain::pump::{
     decide, litres, resume_verdict, validate_override, validate_top_off, Blocker, ChannelDecision,
     ChannelFault, ChannelMode, ChannelStatus, ChannelsStatus, Checkpoint, DecisionInput,
     LastOperations, LevelConditions, Operation, OperationEvent, OperationKind, OperationPlan,
     OperationResult, OperationState, OperationStatus, OverrideError, Phase, PumpId, PumpSettings,
     PumpSettingsPatch, PumpsStatus, PumpsTelemetry, ResumeVerdict, RuntimeCounters, SkipReason,
-    SkippedWindow, Step, StoredOverride, WaterChangePlan,
+    SkippedWindow, Step, StoredOverride, WaterChangePlan, STARVED_CLEAR_S, STARVED_LOCKOUTS,
+    STARVED_WINDOW_S,
 };
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot};
 use crate::ports::inbound::{PumpControl, PumpSettingsError, StartError};
@@ -29,18 +31,29 @@ pub struct PumpTiming {
     pub runtime_flush: Duration,
 }
 
+impl PumpTiming {
+    pub const DEFAULT: Self = Self {
+        return_restart_delay: Duration::from_secs(30),
+        level_stale: Duration::from_secs(1),
+        tick: Duration::from_secs(1),
+        checkpoint_interval: Duration::from_secs(3),
+        runtime_flush: Duration::from_secs(600),
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Expiry {
     Never,
     At(Instant),
     Epoch(u64),
+    Timed { at: u64, deadline: Instant },
 }
 
 impl Expiry {
     fn stored(self) -> Option<StoredOverride> {
         match self {
             Self::Never => Some(StoredOverride { expires_at: None }),
-            Self::Epoch(at) => Some(StoredOverride {
+            Self::Epoch(at) | Self::Timed { at, .. } => Some(StoredOverride {
                 expires_at: Some(at),
             }),
             Self::At(_) => None,
@@ -50,7 +63,7 @@ impl Expiry {
     fn remaining_s(self, now: Instant, epoch: Option<u64>) -> Option<u32> {
         match self {
             Self::Never => None,
-            Self::At(at) => {
+            Self::At(at) | Self::Timed { deadline: at, .. } => {
                 Some(at.saturating_duration_since(now).as_millis().div_ceil(1000) as u32)
             }
             Self::Epoch(at) => epoch.map(|epoch| at.saturating_sub(epoch) as u32),
@@ -73,32 +86,63 @@ enum Activity {
     Suspended(Operation),
 }
 
+struct Window<T> {
+    cron: CronExpr,
+    plan: T,
+    fired: Option<Firing>,
+}
+
+impl<T> Window<T> {
+    fn due(&mut self, civil: CivilTime, epoch: u64) -> bool {
+        let repeated = self.fired.is_some_and(|fired| fired.repeats(civil, epoch));
+
+        if !self.cron.matches(civil) || repeated {
+            return false;
+        }
+
+        self.fired = Some(Firing::new(civil, epoch));
+        true
+    }
+}
+
 struct Schedule {
-    top_off: Vec<(CronExpr, u32)>,
-    water_change: Vec<(CronExpr, WaterChangePlan)>,
+    top_off: Vec<Window<u32>>,
+    water_change: Vec<Window<WaterChangePlan>>,
+}
+
+fn windows<W, T>(
+    windows: &[W],
+    previous: &[Window<T>],
+    parts: impl Fn(&W) -> (&str, T),
+) -> Vec<Window<T>> {
+    windows
+        .iter()
+        .filter_map(|window| {
+            let (cron, plan) = parts(window);
+            CronExpr::parse(cron).ok().map(|cron| (cron, plan))
+        })
+        .enumerate()
+        .map(|(index, (cron, plan))| Window {
+            cron,
+            plan,
+            fired: previous.get(index).and_then(|window| window.fired),
+        })
+        .collect()
 }
 
 impl Schedule {
-    fn compile(settings: &PumpSettings) -> Self {
+    fn compile(settings: &PumpSettings, previous: Option<&Self>) -> Self {
         Self {
-            top_off: settings
-                .top_off
-                .iter()
-                .filter_map(|window| {
-                    CronExpr::parse(&window.cron)
-                        .ok()
-                        .map(|cron| (cron, window.duration_s))
-                })
-                .collect(),
-            water_change: settings
-                .water_change
-                .iter()
-                .filter_map(|window| {
-                    CronExpr::parse(&window.cron)
-                        .ok()
-                        .map(|cron| (cron, window.plan()))
-                })
-                .collect(),
+            top_off: windows(
+                &settings.top_off,
+                previous.map_or(&[], |schedule| &schedule.top_off),
+                |window| (window.cron.as_str(), window.duration_s),
+            ),
+            water_change: windows(
+                &settings.water_change,
+                previous.map_or(&[], |schedule| &schedule.water_change),
+                |window| (window.cron.as_str(), window.plan()),
+            ),
         }
     }
 }
@@ -128,6 +172,7 @@ struct State {
     last_skipped: Option<SkippedWindow>,
     last_fired_minute: Option<u64>,
     resume_sync_epoch: Option<u64>,
+    circulation_starved: bool,
 }
 
 impl State {
@@ -135,7 +180,7 @@ impl State {
         let slot = id.override_slot()?;
         let expired = match self.overrides[slot]? {
             Expiry::Never => false,
-            Expiry::At(at) => now >= at,
+            Expiry::At(at) | Expiry::Timed { deadline: at, .. } => now >= at,
             Expiry::Epoch(at) => epoch.is_some_and(|epoch| epoch >= at),
         };
 
@@ -278,7 +323,7 @@ impl State {
 
     fn water_change_too_recent(&self, epoch: Option<u64>) -> bool {
         let gap_s = u64::from(self.settings.min_water_change_gap_h) * 3600;
-        let started_at = self.last.water_change.and_then(|record| record.started_at);
+        let started_at = self.last.last_drain_started_at();
 
         match (epoch, started_at) {
             (Some(now), Some(started)) if gap_s > 0 => now < started.saturating_add(gap_s),
@@ -344,7 +389,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
 
         Self {
             state: Mutex::new(State {
-                schedule: Schedule::compile(&settings),
+                schedule: Schedule::compile(&settings, None),
                 settings,
                 overrides,
                 pending: Pending::default(),
@@ -359,6 +404,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 last_skipped: None,
                 last_fired_minute: None,
                 resume_sync_epoch: None,
+                circulation_starved: false,
             }),
             store,
             clock,
@@ -542,35 +588,27 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         state.last_fired_minute = Some(minute);
         state.levels = levels;
 
-        let due: Vec<(OperationKind, usize, OperationPlan)> = state
-            .schedule
-            .water_change
-            .iter()
-            .enumerate()
-            .filter(|(_, (cron, _))| cron.matches(civil))
-            .map(|(index, (_, plan))| {
-                (
+        let mut due: Vec<(OperationKind, usize, OperationPlan)> = Vec::new();
+
+        for (index, window) in state.schedule.water_change.iter_mut().enumerate() {
+            if window.due(civil, epoch) {
+                due.push((
                     OperationKind::WaterChange,
                     index,
-                    OperationPlan::water_change(*plan),
-                )
-            })
-            .chain(
-                state
-                    .schedule
-                    .top_off
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, (cron, _))| cron.matches(civil))
-                    .map(|(index, (_, duration_s))| {
-                        (
-                            OperationKind::TopOff,
-                            index,
-                            OperationPlan::top_off(*duration_s),
-                        )
-                    }),
-            )
-            .collect();
+                    OperationPlan::water_change(window.plan),
+                ));
+            }
+        }
+
+        for (index, window) in state.schedule.top_off.iter_mut().enumerate() {
+            if window.due(civil, epoch) {
+                due.push((
+                    OperationKind::TopOff,
+                    index,
+                    OperationPlan::top_off(window.plan),
+                ));
+            }
+        }
 
         let mut started = false;
 
@@ -691,6 +729,20 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         self.notify.notify_one();
     }
 
+    pub fn report_circulation(&self, starved: bool) -> bool {
+        let mut state = self.lock();
+        let changed = state.circulation_starved != starved;
+        state.circulation_starved = starved;
+
+        if changed && starved {
+            tracing::warn!("the sump keeps running dry, circulation is starved");
+        } else if changed {
+            tracing::info!("the sump stayed wet, circulation recovered");
+        }
+
+        changed
+    }
+
     pub fn flush_runtime(&self) {
         let state = self.lock();
         self.persist(PumpRecord::Runtime, &state.runtime());
@@ -745,12 +797,13 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         result: OperationResult,
         epoch: Option<u64>,
     ) {
-        let record = operation.record(result);
+        let sump_low = state.levels.is_some_and(|levels| levels.sump_low);
+        let record = operation
+            .record(result)
+            .graded(state.settings.flow_lph, sump_low);
+        let result = record.result;
 
-        match record.kind {
-            OperationKind::TopOff => state.last.top_off = Some(record),
-            OperationKind::WaterChange => state.last.water_change = Some(record),
-        }
+        state.last.remember(operation, record);
 
         state.activity = Activity::Idle;
         state.pending.last = true;
@@ -796,6 +849,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
             last_top_off: state.last.top_off,
             last_water_change: state.last.water_change,
             last_skipped: state.last_skipped,
+            circulation_starved: state.circulation_starved,
         }
     }
 
@@ -812,7 +866,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
             self.write(PumpRecord::Settings, &candidate)
                 .map_err(PumpSettingsError::NotPersisted)?;
 
-            state.schedule = Schedule::compile(&candidate);
+            state.schedule = Schedule::compile(&candidate, Some(&state.schedule));
             state.settings = candidate.clone();
             candidate
         };
@@ -834,7 +888,10 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
         let epoch = self.clock.epoch_seconds();
         let expiry = match (duration_s, epoch) {
             (None, _) => Expiry::Never,
-            (Some(seconds), Some(epoch)) => Expiry::Epoch(epoch + u64::from(seconds)),
+            (Some(seconds), Some(epoch)) => Expiry::Timed {
+                at: epoch + u64::from(seconds),
+                deadline: now + Duration::from_secs(seconds.into()),
+            },
             (Some(seconds), None) => {
                 tracing::warn!(
                     pump = id.name(),
@@ -981,6 +1038,7 @@ impl<S: PumpStore, C: Clock> PumpStatusSource for PumpService<S, C> {
             drain: on(PumpId::Drain),
             operation_kind: operation.kind,
             operation_state: operation.state,
+            circulation_starved: state.circulation_starved,
         }
     }
 }
@@ -1018,11 +1076,67 @@ impl ReturnLockout {
     }
 }
 
+#[derive(Debug, Default)]
+struct CirculationWatch {
+    lockouts: VecDeque<Instant>,
+    low_since: Option<Instant>,
+    wet_since: Option<Instant>,
+    was_low: bool,
+    starved: bool,
+}
+
+impl CirculationWatch {
+    fn update(&mut self, sump_low: Option<bool>, operating: bool, now: Instant) -> bool {
+        let window = Duration::from_secs(STARVED_WINDOW_S);
+
+        match sump_low {
+            None => {
+                self.low_since = None;
+                self.wet_since = None;
+                self.was_low = false;
+            }
+            Some(true) => {
+                self.wet_since = None;
+
+                if operating {
+                    self.low_since = None;
+                } else {
+                    if !self.was_low {
+                        self.lockouts.push_back(now);
+                    }
+
+                    let since = *self.low_since.get_or_insert(now);
+                    self.lockouts
+                        .retain(|at| now.saturating_duration_since(*at) < window);
+                    self.starved |= self.lockouts.len() >= STARVED_LOCKOUTS
+                        || now.saturating_duration_since(since) >= window;
+                }
+
+                self.was_low = true;
+            }
+            Some(false) => {
+                self.low_since = None;
+                let since = *self.wet_since.get_or_insert(now);
+
+                if now.saturating_duration_since(since) >= Duration::from_secs(STARVED_CLEAR_S) {
+                    self.starved = false;
+                    self.lockouts.clear();
+                }
+
+                self.was_low = false;
+            }
+        }
+
+        self.starved
+    }
+}
+
 pub struct PumpController<O, S, C> {
     outputs: O,
     service: Arc<PumpService<S, C>>,
     timing: PumpTiming,
     lockout: ReturnLockout,
+    circulation: CirculationWatch,
     last_tick: Option<Instant>,
     last_checkpoint: Option<Instant>,
     last_flush: Option<Instant>,
@@ -1035,6 +1149,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             service,
             timing,
             lockout: ReturnLockout::default(),
+            circulation: CirculationWatch::default(),
             last_tick: None,
             last_checkpoint: None,
             last_flush: None,
@@ -1054,6 +1169,12 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
         let locked_out = self
             .lockout
             .update(levels, now, self.timing.return_restart_delay);
+        let starved = self.circulation.update(
+            levels.map(|levels| levels.sump_low),
+            observed.phase.is_some(),
+            now,
+        );
+        let starvation_changed = self.service.report_circulation(starved);
 
         let decisions = decide(DecisionInput {
             levels,
@@ -1101,7 +1222,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             self.last_checkpoint = Some(now);
         }
 
-        started || observed.changed || outputs_changed
+        started || observed.changed || outputs_changed || starvation_changed
     }
 
     fn drive(&mut self, id: PumpId, on: bool) -> (bool, Option<ChannelFault>) {

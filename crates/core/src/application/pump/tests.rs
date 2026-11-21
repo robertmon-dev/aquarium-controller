@@ -134,13 +134,7 @@ impl PumpStore for FailingStore {
 type Service = PumpService<Arc<VolatilePumpStore>, Arc<TestClock>>;
 
 fn timing() -> PumpTiming {
-    PumpTiming {
-        return_restart_delay: Duration::from_secs(30),
-        level_stale: Duration::from_secs(1),
-        tick: Duration::from_secs(1),
-        checkpoint_interval: Duration::from_secs(10),
-        runtime_flush: Duration::from_secs(600),
-    }
+    PumpTiming::DEFAULT
 }
 
 fn service_on(store: &Arc<VolatilePumpStore>, clock: Arc<TestClock>) -> Arc<Service> {
@@ -528,6 +522,11 @@ impl Rig {
     fn pins(&self) -> [bool; 4] {
         self.outputs.state()
     }
+
+    fn set_override(&mut self, id: PumpId, duration_s: Option<u32>) {
+        self.service.set_override(id, duration_s).expect("valid");
+        self.now = self.now.max(Instant::now());
+    }
 }
 
 #[test]
@@ -704,7 +703,22 @@ fn runtime_accumulates_while_on_and_is_flushed_on_changes() {
 }
 
 #[test]
-fn a_running_operation_is_checkpointed_every_ten_seconds() {
+fn the_default_timing_checkpoints_every_three_seconds() {
+    assert_eq!(
+        PumpTiming::DEFAULT.checkpoint_interval,
+        Duration::from_secs(3)
+    );
+    assert_eq!(
+        PumpTiming::DEFAULT.return_restart_delay,
+        Duration::from_secs(30)
+    );
+    assert_eq!(PumpTiming::DEFAULT.level_stale, Duration::from_secs(1));
+    assert_eq!(PumpTiming::DEFAULT.tick, Duration::from_secs(1));
+    assert_eq!(PumpTiming::DEFAULT.runtime_flush, Duration::from_secs(600));
+}
+
+#[test]
+fn a_running_operation_is_checkpointed_every_three_seconds() {
     let mut rig = Rig::new();
     let healthy = healthy();
 
@@ -717,11 +731,19 @@ fn a_running_operation_is_checkpointed_every_ten_seconds() {
         })
         .expect("idle");
     rig.tick(Some(&healthy));
-    rig.run(10, Some(&healthy));
 
+    rig.run(2, Some(&healthy));
     let checkpoint: Checkpoint = decode(&rig.store, PumpRecord::Checkpoint).expect("saved");
-    assert_eq!(checkpoint.operation.ran_ms[Phase::Draining.index()], 10_000);
-    assert_eq!(checkpoint.checkpoint_at, Some(EPOCH + 10));
+    assert_eq!(checkpoint.operation.ran_ms[Phase::Draining.index()], 0);
+
+    rig.run(1, Some(&healthy));
+    let checkpoint: Checkpoint = decode(&rig.store, PumpRecord::Checkpoint).expect("saved");
+    assert_eq!(checkpoint.operation.ran_ms[Phase::Draining.index()], 3_000);
+    assert_eq!(checkpoint.checkpoint_at, Some(EPOCH + 3));
+
+    rig.run(3, Some(&healthy));
+    let checkpoint: Checkpoint = decode(&rig.store, PumpRecord::Checkpoint).expect("saved");
+    assert_eq!(checkpoint.operation.ran_ms[Phase::Draining.index()], 6_000);
 }
 
 #[test]
@@ -730,9 +752,7 @@ fn a_timed_uv_override_expires_with_the_clock() {
     let healthy = healthy();
 
     rig.tick(Some(&healthy));
-    rig.service
-        .set_override(PumpId::Uv, Some(60))
-        .expect("valid");
+    rig.set_override(PumpId::Uv, Some(60));
     rig.tick(Some(&healthy));
     assert_eq!(rig.pins(), [true, false, false, false]);
 
@@ -1756,10 +1776,76 @@ fn makeup_refills_a_drained_sump_during_the_return_lockout() {
 
 const HOUR: u64 = 3600;
 
+fn drain_briefly(service: &Service) {
+    observe(service, Some(HEALTHY));
+    service.record(PumpId::Drain, true, None, None);
+    service.observe(Some(HEALTHY), Duration::from_millis(500), Instant::now());
+}
+
 fn finish_a_water_change(service: &Service) {
     observe(service, Some(HEALTHY));
     service.start_water_change(PLAN).expect("idle");
+    drain_briefly(service);
     service.cancel(OperationKind::WaterChange);
+}
+
+fn cancel_a_water_change_before_it_drains(service: &Service) {
+    observe(service, Some(HEALTHY));
+    service.start_water_change(PLAN).expect("idle");
+    observe(service, Some(HEALTHY));
+    service.cancel(OperationKind::WaterChange);
+}
+
+#[test]
+fn a_water_change_cancelled_before_draining_does_not_hold_back_the_next() {
+    let clock = TestClock::synced(EPOCH);
+    let service = service_on(&Arc::new(VolatilePumpStore::default()), Arc::clone(&clock));
+    cancel_a_water_change_before_it_drains(&service);
+    assert_eq!(
+        service
+            .status()
+            .last_water_change
+            .map(|record| (record.result, record.drain_ran_s)),
+        Some((OperationResult::Aborted, 0))
+    );
+
+    clock.advance(60);
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn an_undrained_water_change_keeps_the_gap_of_the_drained_one_before() {
+    let clock = TestClock::synced(EPOCH);
+    let store = Arc::new(VolatilePumpStore::default());
+    let service = service_on(&store, Arc::clone(&clock));
+    finish_a_water_change(&service);
+    assert_eq!(
+        service
+            .status()
+            .last_water_change
+            .map(|record| record.drain_ran_s),
+        Some(0),
+        "half a second of draining rounds down in the record but still counts"
+    );
+
+    clock.advance(13 * HOUR);
+    cancel_a_water_change_before_it_drains(&service);
+    service
+        .apply_settings(PumpSettingsPatch {
+            min_water_change_gap_h: Some(24),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+
+    let reloaded = service_on(&store, Arc::clone(&clock));
+    observe(&reloaded, Some(HEALTHY));
+    assert_eq!(
+        reloaded.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+
+    clock.advance(11 * HOUR);
+    assert_eq!(reloaded.start_water_change(PLAN), Ok(()));
 }
 
 #[test]
@@ -1802,6 +1888,7 @@ fn the_water_change_gap_needs_both_times() {
 
     clock.set_epoch(None);
     assert_eq!(service.start_water_change(PLAN), Ok(()));
+    drain_briefly(&service);
     service.cancel(OperationKind::WaterChange);
 
     clock.set_epoch(Some(EPOCH + 60));
@@ -1839,6 +1926,7 @@ fn a_scheduled_water_change_too_soon_is_skipped() {
 
     rig.tick(Some(&healthy));
     rig.service.start_water_change(PLAN).expect("idle");
+    drain_briefly(&rig.service);
     rig.service.cancel(OperationKind::WaterChange);
     rig.clock.set_civil(Some(sunday_ten_am()));
     rig.run(1, Some(&healthy));
@@ -2118,4 +2206,370 @@ fn an_automatic_resume_records_itself_before_switching_the_relays() {
     controller.tick(Some(&healthy()), Instant::now());
 
     assert!(position(&log, "store pump_op") < position(&log, "set drain on"));
+}
+
+fn configure_flows(service: &Service) {
+    service
+        .apply_settings(PumpSettingsPatch {
+            flow_lph: Some(crate::domain::pump::FlowRates {
+                makeup: Some(600),
+                drain: Some(1500),
+            }),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+}
+
+#[test]
+fn a_water_change_that_refilled_too_little_is_recorded_incomplete() {
+    let (sender, mut events) = mpsc::unbounded_channel();
+    let mut rig = Rig::build(
+        Arc::new(VolatilePumpStore::default()),
+        TestClock::synced(EPOCH),
+        Some(sender),
+    );
+    configure_flows(&rig.service);
+    let healthy = healthy();
+    let full = full_sump();
+
+    rig.tick(Some(&healthy));
+    rig.service
+        .start_water_change(WaterChangePlan {
+            drain_s: 10,
+            settle_s: 0,
+            refill_s: 60,
+        })
+        .expect("idle");
+    rig.tick(Some(&healthy));
+    rig.run(11, Some(&healthy));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+
+    rig.run(2, Some(&healthy));
+    rig.run(1, Some(&full));
+
+    let record = rig.service.status().last_water_change.expect("recorded");
+    assert_eq!(record.drain_ran_s, 10);
+    assert_eq!(record.refill_ran_s, 3);
+    assert_eq!(record.result, OperationResult::Incomplete);
+    let stored: crate::domain::pump::LastOperations =
+        decode(&rig.store, PumpRecord::LastOperations).expect("stored");
+    assert_eq!(
+        stored.water_change.map(|record| record.result),
+        Some(OperationResult::Incomplete)
+    );
+    let event = events.try_recv().expect("an event");
+    assert_eq!(event.record.result, OperationResult::Incomplete);
+}
+
+#[test]
+fn a_water_change_refill_that_runs_out_its_time_with_the_sump_low_is_incomplete() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let low = snapshot(&[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirReady]);
+
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.tick(Some(&healthy));
+    rig.run(5, Some(&healthy));
+    rig.run(5, Some(&low));
+
+    let record = rig.service.status().last_water_change.expect("recorded");
+    assert_eq!(record.refill_ran_s, PLAN.refill_s);
+    assert_eq!(record.result, OperationResult::Incomplete);
+}
+
+#[test]
+fn a_top_off_is_never_graded_incomplete() {
+    let mut rig = Rig::new();
+    configure_flows(&rig.service);
+    let low = snapshot(&[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirReady]);
+
+    rig.tick(Some(&low));
+    rig.service.start_top_off(3).expect("idle");
+    rig.tick(Some(&low));
+    rig.run(4, Some(&low));
+
+    assert_eq!(
+        rig.service
+            .status()
+            .last_top_off
+            .map(|record| record.result),
+        Some(OperationResult::Completed)
+    );
+}
+
+fn low_sump() -> WaterLevelSnapshot {
+    snapshot(&[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirReady])
+}
+
+fn starved(rig: &Rig) -> bool {
+    rig.service.status().circulation_starved
+}
+
+fn lockout_cycle(rig: &mut Rig) {
+    rig.run(1, Some(&low_sump()));
+    rig.run(40, Some(&healthy()));
+}
+
+#[test]
+fn three_sump_low_lockouts_within_ten_minutes_flag_starved_circulation() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+
+    lockout_cycle(&mut rig);
+    lockout_cycle(&mut rig);
+    assert!(!starved(&rig));
+
+    rig.run(1, Some(&low_sump()));
+    assert!(starved(&rig));
+    assert!(rig.service.pump_telemetry().circulation_starved);
+}
+
+#[test]
+fn starved_circulation_clears_after_ten_wet_minutes() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+    lockout_cycle(&mut rig);
+    lockout_cycle(&mut rig);
+    rig.run(1, Some(&low_sump()));
+    assert!(starved(&rig));
+
+    rig.run(600, Some(&healthy()));
+    assert!(starved(&rig));
+
+    rig.run(1, Some(&healthy()));
+    assert!(!starved(&rig));
+}
+
+#[test]
+fn lockouts_spread_over_more_than_ten_minutes_are_not_starvation() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+
+    for _ in 0..4 {
+        lockout_cycle(&mut rig);
+        rig.run(260, Some(&healthy()));
+    }
+
+    assert!(!starved(&rig));
+}
+
+#[test]
+fn a_sump_that_stays_low_for_ten_minutes_starves_the_circulation() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+
+    rig.run(600, Some(&low_sump()));
+    assert!(!starved(&rig));
+
+    rig.run(1, Some(&low_sump()));
+    assert!(starved(&rig));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+}
+
+#[test]
+fn a_low_sump_during_an_operation_is_not_starvation() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.tick(Some(&healthy));
+    rig.service
+        .start_water_change(WaterChangePlan {
+            drain_s: 700,
+            settle_s: 0,
+            refill_s: 60,
+        })
+        .expect("idle");
+    rig.tick(Some(&healthy));
+
+    for _ in 0..3 {
+        rig.run(1, Some(&low_sump()));
+        rig.run(10, Some(&healthy));
+    }
+    rig.run(650, Some(&low_sump()));
+
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Draining
+    );
+    assert!(!starved(&rig));
+}
+
+#[test]
+fn missing_levels_neither_raise_nor_clear_starvation() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+    rig.run(300, Some(&low_sump()));
+    rig.run(400, None);
+    rig.run(300, Some(&low_sump()));
+    assert!(!starved(&rig));
+
+    rig.run(301, Some(&low_sump()));
+    assert!(starved(&rig));
+
+    rig.run(300, Some(&healthy()));
+    rig.run(700, None);
+    rig.run(300, Some(&healthy()));
+    assert!(starved(&rig));
+}
+
+#[test]
+fn raising_starvation_republishes_the_status() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&healthy()));
+    rig.run(600, Some(&low_sump()));
+
+    rig.now += Duration::from_secs(1);
+    rig.clock.advance(1);
+    assert!(rig.tick(Some(&low_sump())));
+    assert!(starved(&rig));
+}
+
+fn fall_back_twice(rig: &mut Rig, step_back_s: u64) {
+    let healthy = healthy();
+    schedule_top_off(&rig.service);
+
+    rig.tick(Some(&healthy));
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+    assert!(rig.pins()[2]);
+    rig.service.cancel(OperationKind::TopOff);
+    rig.clock.set_civil(None);
+    rig.run(120, Some(&healthy));
+
+    let now = rig.clock.epoch_seconds().expect("synced");
+    rig.clock.set_epoch(Some(now - step_back_s));
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+}
+
+#[test]
+fn a_window_does_not_fire_twice_for_the_same_local_minute() {
+    let mut rig = Rig::new();
+    fall_back_twice(&mut rig, 0);
+
+    assert!(!rig.pins()[2]);
+    assert_eq!(rig.service.status().operation, OperationStatus::IDLE);
+    assert_eq!(rig.service.status().last_skipped, None);
+}
+
+#[test]
+fn a_backward_clock_step_does_not_refire_a_window() {
+    let mut rig = Rig::new();
+    fall_back_twice(&mut rig, 300);
+
+    assert!(!rig.pins()[2]);
+    assert_eq!(rig.service.status().last_skipped, None);
+}
+
+#[test]
+fn the_same_local_minute_fires_again_a_day_later() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    schedule_top_off(&rig.service);
+
+    rig.tick(Some(&healthy));
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+    rig.service.cancel(OperationKind::TopOff);
+    rig.clock.set_civil(None);
+
+    let now = rig.clock.epoch_seconds().expect("synced");
+    rig.clock.set_epoch(Some(now + 7 * 86_400));
+    rig.clock.set_civil(Some(CivilTime {
+        day: 14,
+        ..sunday_ten_am()
+    }));
+    rig.run(1, Some(&healthy));
+
+    assert!(rig.pins()[2]);
+}
+
+#[test]
+fn a_skipped_window_is_not_retried_in_the_repeated_hour() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let empty_reservoir = snapshot(&[WaterLevelRole::SumpPump]);
+    schedule_top_off(&rig.service);
+
+    rig.tick(Some(&empty_reservoir));
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&empty_reservoir));
+    let skipped = rig.service.status().last_skipped.expect("skipped");
+    rig.clock.set_civil(None);
+    rig.run(3600, Some(&healthy));
+
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+
+    assert!(!rig.pins()[2]);
+    assert_eq!(rig.service.status().last_skipped, Some(skipped));
+}
+
+fn step_clock(rig: &Rig, seconds: i64) {
+    let now = rig.clock.epoch_seconds().expect("synced");
+    rig.clock
+        .set_epoch(Some(now.saturating_add_signed(seconds)));
+}
+
+#[test]
+fn a_timed_override_lasts_its_duration_when_the_clock_steps() {
+    for jump in [-7200, -300, 300, 7200] {
+        let mut rig = Rig::new();
+        let healthy = healthy();
+        rig.tick(Some(&healthy));
+        rig.set_override(PumpId::Uv, Some(600));
+        rig.run(100, Some(&healthy));
+
+        step_clock(&rig, jump);
+        rig.run(499, Some(&healthy));
+        assert!(!rig.pins()[1], "{jump:+}");
+
+        rig.run(1, Some(&healthy));
+        assert!(rig.pins()[1], "{jump:+}");
+        assert_eq!(
+            decode::<[Option<StoredOverride>; 2]>(&rig.store, PumpRecord::Overrides),
+            Some([None, None]),
+            "{jump:+}"
+        );
+    }
+}
+
+#[test]
+fn a_return_override_set_this_boot_survives_a_lost_time_sync() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.tick(Some(&healthy));
+    rig.set_override(PumpId::Return, Some(120));
+    rig.run(10, Some(&healthy));
+
+    rig.clock.set_epoch(None);
+    rig.run(10, Some(&healthy));
+    assert_eq!(
+        rig.service.status().channels.return_pump.mode,
+        ChannelMode::ManualOff
+    );
+    assert!(!rig.pins()[0]);
+
+    rig.run(100, Some(&healthy));
+    assert!(rig.pins()[0]);
+}
+
+#[test]
+fn a_timed_override_still_persists_its_wall_clock_expiry() {
+    let (service, store) = service_and_store();
+
+    service.set_override(PumpId::Uv, Some(600)).expect("valid");
+
+    assert_eq!(
+        decode::<[Option<StoredOverride>; 2]>(&store, PumpRecord::Overrides),
+        Some([
+            None,
+            Some(StoredOverride {
+                expires_at: Some(EPOCH + 600)
+            })
+        ])
+    );
 }
