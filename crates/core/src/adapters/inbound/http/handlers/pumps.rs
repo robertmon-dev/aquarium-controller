@@ -7,7 +7,9 @@ use crate::domain::pump::{
     Blocker, ChannelStatus, OperationKind, PumpId, PumpSettings, PumpSettingsPatch, PumpsStatus,
     WaterChangePlan,
 };
-use crate::ports::inbound::{OverrideError, PumpControl, PumpSettingsError, StartError};
+use crate::ports::inbound::{
+    CancelError, OverrideError, PumpControl, PumpSettingsError, StartError,
+};
 
 type Rejection = (StatusCode, &'static str);
 type Empty = (StatusCode, NoContent);
@@ -116,10 +118,13 @@ pub async fn resume_top_off<P: PumpControl>(
     )
 }
 
-pub async fn cancel_top_off<P: PumpControl>(State(PumpState(pumps)): State<PumpState<P>>) -> Empty {
-    tracing::info!("DELETE /api/pumps/top-off");
-    pumps.cancel(OperationKind::TopOff);
-    (StatusCode::NO_CONTENT, NoContent)
+pub async fn cancel_top_off<P: PumpControl>(
+    State(PumpState(pumps)): State<PumpState<P>>,
+) -> Result<Empty, Rejection> {
+    cancelled(
+        "DELETE /api/pumps/top-off",
+        pumps.cancel(OperationKind::TopOff),
+    )
 }
 
 pub async fn start_water_change<P: PumpControl>(
@@ -140,10 +145,27 @@ pub async fn resume_water_change<P: PumpControl>(
 
 pub async fn cancel_water_change<P: PumpControl>(
     State(PumpState(pumps)): State<PumpState<P>>,
-) -> Empty {
-    tracing::info!("DELETE /api/water-change");
-    pumps.cancel(OperationKind::WaterChange);
-    (StatusCode::NO_CONTENT, NoContent)
+) -> Result<Empty, Rejection> {
+    cancelled(
+        "DELETE /api/water-change",
+        pumps.cancel(OperationKind::WaterChange),
+    )
+}
+
+fn cancelled(route: &'static str, result: Result<(), CancelError>) -> Result<Empty, Rejection> {
+    match result {
+        Ok(()) => {
+            tracing::info!(route, "cancelled");
+            Ok((StatusCode::NO_CONTENT, NoContent))
+        }
+        Err(CancelError::NotPersisted(reason)) => {
+            tracing::error!(route, reason, "cancelled, but not recorded");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "cancelled, but not recorded; the controller keeps retrying",
+            ))
+        }
+    }
 }
 
 fn override_rejection(id: PumpId, error: OverrideError) -> Rejection {
@@ -187,6 +209,13 @@ fn accepted(route: &'static str, result: Result<(), StartError>) -> Result<Empty
             tracing::warn!(route, ?blocker, "blocked");
             Err((StatusCode::LOCKED, blocker_reason(blocker)))
         }
+        Err(StartError::NotPersisted(reason)) => {
+            tracing::error!(route, reason, "not recorded");
+            Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the operation could not be recorded",
+            ))
+        }
     }
 }
 
@@ -201,5 +230,8 @@ const fn blocker_reason(blocker: Blocker) -> &'static str {
         Blocker::RecentWaterChange => "the previous water change was too recent",
         Blocker::ReservoirLow => "the makeup reservoir does not hold enough for a water change",
         Blocker::WaterChange => "a water change is running",
+        Blocker::SumpHigh => "a sump flood sensor is wet",
+        Blocker::Interlock => "the opposite water pump may still be running",
+        Blocker::LevelsUnavailableAfterDrain => "water levels are unavailable right after a drain",
     }
 }

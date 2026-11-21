@@ -15,6 +15,12 @@ pub enum StartError {
     Invalid(&'static str),
     Conflict,
     Blocked(Blocker),
+    NotPersisted(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelError {
+    NotPersisted(&'static str),
 }
 
 pub trait PumpControl {
@@ -31,5 +37,5 @@ pub trait PumpControl {
     fn start_top_off(&self, duration_s: u32) -> Result<(), StartError>;
     fn start_water_change(&self, plan: WaterChangePlan) -> Result<(), StartError>;
     fn resume(&self, kind: OperationKind) -> Result<(), StartError>;
-    fn cancel(&self, kind: OperationKind);
+    fn cancel(&self, kind: OperationKind) -> Result<(), CancelError>;
 }

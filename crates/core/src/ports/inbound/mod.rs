@@ -9,5 +9,5 @@ pub use calibration::{CalibrationControl, CalibrationError};
 pub use heater::{HeaterControl, HeaterSettingsError};
 pub use lighting::LightingControl;
 pub use probe::ProbeVoltageQuery;
-pub use pump::{OverrideError, PumpControl, PumpSettingsError, StartError};
+pub use pump::{CancelError, OverrideError, PumpControl, PumpSettingsError, StartError};
 pub use telemetry::TelemetryQuery;

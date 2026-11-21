@@ -28,6 +28,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
+    sump_high: false,
 };
 
 const PLAN: WaterChangePlan = WaterChangePlan {
@@ -325,7 +326,61 @@ fn operations_need_levels_and_respect_blockers() {
         service.start_top_off(60),
         Err(StartError::Blocked(Blocker::TankOverflow))
     );
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::TankOverflow))
+    );
+
+    observe(&service, Some(HEALTHY));
     assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn a_high_sump_refuses_both_operations() {
+    let (service, _store) = service_and_store();
+    observe(
+        &service,
+        Some(LevelConditions {
+            sump_high: true,
+            ..HEALTHY
+        }),
+    );
+
+    assert_eq!(
+        service.start_top_off(60),
+        Err(StartError::Blocked(Blocker::SumpHigh))
+    );
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::SumpHigh))
+    );
+}
+
+#[test]
+fn a_flooded_sump_ends_a_running_top_off_with_an_overflow() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let flooded = snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+        WaterLevelRole::SumpMechanical,
+    ]);
+
+    rig.tick(Some(&healthy));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(2, Some(&healthy));
+    assert!(rig.pins()[2]);
+
+    rig.run(1, Some(&flooded));
+    assert!(!rig.pins()[2]);
+    let status = rig.service.status();
+    assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpHigh));
+    assert!(status.channels.return_pump.on);
+    assert_eq!(
+        status.last_top_off.map(|record| record.result),
+        Some(OperationResult::Overflow)
+    );
 }
 
 #[test]
@@ -353,7 +408,7 @@ fn a_water_change_needs_a_ready_reservoir_but_a_top_off_does_not() {
         Some(OperationKind::TopOff),
         "a refused water change must not abort the running top-off"
     );
-    service.cancel(OperationKind::TopOff);
+    service.cancel(OperationKind::TopOff).expect("cancelled");
 
     observe(&service, Some(HEALTHY));
     assert_eq!(service.start_water_change(PLAN), Ok(()));
@@ -390,13 +445,15 @@ fn cancelling_records_an_abort_and_erases_the_checkpoint() {
     observe(&service, Some(HEALTHY));
     service.start_water_change(PLAN).expect("idle");
 
-    service.cancel(OperationKind::TopOff);
+    service.cancel(OperationKind::TopOff).expect("cancelled");
     assert_eq!(
         service.status().operation.kind,
         Some(OperationKind::WaterChange)
     );
 
-    service.cancel(OperationKind::WaterChange);
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
     let status = service.status();
     assert_eq!(status.operation, OperationStatus::IDLE);
     assert_eq!(
@@ -674,14 +731,24 @@ fn losing_the_level_sensors_aborts_a_water_change() {
 }
 
 #[test]
-fn a_failed_output_is_reported_as_a_fault() {
+fn a_failed_output_is_reported_as_a_fault_in_its_last_known_state() {
     let mut rig = Rig::new();
     *rig.outputs.failing.lock().unwrap() = Some(PumpId::Uv);
 
     rig.tick(Some(&healthy()));
 
     let uv = rig.service.status().channels.uv;
-    assert_eq!((uv.on, uv.fault), (false, Some(ChannelFault::OutputError)));
+    assert_eq!((uv.on, uv.fault), (true, Some(ChannelFault::OutputError)));
+
+    *rig.outputs.failing.lock().unwrap() = Some(PumpId::Makeup);
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&healthy()));
+
+    let makeup = rig.service.status().channels.makeup;
+    assert_eq!(
+        (makeup.on, makeup.fault),
+        (false, Some(ChannelFault::OutputError))
+    );
 }
 
 #[test]
@@ -942,7 +1009,9 @@ fn cancelling_a_suspended_operation_records_the_reboot() {
     let mut rig = Rig::build(Arc::clone(&store), TestClock::synced(EPOCH), None);
 
     rig.tick(Some(&healthy()));
-    rig.service.cancel(OperationKind::WaterChange);
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
 
     assert_eq!(
         rig.service
@@ -1013,7 +1082,9 @@ fn a_scheduled_window_fires_once_in_its_minute() {
     rig.run(1, Some(&healthy));
     assert!(rig.pins()[2]);
 
-    rig.service.cancel(OperationKind::TopOff);
+    rig.service
+        .cancel(OperationKind::TopOff)
+        .expect("cancelled");
     rig.run(1, Some(&healthy));
     assert!(!rig.pins()[2]);
 }
@@ -1057,12 +1128,12 @@ fn a_blocked_window_is_skipped_with_its_blocker() {
 }
 
 fn spawn_loop(levels: &InMemoryWaterLevelStore) -> (Arc<Service>, RecordingOutputs, Arc<Notify>) {
-    let (service, outputs, republish, _heartbeat) = spawn_loop_with_heartbeat(levels);
+    let (service, outputs, republish, _heartbeat) = spawn_loop_with_heartbeat(levels.subscribe());
     (service, outputs, republish)
 }
 
 fn spawn_loop_with_heartbeat(
-    levels: &InMemoryWaterLevelStore,
+    levels: watch::Receiver<Option<LevelSample>>,
 ) -> (Arc<Service>, RecordingOutputs, Arc<Notify>, Arc<AtomicU32>) {
     let service = service_on(
         &Arc::new(VolatilePumpStore::default()),
@@ -1074,7 +1145,7 @@ fn spawn_loop_with_heartbeat(
 
     tokio::task::spawn_local(pump_loop(
         PumpController::new(outputs.clone(), Arc::clone(&service), timing()),
-        levels.subscribe(),
+        levels,
         service.change_signal(),
         Arc::clone(&republish),
         timing(),
@@ -1098,6 +1169,32 @@ async fn the_loop_treats_quiet_level_sensors_as_unavailable() {
             tokio::time::sleep(Duration::from_millis(1500)).await;
             assert_eq!(
                 service.status().channels.makeup.blocked_by,
+                Some(Blocker::LevelsUnavailable)
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_level_sample_delivered_late_is_judged_by_its_measurement_time() {
+    LocalSet::new()
+        .run_until(async {
+            let levels = InMemoryWaterLevelStore::new();
+            let receiver = levels.subscribe();
+            levels.publish(healthy());
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            let (service, outputs, _republish, _heartbeat) = spawn_loop_with_heartbeat(receiver);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            assert_eq!(
+                service.start_water_change(PLAN),
+                Err(StartError::Blocked(Blocker::LevelsUnavailable))
+            );
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert!(!outputs.state()[PumpId::Drain.index()]);
+            assert_eq!(
+                service.status().channels.drain.blocked_by,
                 Some(Blocker::LevelsUnavailable)
             );
         })
@@ -1157,7 +1254,7 @@ fn a_failed_checkpoint_erase_does_not_resurrect_the_operation() {
 
     service.observe(Some(HEALTHY), Duration::ZERO, Instant::now());
     service.start_top_off(60).expect("idle");
-    service.cancel(OperationKind::TopOff);
+    service.cancel(OperationKind::TopOff).expect("cancelled");
 
     let restarted = service_on(&store, TestClock::synced(EPOCH));
     assert_eq!(restarted.status().operation, OperationStatus::IDLE);
@@ -1513,7 +1610,7 @@ fn a_finished_operation_erases_its_checkpoint_before_recording_the_history() {
     service.observe(Some(HEALTHY), Duration::ZERO, Instant::now());
     service.start_top_off(60).expect("idle");
     log.lock().unwrap().clear();
-    service.cancel(OperationKind::TopOff);
+    service.cancel(OperationKind::TopOff).expect("cancelled");
 
     assert!(position(&log, "erase pump_op") < position(&log, "store pump_last"));
 }
@@ -1554,7 +1651,7 @@ fn an_overflow_stops_the_makeup_pump_before_the_flash_writes() {
 }
 
 #[test]
-fn a_scheduled_start_switches_the_relay_before_writing_its_checkpoint() {
+fn a_scheduled_start_writes_its_checkpoint_before_switching_the_relay() {
     let log = Log::default();
     let (service, clock) = logged_service(&log);
     schedule_top_off_on(&service);
@@ -1573,7 +1670,7 @@ fn a_scheduled_start_switches_the_relay_before_writing_its_checkpoint() {
     log.lock().unwrap().clear();
     controller.tick(Some(&healthy), now + Duration::from_secs(1));
 
-    assert!(position(&log, "set makeup on") < position(&log, "store pump_op"));
+    assert!(position(&log, "store pump_op") < position(&log, "set makeup on"));
 }
 
 #[test]
@@ -1786,14 +1883,18 @@ fn finish_a_water_change(service: &Service) {
     observe(service, Some(HEALTHY));
     service.start_water_change(PLAN).expect("idle");
     drain_briefly(service);
-    service.cancel(OperationKind::WaterChange);
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
 }
 
 fn cancel_a_water_change_before_it_drains(service: &Service) {
     observe(service, Some(HEALTHY));
     service.start_water_change(PLAN).expect("idle");
     observe(service, Some(HEALTHY));
-    service.cancel(OperationKind::WaterChange);
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
 }
 
 #[test]
@@ -1860,7 +1961,7 @@ fn a_water_change_waits_out_the_gap_after_the_previous_one() {
         Err(StartError::Blocked(Blocker::RecentWaterChange))
     );
     assert_eq!(service.start_top_off(60), Ok(()));
-    service.cancel(OperationKind::TopOff);
+    service.cancel(OperationKind::TopOff).expect("cancelled");
 
     clock.advance(1);
     assert_eq!(service.start_water_change(PLAN), Ok(()));
@@ -1889,7 +1990,9 @@ fn the_water_change_gap_needs_both_times() {
     clock.set_epoch(None);
     assert_eq!(service.start_water_change(PLAN), Ok(()));
     drain_briefly(&service);
-    service.cancel(OperationKind::WaterChange);
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
 
     clock.set_epoch(Some(EPOCH + 60));
     assert_eq!(service.start_water_change(PLAN), Ok(()));
@@ -1927,7 +2030,9 @@ fn a_scheduled_water_change_too_soon_is_skipped() {
     rig.tick(Some(&healthy));
     rig.service.start_water_change(PLAN).expect("idle");
     drain_briefly(&rig.service);
-    rig.service.cancel(OperationKind::WaterChange);
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
     rig.clock.set_civil(Some(sunday_ten_am()));
     rig.run(1, Some(&healthy));
 
@@ -1997,7 +2102,8 @@ async fn the_loop_beats_its_heartbeat_every_tick() {
     LocalSet::new()
         .run_until(async {
             let levels = InMemoryWaterLevelStore::new();
-            let (_service, _outputs, _republish, heartbeat) = spawn_loop_with_heartbeat(&levels);
+            let (_service, _outputs, _republish, heartbeat) =
+                spawn_loop_with_heartbeat(levels.subscribe());
 
             tokio::time::sleep(Duration::from_millis(3500)).await;
 
@@ -2230,6 +2336,37 @@ fn a_water_change_that_refilled_too_little_is_recorded_incomplete() {
     );
     configure_flows(&rig.service);
     let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    rig.service
+        .start_water_change(WaterChangePlan {
+            drain_s: 10,
+            settle_s: 0,
+            refill_s: 3,
+        })
+        .expect("idle");
+    rig.tick(Some(&healthy));
+    rig.run(16, Some(&healthy));
+
+    let record = rig.service.status().last_water_change.expect("recorded");
+    assert_eq!(record.drain_ran_s, 10);
+    assert_eq!(record.refill_ran_s, 3);
+    assert_eq!(record.result, OperationResult::Incomplete);
+    let stored: crate::domain::pump::LastOperations =
+        decode(&rig.store, PumpRecord::LastOperations).expect("stored");
+    assert_eq!(
+        stored.water_change.map(|record| record.result),
+        Some(OperationResult::Incomplete)
+    );
+    let event = events.try_recv().expect("an event");
+    assert_eq!(event.record.result, OperationResult::Incomplete);
+}
+
+#[test]
+fn a_water_change_that_stopped_on_the_full_sump_is_not_graded() {
+    let mut rig = Rig::new();
+    configure_flows(&rig.service);
+    let healthy = healthy();
     let full = full_sump();
 
     rig.tick(Some(&healthy));
@@ -2251,17 +2388,8 @@ fn a_water_change_that_refilled_too_little_is_recorded_incomplete() {
     rig.run(1, Some(&full));
 
     let record = rig.service.status().last_water_change.expect("recorded");
-    assert_eq!(record.drain_ran_s, 10);
     assert_eq!(record.refill_ran_s, 3);
-    assert_eq!(record.result, OperationResult::Incomplete);
-    let stored: crate::domain::pump::LastOperations =
-        decode(&rig.store, PumpRecord::LastOperations).expect("stored");
-    assert_eq!(
-        stored.water_change.map(|record| record.result),
-        Some(OperationResult::Incomplete)
-    );
-    let event = events.try_recv().expect("an event");
-    assert_eq!(event.record.result, OperationResult::Incomplete);
+    assert_eq!(record.result, OperationResult::SumpFull);
 }
 
 #[test]
@@ -2435,7 +2563,9 @@ fn fall_back_twice(rig: &mut Rig, step_back_s: u64) {
     rig.clock.set_civil(Some(sunday_ten_am()));
     rig.run(1, Some(&healthy));
     assert!(rig.pins()[2]);
-    rig.service.cancel(OperationKind::TopOff);
+    rig.service
+        .cancel(OperationKind::TopOff)
+        .expect("cancelled");
     rig.clock.set_civil(None);
     rig.run(120, Some(&healthy));
 
@@ -2473,7 +2603,9 @@ fn the_same_local_minute_fires_again_a_day_later() {
     rig.tick(Some(&healthy));
     rig.clock.set_civil(Some(sunday_ten_am()));
     rig.run(1, Some(&healthy));
-    rig.service.cancel(OperationKind::TopOff);
+    rig.service
+        .cancel(OperationKind::TopOff)
+        .expect("cancelled");
     rig.clock.set_civil(None);
 
     let now = rig.clock.epoch_seconds().expect("synced");
@@ -2572,4 +2704,906 @@ fn a_timed_override_still_persists_its_wall_clock_expiry() {
             })
         ])
     );
+}
+
+fn running_sump() -> WaterLevelSnapshot {
+    snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReturnLevel,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+    ])
+}
+
+fn shorted() -> WaterLevelSnapshot {
+    snapshot(&WaterLevelRole::ALL)
+}
+
+fn suspect(rig: &Rig) -> bool {
+    rig.service.status().level_sensors_suspect
+}
+
+#[test]
+fn an_unplugged_harness_is_treated_as_missing_levels() {
+    let mut rig = Rig::new();
+    set_refill_stop(&rig.service, WaterLevelRole::SumpMechanical);
+    rig.run(5, Some(&running_sump()));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&running_sump()));
+    assert!(rig.pins()[PumpId::Makeup.index()]);
+    assert!(!suspect(&rig));
+
+    let unplugged = WaterLevelSnapshot::dry();
+    rig.now += Duration::from_millis(100);
+    assert!(rig.tick(Some(&unplugged)));
+    assert!(suspect(&rig));
+    assert!(rig.service.pump_telemetry().level_sensors_suspect);
+    assert_eq!(rig.pins(), [true, true, false, false]);
+
+    let status = rig.service.status();
+    assert_eq!(
+        status.last_top_off.map(|record| record.result),
+        Some(OperationResult::Aborted)
+    );
+    assert_eq!(
+        status.channels.makeup.blocked_by,
+        Some(Blocker::LevelsUnavailable)
+    );
+    assert_eq!(status.channels.return_pump.blocked_by, None);
+
+    rig.run(900, Some(&unplugged));
+    assert!(suspect(&rig));
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert!(!starved(&rig));
+    assert_eq!(
+        rig.service.start_top_off(60),
+        Err(StartError::Blocked(Blocker::LevelsUnavailable))
+    );
+
+    rig.run(1, Some(&running_sump()));
+    assert!(!suspect(&rig));
+    assert_eq!(rig.service.start_top_off(60), Ok(()));
+}
+
+#[test]
+fn a_sump_drained_by_the_pumps_is_not_an_unplugged_harness() {
+    let mut rig = Rig::new();
+    rig.run(5, Some(&running_sump()));
+    rig.run(30, Some(&healthy()));
+    rig.run(1, Some(&low_sump()));
+
+    assert!(!suspect(&rig));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+}
+
+#[test]
+fn a_shorted_harness_refuses_a_water_change_and_keeps_the_return() {
+    let mut rig = Rig::new();
+    rig.run(5, Some(&running_sump()));
+
+    rig.now += Duration::from_millis(100);
+    assert!(rig.tick(Some(&shorted())));
+    assert!(suspect(&rig));
+    rig.run(10, Some(&shorted()));
+
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert_eq!(
+        rig.service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::LevelsUnavailable))
+    );
+
+    let mut tank_dry = shorted();
+    tank_dry.sensors[WaterLevelRole::MainTank.index()].state = WaterLevelState::Dry;
+    rig.run(1, Some(&tank_dry));
+    assert!(!suspect(&rig));
+}
+
+#[test]
+fn a_harness_fault_is_reported_until_it_clears() {
+    let mut rig = Rig::new();
+    rig.run(1, Some(&running_sump()));
+    assert!(!rig.service.pump_telemetry().level_sensors_suspect);
+
+    rig.run(1, Some(&WaterLevelSnapshot::dry()));
+    assert!(rig.service.pump_telemetry().level_sensors_suspect);
+
+    rig.now += Duration::from_secs(1);
+    assert!(rig.tick(Some(&running_sump())));
+    assert!(!rig.service.pump_telemetry().level_sensors_suspect);
+}
+
+const DRAINED_HISTORY_WITH_AN_UNKNOWN_RESULT: &[u8] = br#"{"top_off":null,
+    "water_change":{"kind":"water_change","started_at":1700000000,"drain_ran_s":3,
+    "settle_ran_s":2,"refill_ran_s":4,"result":"exploded","resumed":false},
+    "drained_at":1700000000}"#;
+
+#[test]
+fn the_gap_survives_an_unreadable_water_change_record() {
+    let store = Arc::new(VolatilePumpStore::default());
+    store.put(
+        PumpRecord::LastOperations,
+        DRAINED_HISTORY_WITH_AN_UNKNOWN_RESULT.to_vec(),
+    );
+    let service = service_on(&store, TestClock::synced(EPOCH + 3600));
+    observe(&service, Some(HEALTHY));
+
+    assert_eq!(service.status().last_water_change, None);
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+}
+
+#[test]
+fn one_unreadable_history_entry_keeps_the_others() {
+    let store = Arc::new(VolatilePumpStore::default());
+    store.put(
+        PumpRecord::LastOperations,
+        br#"{"top_off":{"kind":"top_off","started_at":1,"drain_ran_s":0,"settle_ran_s":0,
+            "refill_ran_s":60,"result":"exploded","resumed":false},
+            "water_change":{"kind":"water_change","started_at":1700000000,"drain_ran_s":3,
+            "settle_ran_s":2,"refill_ran_s":4,"result":"sump_full","resumed":false}}"#
+            .to_vec(),
+    );
+    let service = service_on(&store, TestClock::synced(EPOCH + 3600));
+    observe(&service, Some(HEALTHY));
+
+    let status = service.status();
+    assert_eq!(status.last_top_off, None);
+    assert_eq!(
+        status.last_water_change.map(|record| record.result),
+        Some(OperationResult::SumpFull)
+    );
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+}
+
+#[test]
+fn a_stored_override_without_an_expiry_is_dropped() {
+    for (stored, uv_off) in [
+        (&br#"[null,{}]"#[..], false),
+        (br#"[null,{"expires_at":null}]"#, true),
+        (br#"[null,{"expires_at":"soon"}]"#, false),
+        (br#"[{},{"expires_at":null}]"#, true),
+        (br#"[null,{"expires_at":null},null]"#, true),
+        (br#"[{"expires_at":null}]"#, false),
+    ] {
+        let store = Arc::new(VolatilePumpStore::default());
+        store.put(PumpRecord::Overrides, stored.to_vec());
+        let service = service_on(&store, TestClock::synced(EPOCH));
+        let status = service.status().channels;
+
+        let label = String::from_utf8_lossy(stored);
+        assert_eq!(status.uv.mode == ChannelMode::ManualOff, uv_off, "{label}");
+    }
+}
+
+#[derive(Default)]
+struct Warnings(Mutex<Vec<String>>);
+
+struct Message<'a>(&'a mut String);
+
+impl tracing::field::Visit for Message<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            *self.0 = format!("{value:?}");
+        }
+    }
+}
+
+impl tracing::Subscriber for Warnings {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::WARN {
+            let mut message = String::new();
+            event.record(&mut Message(&mut message));
+            self.0.lock().unwrap().push(message);
+        }
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+fn warnings_while(run: impl FnOnce()) -> Vec<String> {
+    let warnings = Arc::new(Warnings::default());
+    tracing::subscriber::with_default(Arc::clone(&warnings), run);
+    let logged = warnings.0.lock().unwrap().clone();
+    logged
+}
+
+#[test]
+fn stored_settings_that_fail_validation_are_reported_before_the_fallback() {
+    let store = Arc::new(VolatilePumpStore::default());
+    store.put(
+        PumpRecord::Settings,
+        br#"{"top_off":[],"water_change":[],"flow_lph":{},"resume_window_s":9999}"#.to_vec(),
+    );
+
+    let mut settings = None;
+    let warnings = warnings_while(|| {
+        settings = Some(service_on(&store, TestClock::synced(EPOCH)).settings());
+    });
+
+    assert_eq!(settings, Some(PumpSettings::DEFAULT));
+    assert!(
+        warnings.iter().any(|message| message.contains("invalid")),
+        "{warnings:?}"
+    );
+}
+
+fn schedule_two_minutes(service: &Service) {
+    service
+        .apply_settings(PumpSettingsPatch {
+            top_off: Some(vec![TopOffWindow {
+                cron: "0,30 10 * * *".into(),
+                duration_s: 120,
+            }]),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+}
+
+fn fire_at(rig: &mut Rig, epoch: u64, minute: u8, levels: &WaterLevelSnapshot) -> bool {
+    rig.clock.set_epoch(Some(epoch));
+    rig.clock.set_civil(Some(CivilTime {
+        minute,
+        ..sunday_ten_am()
+    }));
+    rig.now += Duration::from_secs(1);
+    rig.tick(Some(levels));
+    let started = rig.pins()[PumpId::Makeup.index()];
+    rig.service
+        .cancel(OperationKind::TopOff)
+        .expect("cancelled");
+    rig.clock.set_civil(None);
+    rig.run(1, Some(levels));
+    started
+}
+
+#[test]
+fn a_window_matching_two_minutes_fires_each_once_across_a_fall_back() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    schedule_two_minutes(&rig.service);
+    rig.tick(Some(&healthy));
+
+    let fired: Vec<bool> = [(0, 0), (1800, 30), (3600, 0), (5400, 30)]
+        .into_iter()
+        .map(|(offset, minute)| fire_at(&mut rig, EPOCH + offset, minute, &healthy))
+        .collect();
+
+    assert_eq!(fired, [true, true, false, false]);
+    assert_eq!(rig.service.status().last_skipped, None);
+}
+
+#[test]
+fn a_minute_blocked_at_its_first_occurrence_is_not_retried_on_its_repeat() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let empty_reservoir = snapshot(&[WaterLevelRole::SumpPump]);
+    schedule_two_minutes(&rig.service);
+    rig.tick(Some(&healthy));
+
+    assert!(!fire_at(&mut rig, EPOCH, 0, &empty_reservoir));
+    let skipped = rig.service.status().last_skipped.expect("skipped");
+    assert!(fire_at(&mut rig, EPOCH + 1800, 30, &healthy));
+    assert!(!fire_at(&mut rig, EPOCH + 3600, 0, &healthy));
+    assert!(!fire_at(&mut rig, EPOCH + 5400, 30, &healthy));
+
+    assert_eq!(rig.service.status().last_skipped, Some(skipped));
+}
+
+#[test]
+fn a_window_remembers_a_bounded_number_of_minutes() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.service
+        .apply_settings(PumpSettingsPatch {
+            top_off: Some(vec![TopOffWindow {
+                cron: "* 10 * * *".into(),
+                duration_s: 120,
+            }]),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+    rig.tick(Some(&healthy));
+
+    for minute in 0..60u8 {
+        fire_at(&mut rig, EPOCH + u64::from(minute) * 60, minute, &healthy);
+    }
+
+    let state = rig.service.lock();
+    assert!(state.schedule.top_off[0].fired.len() <= MAX_REMEMBERED_FIRINGS);
+}
+
+fn reloaded(rig: &Rig) -> Arc<Service> {
+    let service = service_on(&rig.store, Arc::clone(&rig.clock));
+    observe(&service, Some(HEALTHY));
+    service
+}
+
+#[test]
+fn a_cancel_right_after_the_drain_switched_on_still_counts_for_the_gap() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.now += Duration::from_millis(40);
+    rig.tick(Some(&healthy));
+    assert!(rig.pins()[PumpId::Drain.index()]);
+
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+    rig.clock.advance(60);
+
+    assert_eq!(
+        rig.service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+    assert_eq!(
+        reloaded(&rig).start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+}
+
+#[test]
+fn a_cancel_before_the_drain_ever_switched_on_does_not_count_for_the_gap() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    *rig.outputs.failing.lock().unwrap() = Some(PumpId::Drain);
+    rig.now += Duration::from_millis(40);
+    rig.tick(Some(&healthy));
+
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+    *rig.outputs.failing.lock().unwrap() = None;
+    rig.clock.advance(60);
+
+    assert_eq!(reloaded(&rig).start_water_change(PLAN), Ok(()));
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+    assert_eq!(rig.service.start_water_change(PLAN), Ok(()));
+}
+
+const OLD_DRAINED_HISTORY: &[u8] = br#"{"top_off":null,
+    "water_change":{"kind":"water_change","started_at":1700000000,"drain_ran_s":3,
+    "settle_ran_s":2,"refill_ran_s":4,"result":"completed","resumed":false}}"#;
+
+#[test]
+fn an_old_history_keeps_its_drain_date_when_an_unsynced_cancel_overwrites_it() {
+    let store = Arc::new(VolatilePumpStore::default());
+    store.put(PumpRecord::LastOperations, OLD_DRAINED_HISTORY.to_vec());
+    let clock = TestClock::synced(EPOCH + 100);
+    let service = service_on(&store, Arc::clone(&clock));
+    observe(&service, Some(HEALTHY));
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+
+    clock.set_epoch(None);
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+    observe(&service, Some(HEALTHY));
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+
+    clock.set_epoch(Some(EPOCH + 101));
+    let reloaded = service_on(&store, Arc::clone(&clock));
+    observe(&reloaded, Some(HEALTHY));
+    assert_eq!(
+        reloaded.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+}
+
+#[derive(Default)]
+struct FlakyStore {
+    inner: VolatilePumpStore,
+    refuse: std::sync::atomic::AtomicBool,
+    invalidations: AtomicU32,
+}
+
+impl FlakyStore {
+    fn refuse(&self, refuse: bool) {
+        self.refuse.store(refuse, Ordering::Relaxed);
+    }
+
+    fn refusing(&self, record: PumpRecord) -> bool {
+        record == PumpRecord::Checkpoint && self.refuse.load(Ordering::Relaxed)
+    }
+
+    fn holds_checkpoint(&self) -> bool {
+        self.inner
+            .get(PumpRecord::Checkpoint)
+            .is_some_and(|bytes| bytes != b"null")
+    }
+}
+
+impl PumpStore for FlakyStore {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.inner.load(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        if record == PumpRecord::Checkpoint && bytes == b"null" {
+            self.invalidations.fetch_add(1, Ordering::Relaxed);
+        }
+
+        if self.refusing(record) {
+            return Err("flash refused the write");
+        }
+
+        self.inner.store(record, bytes)
+    }
+
+    fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        if record == PumpRecord::Checkpoint {
+            self.invalidations.fetch_add(1, Ordering::Relaxed);
+        }
+
+        if self.refusing(record) {
+            return Err("flash refused the erase");
+        }
+
+        self.inner.erase(record)
+    }
+}
+
+#[derive(Clone, Default)]
+struct StickyOutputs {
+    pins: Arc<Mutex<[bool; 4]>>,
+    refuse_off: Arc<Mutex<Option<PumpId>>>,
+    writes: Arc<Mutex<Vec<(PumpId, bool, bool)>>>,
+}
+
+impl StickyOutputs {
+    fn pin(&self, id: PumpId) -> bool {
+        self.pins.lock().unwrap()[id.index()]
+    }
+
+    fn refuse_off(&self, id: Option<PumpId>) {
+        *self.refuse_off.lock().unwrap() = id;
+    }
+
+    fn switched_on(&self, id: PumpId) -> bool {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|&(pump, on, applied)| pump == id && on && applied)
+    }
+
+    fn failed_offs(&self, id: PumpId) -> usize {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&(pump, on, applied)| pump == id && !on && !applied)
+            .count()
+    }
+}
+
+impl PumpOutputs for StickyOutputs {
+    fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
+        let refused = !on && *self.refuse_off.lock().unwrap() == Some(id);
+        self.writes.lock().unwrap().push((id, on, !refused));
+
+        if refused {
+            return Err("relay driver refused");
+        }
+
+        self.pins.lock().unwrap()[id.index()] = on;
+        Ok(())
+    }
+}
+
+type FlakyService = PumpService<Arc<FlakyStore>, Arc<TestClock>>;
+
+struct Bench {
+    service: Arc<FlakyService>,
+    controller: PumpController<StickyOutputs, Arc<FlakyStore>, Arc<TestClock>>,
+    outputs: StickyOutputs,
+    store: Arc<FlakyStore>,
+    clock: Arc<TestClock>,
+    now: Instant,
+}
+
+impl Bench {
+    fn on(store: Arc<FlakyStore>, clock: Arc<TestClock>) -> Self {
+        let service = Arc::new(PumpService::new(
+            PumpSettings::DEFAULT,
+            Arc::clone(&store),
+            Arc::clone(&clock),
+            None,
+        ));
+        let outputs = StickyOutputs::default();
+        let controller = PumpController::new(outputs.clone(), Arc::clone(&service), timing());
+
+        Self {
+            service,
+            controller,
+            outputs,
+            store,
+            clock,
+            now: Instant::now(),
+        }
+    }
+
+    fn new() -> Self {
+        Self::on(Arc::default(), TestClock::synced(EPOCH))
+    }
+
+    fn reboot(&self) -> Self {
+        Self::on(Arc::clone(&self.store), Arc::clone(&self.clock))
+    }
+
+    fn tick(&mut self, levels: &WaterLevelSnapshot) {
+        self.controller.tick(Some(levels), self.now);
+    }
+
+    fn run(&mut self, seconds: u64, levels: &WaterLevelSnapshot) {
+        for _ in 0..seconds {
+            self.now += Duration::from_secs(1);
+            self.clock.advance(1);
+            self.tick(levels);
+        }
+    }
+}
+
+const QUICK_DRAIN: WaterChangePlan = WaterChangePlan {
+    drain_s: 1,
+    settle_s: 0,
+    refill_s: 4,
+};
+
+#[test]
+fn a_drain_that_fails_to_switch_off_keeps_the_makeup_off() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.service.start_water_change(QUICK_DRAIN).expect("idle");
+    bench.tick(&healthy);
+    assert!(bench.outputs.pin(PumpId::Drain));
+
+    bench.outputs.refuse_off(Some(PumpId::Drain));
+    bench.run(5, &healthy);
+
+    let status = bench.service.status();
+    assert_eq!(status.operation.state, OperationState::Refilling);
+    assert_eq!(status.channels.drain.fault, Some(ChannelFault::OutputError));
+    assert!(status.channels.drain.on, "the drain may still be running");
+    assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::Interlock));
+    assert!(bench.outputs.pin(PumpId::Drain));
+    assert!(!bench.outputs.pin(PumpId::Makeup));
+    assert!(!bench.outputs.switched_on(PumpId::Makeup));
+    assert!(bench.outputs.failed_offs(PumpId::Drain) >= 4);
+
+    bench.outputs.refuse_off(None);
+    bench.run(1, &healthy);
+    assert!(!bench.outputs.pin(PumpId::Drain));
+    assert!(bench.outputs.pin(PumpId::Makeup));
+    assert_eq!(bench.service.status().channels.drain.fault, None);
+}
+
+#[test]
+fn a_water_change_does_not_drain_while_the_top_off_makeup_may_still_run() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.service.start_top_off(60).expect("idle");
+    bench.run(1, &healthy);
+    assert!(bench.outputs.pin(PumpId::Makeup));
+
+    bench.outputs.refuse_off(Some(PumpId::Makeup));
+    bench.service.start_water_change(PLAN).expect("preempts");
+    bench.run(3, &healthy);
+
+    let status = bench.service.status();
+    assert_eq!(status.operation.state, OperationState::Draining);
+    assert_eq!(status.operation.drain_ran_s, 0);
+    assert_eq!(
+        status.channels.makeup.fault,
+        Some(ChannelFault::OutputError)
+    );
+    assert_eq!(status.channels.drain.blocked_by, Some(Blocker::Interlock));
+    assert!(bench.outputs.pin(PumpId::Makeup));
+    assert!(!bench.outputs.pin(PumpId::Drain));
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
+fn an_api_start_that_cannot_be_recorded_switches_nothing_on() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.store.refuse(true);
+
+    assert!(matches!(
+        bench.service.start_water_change(PLAN),
+        Err(StartError::NotPersisted(_))
+    ));
+    assert!(matches!(
+        bench.service.start_top_off(60),
+        Err(StartError::NotPersisted(_))
+    ));
+    bench.run(3, &healthy);
+
+    assert_eq!(bench.service.status().operation, OperationStatus::IDLE);
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+    assert!(!bench.outputs.switched_on(PumpId::Makeup));
+}
+
+#[test]
+fn a_water_change_that_cannot_be_recorded_leaves_the_running_top_off_alone() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.service.start_top_off(60).expect("idle");
+    bench.run(1, &healthy);
+    bench.store.refuse(true);
+
+    assert!(matches!(
+        bench.service.start_water_change(PLAN),
+        Err(StartError::NotPersisted(_))
+    ));
+    bench.run(1, &healthy);
+
+    let status = bench.service.status();
+    assert_eq!(status.operation.kind, Some(OperationKind::TopOff));
+    assert_eq!(status.last_top_off, None);
+    assert!(bench.outputs.pin(PumpId::Makeup));
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
+fn a_scheduled_start_that_cannot_be_recorded_is_skipped_for_storage() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    schedule_top_off_on(&bench.service);
+    bench.tick(&healthy);
+    bench.store.refuse(true);
+
+    bench.clock.set_civil(Some(sunday_ten_am()));
+    bench.run(3, &healthy);
+
+    let skipped = bench.service.status().last_skipped.expect("skipped");
+    assert_eq!(skipped.reason, SkipReason::Storage);
+    assert_eq!(skipped.blocked_by, None);
+    assert!(!bench.outputs.switched_on(PumpId::Makeup));
+}
+
+fn seed_flaky_checkpoint(store: &FlakyStore, operation: Operation, checkpoint_at: Option<u64>) {
+    store.inner.put(
+        PumpRecord::Checkpoint,
+        serde_json::to_vec(&Checkpoint {
+            operation,
+            checkpoint_at,
+        })
+        .expect("encode"),
+    );
+}
+
+#[test]
+fn an_automatic_resume_that_cannot_be_recorded_suspends_without_switching() {
+    let store = Arc::new(FlakyStore::default());
+    seed_flaky_checkpoint(&store, interrupted_drain(EPOCH - 200), Some(EPOCH - 100));
+    store.refuse(true);
+    let mut bench = Bench::on(store, TestClock::synced(EPOCH));
+    let healthy = healthy();
+
+    bench.tick(&healthy);
+    bench.run(3, &healthy);
+
+    assert_eq!(
+        bench.service.status().operation.state,
+        OperationState::Suspended
+    );
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
+fn an_api_resume_that_cannot_be_recorded_stays_suspended() {
+    let store = Arc::new(FlakyStore::default());
+    seed_flaky_checkpoint(&store, interrupted_drain(EPOCH - 9000), Some(EPOCH - 8000));
+    let mut bench = Bench::on(store, TestClock::synced(EPOCH));
+    let healthy = healthy();
+    bench.tick(&healthy);
+    assert_eq!(
+        bench.service.status().operation.state,
+        OperationState::Suspended
+    );
+
+    bench.store.refuse(true);
+    assert!(matches!(
+        bench.service.resume(OperationKind::WaterChange),
+        Err(StartError::NotPersisted(_))
+    ));
+    bench.run(3, &healthy);
+
+    assert_eq!(
+        bench.service.status().operation.state,
+        OperationState::Suspended
+    );
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
+fn a_cancel_that_cannot_be_recorded_stops_the_drain_and_retries_until_it_lands() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.service.start_water_change(PLAN).expect("idle");
+    bench.run(1, &healthy);
+    assert!(bench.outputs.pin(PumpId::Drain));
+
+    bench.store.refuse(true);
+    assert!(matches!(
+        bench.service.cancel(OperationKind::WaterChange),
+        Err(CancelError::NotPersisted(_))
+    ));
+    bench.run(1, &healthy);
+    assert!(!bench.outputs.pin(PumpId::Drain));
+    assert!(bench.service.status().invalidation_pending);
+    assert!(bench.store.holds_checkpoint());
+
+    let tried = bench.store.invalidations.load(Ordering::Relaxed);
+    bench.run(3, &healthy);
+    assert!(bench.store.invalidations.load(Ordering::Relaxed) >= tried + 3);
+    assert!(bench.service.status().invalidation_pending);
+
+    bench.store.refuse(false);
+    bench.run(1, &healthy);
+    assert!(!bench.service.status().invalidation_pending);
+    assert!(!bench.store.holds_checkpoint());
+
+    let mut rebooted = bench.reboot();
+    rebooted.tick(&healthy);
+    rebooted.run(5, &healthy);
+    assert_eq!(rebooted.service.status().operation, OperationStatus::IDLE);
+    assert!(!rebooted.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
+fn a_new_operation_supersedes_a_pending_invalidation() {
+    let mut bench = Bench::new();
+    let healthy = healthy();
+    bench.tick(&healthy);
+    bench.service.start_top_off(60).expect("idle");
+    bench.run(1, &healthy);
+    bench.store.refuse(true);
+    assert!(bench.service.cancel(OperationKind::TopOff).is_err());
+    bench.run(1, &healthy);
+
+    bench.store.refuse(false);
+    bench.service.start_top_off(60).expect("idle");
+    assert!(!bench.service.status().invalidation_pending);
+    bench.run(1, &healthy);
+    assert!(bench.store.holds_checkpoint());
+    assert_eq!(
+        bench.service.status().operation.kind,
+        Some(OperationKind::TopOff)
+    );
+}
+
+fn unplugged() -> WaterLevelSnapshot {
+    WaterLevelSnapshot::dry()
+}
+
+#[test]
+fn an_unplugged_harness_mid_drain_holds_the_return_off() {
+    let mut rig = Rig::new();
+    rig.run(5, Some(&running_sump()));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.run(1, Some(&running_sump()));
+
+    rig.run(1, Some(&unplugged()));
+    let status = rig.service.status();
+    assert!(status.level_sensors_suspect);
+    assert!(status.return_held_after_drain);
+    assert_eq!(
+        status.channels.return_pump.blocked_by,
+        Some(Blocker::LevelsUnavailableAfterDrain)
+    );
+    assert_eq!(status.channels.uv.blocked_by, Some(Blocker::ReturnOff));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+
+    rig.run(3600, Some(&unplugged()));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+
+    rig.run(1, Some(&running_sump()));
+    assert!(!rig.service.status().return_held_after_drain);
+}
+
+fn abort_a_water_change(rig: &mut Rig) {
+    rig.run(5, Some(&running_sump()));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.run(1, Some(&running_sump()));
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+}
+
+#[test]
+fn an_unplugged_harness_within_thirty_minutes_of_an_aborted_drain_holds_the_return() {
+    let mut rig = Rig::new();
+    abort_a_water_change(&mut rig);
+    rig.run(29 * 60, Some(&running_sump()));
+
+    rig.run(1, Some(&unplugged()));
+
+    assert!(rig.service.status().return_held_after_drain);
+    assert!(!rig.pins()[PumpId::Return.index()]);
+}
+
+#[test]
+fn an_unplugged_harness_long_after_an_aborted_drain_keeps_the_return() {
+    let mut rig = Rig::new();
+    abort_a_water_change(&mut rig);
+    rig.run(31 * 60, Some(&running_sump()));
+
+    rig.run(1, Some(&unplugged()));
+
+    assert!(rig.service.status().level_sensors_suspect);
+    assert!(!rig.service.status().return_held_after_drain);
+    assert_eq!(rig.pins(), [true, true, false, false]);
+}
+
+#[test]
+fn an_unplugged_harness_after_a_water_change_that_filled_the_sump_keeps_the_return() {
+    let mut rig = Rig::new();
+    rig.run(5, Some(&running_sump()));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.run(6, Some(&healthy()));
+    rig.run(3, Some(&full_sump()));
+    assert_eq!(
+        rig.service
+            .status()
+            .last_water_change
+            .map(|record| record.result),
+        Some(OperationResult::SumpFull)
+    );
+
+    rig.run(1, Some(&unplugged()));
+
+    assert!(rig.service.status().level_sensors_suspect);
+    assert!(!rig.service.status().return_held_after_drain);
+    assert!(rig.pins()[PumpId::Return.index()]);
+}
+
+#[test]
+fn an_unplugged_harness_while_a_water_change_is_suspended_holds_the_return() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 9000), Some(EPOCH - 8000));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    rig.run(5, Some(&running_sump()));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Suspended
+    );
+
+    rig.run(1, Some(&unplugged()));
+
+    assert!(rig.service.status().return_held_after_drain);
+    assert_eq!(rig.pins(), [false, false, false, false]);
 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -13,14 +13,16 @@ use crate::domain::pump::{
     decide, litres, resume_verdict, validate_override, validate_top_off, Blocker, ChannelDecision,
     ChannelFault, ChannelMode, ChannelStatus, ChannelsStatus, Checkpoint, DecisionInput,
     LastOperations, LevelConditions, Operation, OperationEvent, OperationKind, OperationPlan,
-    OperationResult, OperationState, OperationStatus, OverrideError, Phase, PumpId, PumpSettings,
-    PumpSettingsPatch, PumpsStatus, PumpsTelemetry, ResumeVerdict, RuntimeCounters, SkipReason,
-    SkippedWindow, Step, StoredOverride, WaterChangePlan, STARVED_CLEAR_S, STARVED_LOCKOUTS,
-    STARVED_WINDOW_S,
+    OperationRecord, OperationResult, OperationState, OperationStatus, OverrideError, Phase,
+    PumpId, PumpSettings, PumpSettingsPatch, PumpsStatus, PumpsTelemetry, ResumeVerdict,
+    RuntimeCounters, SkipReason, SkippedWindow, Step, StoredOverride, WaterChangePlan,
+    STARVED_CLEAR_S, STARVED_LOCKOUTS, STARVED_WINDOW_S,
 };
-use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot};
-use crate::ports::inbound::{PumpControl, PumpSettingsError, StartError};
-use crate::ports::outbound::{Clock, PumpOutputs, PumpRecord, PumpStatusSource, PumpStore};
+use crate::domain::water::{HarnessWatch, WaterLevelRole, WaterLevelSnapshot};
+use crate::ports::inbound::{CancelError, PumpControl, PumpSettingsError, StartError};
+use crate::ports::outbound::{
+    Clock, LevelSample, PumpOutputs, PumpRecord, PumpStatusSource, PumpStore,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PumpTiming {
@@ -86,21 +88,30 @@ enum Activity {
     Suspended(Operation),
 }
 
+const MAX_REMEMBERED_FIRINGS: usize = 32;
+const BLIND_RETURN_HOLD: Duration = Duration::from_secs(1800);
+
 struct Window<T> {
     cron: CronExpr,
     plan: T,
-    fired: Option<Firing>,
+    fired: VecDeque<Firing>,
 }
 
 impl<T> Window<T> {
     fn due(&mut self, civil: CivilTime, epoch: u64) -> bool {
-        let repeated = self.fired.is_some_and(|fired| fired.repeats(civil, epoch));
-
-        if !self.cron.matches(civil) || repeated {
+        if !self.cron.matches(civil) {
             return false;
         }
 
-        self.fired = Some(Firing::new(civil, epoch));
+        self.fired.retain(|fired| !fired.expired(epoch));
+        if self.fired.iter().any(|fired| fired.repeats(civil, epoch)) {
+            return false;
+        }
+
+        if self.fired.len() == MAX_REMEMBERED_FIRINGS {
+            self.fired.pop_front();
+        }
+        self.fired.push_back(Firing::new(civil, epoch));
         true
     }
 }
@@ -125,7 +136,10 @@ fn windows<W, T>(
         .map(|(index, (cron, plan))| Window {
             cron,
             plan,
-            fired: previous.get(index).and_then(|window| window.fired),
+            fired: previous
+                .get(index)
+                .map(|window| window.fired.clone())
+                .unwrap_or_default(),
         })
         .collect()
 }
@@ -173,6 +187,10 @@ struct State {
     last_fired_minute: Option<u64>,
     resume_sync_epoch: Option<u64>,
     circulation_starved: bool,
+    level_sensors_suspect: bool,
+    invalidation_pending: bool,
+    water_change_ended: Option<(Instant, OperationResult)>,
+    return_held_after_drain: bool,
 }
 
 impl State {
@@ -306,6 +324,14 @@ impl State {
             }
         }
 
+        if plan.kind == OperationKind::WaterChange && levels.tank_overflow {
+            return Err(StartError::Blocked(Blocker::TankOverflow));
+        }
+
+        if levels.sump_high {
+            return Err(StartError::Blocked(Blocker::SumpHigh));
+        }
+
         if plan.kind == OperationKind::WaterChange && !levels.reservoir_ready {
             return Err(StartError::Blocked(Blocker::ReservoirLow));
         }
@@ -365,6 +391,80 @@ fn load<S: PumpStore, T: DeserializeOwned>(store: &S, record: PumpRecord) -> Opt
     }
 }
 
+fn stored_settings<S: PumpStore>(store: &S, defaults: PumpSettings) -> PumpSettings {
+    let Some(stored) = load::<S, PumpSettings>(store, PumpRecord::Settings) else {
+        return defaults;
+    };
+
+    match stored.validate() {
+        Ok(()) => stored,
+        Err(reason) => {
+            tracing::warn!(
+                record = PumpRecord::Settings.key(),
+                reason,
+                "stored pump settings are invalid, using the defaults"
+            );
+            defaults
+        }
+    }
+}
+
+fn entry<T: DeserializeOwned>(record: PumpRecord, value: &serde_json::Value) -> Option<T> {
+    match Option::<T>::deserialize(value) {
+        Ok(entry) => entry,
+        Err(_) => {
+            tracing::warn!(
+                record = record.key(),
+                "stored pump entry is unreadable, dropping it"
+            );
+            None
+        }
+    }
+}
+
+fn stored_overrides<S: PumpStore>(store: &S) -> [Option<Expiry>; 2] {
+    let mut slots = [None; 2];
+    let Some(entries) = load::<S, Vec<serde_json::Value>>(store, PumpRecord::Overrides) else {
+        return slots;
+    };
+
+    for (slot, value) in slots.iter_mut().zip(&entries) {
+        *slot = entry::<StoredOverride>(PumpRecord::Overrides, value)
+            .map(|stored| stored.expires_at.map_or(Expiry::Never, Expiry::Epoch));
+    }
+
+    slots
+}
+
+fn stored_history<S: PumpStore>(store: &S) -> LastOperations {
+    let record = PumpRecord::LastOperations;
+    let Some(value) = load::<S, serde_json::Value>(store, record) else {
+        return LastOperations::default();
+    };
+
+    let Some(fields) = value.as_object() else {
+        tracing::warn!(record = record.key(), "stored pump record is unreadable");
+        return LastOperations::default();
+    };
+
+    let field = |name: &str| fields.get(name).unwrap_or(&serde_json::Value::Null);
+
+    let water_change: Option<OperationRecord> = entry(record, field("water_change"));
+    let drained_at = if fields.contains_key("drained_at") {
+        entry(record, field("drained_at"))
+    } else {
+        water_change
+            .filter(|record| record.drain_ran_s > 0)
+            .and_then(|record| record.started_at)
+    };
+
+    LastOperations {
+        top_off: entry(record, field("top_off")),
+        water_change,
+        drained_at,
+    }
+}
+
 impl<S: PumpStore, C: Clock> PumpService<S, C> {
     pub fn new(
         defaults: PumpSettings,
@@ -372,17 +472,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         clock: C,
         events: Option<mpsc::UnboundedSender<OperationEvent>>,
     ) -> Self {
-        let settings = load::<S, PumpSettings>(&store, PumpRecord::Settings)
-            .filter(|stored| stored.validate().is_ok())
-            .unwrap_or(defaults);
-
-        let overrides = load::<S, [Option<StoredOverride>; 2]>(&store, PumpRecord::Overrides)
-            .unwrap_or_default()
-            .map(|slot| slot.map(|stored| stored.expires_at.map_or(Expiry::Never, Expiry::Epoch)));
-
+        let settings = stored_settings(&store, defaults);
+        let overrides = stored_overrides(&store);
         let runtime = load::<S, RuntimeCounters>(&store, PumpRecord::Runtime).unwrap_or_default();
-        let last =
-            load::<S, LastOperations>(&store, PumpRecord::LastOperations).unwrap_or_default();
+        let last = stored_history(&store);
         let activity = load::<S, Option<Checkpoint>>(&store, PumpRecord::Checkpoint)
             .flatten()
             .map_or(Activity::Idle, Activity::Resuming);
@@ -405,6 +498,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 last_fired_minute: None,
                 resume_sync_epoch: None,
                 circulation_starved: false,
+                level_sensors_suspect: false,
+                invalidation_pending: false,
+                water_change_ended: None,
+                return_held_after_drain: false,
             }),
             store,
             clock,
@@ -502,18 +599,29 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             match verdict {
                 ResumeVerdict::Wait => {}
                 ResumeVerdict::Resume => {
-                    let mut operation = checkpoint.operation;
+                    let mut operation = checkpoint.operation.clone();
                     operation.resume();
-                    tracing::info!(
-                        kind = ?operation.plan.kind,
-                        phase = ?operation.phase,
-                        "pump operation resumed after a restart"
-                    );
-                    state.activity = Activity::Running(operation);
-                    operation_elapsed_ms = 0;
-                    wall_elapsed_ms = 0;
-                    state.pending.checkpoint = true;
-                    self.flush_pending(&mut state);
+
+                    match self.record_ahead(&mut state, &operation, epoch) {
+                        Ok(()) => {
+                            tracing::info!(
+                                kind = ?operation.plan.kind,
+                                phase = ?operation.phase,
+                                "pump operation resumed after a restart"
+                            );
+                            state.activity = Activity::Running(operation);
+                            operation_elapsed_ms = 0;
+                            wall_elapsed_ms = 0;
+                        }
+                        Err(reason) => {
+                            tracing::error!(
+                                kind = ?operation.plan.kind,
+                                reason,
+                                "pump operation not resumed, its checkpoint could not be stored"
+                            );
+                            state.activity = Activity::Suspended(checkpoint.operation);
+                        }
+                    }
                     changed = true;
                 }
                 ResumeVerdict::Suspend => {
@@ -547,7 +655,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
 
         if let Some((operation, result)) = finished {
-            self.finish(&mut state, &operation, result, epoch);
+            self.finish(&mut state, &operation, result, epoch, now);
             changed = true;
         }
 
@@ -618,6 +726,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 Err(error) => {
                     let (reason, blocked_by) = match error {
                         StartError::Blocked(blocker) => (SkipReason::Blocked, Some(blocker)),
+                        StartError::NotPersisted(_) => (SkipReason::Storage, None),
                         _ => (SkipReason::Busy, None),
                     };
 
@@ -656,7 +765,17 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             blocked_by,
         };
 
-        let previous = self.lock().outputs[id.index()].replace(next);
+        let mut state = self.lock();
+        let previous = state.outputs[id.index()].replace(next);
+
+        if id == PumpId::Drain && on && fault.is_none() {
+            if let Activity::Running(operation) = &mut state.activity {
+                if operation.phase == Phase::Draining && !operation.drain_switched {
+                    operation.drain_switched = true;
+                    state.pending.checkpoint = true;
+                }
+            }
+        }
 
         RecordOutcome {
             changed: previous != Some(next),
@@ -678,13 +797,21 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     fn flush_pending(&self, state: &mut State) {
         let pending = std::mem::take(&mut state.pending);
 
-        if pending.erase_checkpoint {
-            if let Err(reason) = self.store.erase(PumpRecord::Checkpoint) {
-                tracing::warn!(reason, "pump checkpoint not erased, writing a tombstone");
-
-                if let Err(reason) = self.write(PumpRecord::Checkpoint, &None::<Checkpoint>) {
-                    tracing::error!(reason, "pump checkpoint tombstone not stored");
+        if pending.erase_checkpoint || state.invalidation_pending {
+            match self.invalidate_checkpoint() {
+                Ok(()) if state.invalidation_pending => {
+                    tracing::info!("pump checkpoint invalidated after a storage failure");
+                    state.invalidation_pending = false;
                 }
+                Ok(()) => {}
+                Err(reason) if !state.invalidation_pending => {
+                    tracing::error!(
+                        reason,
+                        "pump checkpoint not invalidated, retrying every tick"
+                    );
+                    state.invalidation_pending = true;
+                }
+                Err(_) => {}
             }
         }
 
@@ -715,6 +842,71 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
     }
 
+    fn invalidate_checkpoint(&self) -> Result<(), &'static str> {
+        let Err(reason) = self.store.erase(PumpRecord::Checkpoint) else {
+            return Ok(());
+        };
+
+        tracing::warn!(reason, "pump checkpoint not erased, writing a tombstone");
+        self.write(PumpRecord::Checkpoint, &None::<Checkpoint>)
+    }
+
+    fn record_ahead(
+        &self,
+        state: &mut State,
+        operation: &Operation,
+        epoch: Option<u64>,
+    ) -> Result<(), &'static str> {
+        self.write(
+            PumpRecord::Checkpoint,
+            &Checkpoint {
+                operation: operation.clone(),
+                checkpoint_at: epoch,
+            },
+        )?;
+        state.invalidation_pending = false;
+        Ok(())
+    }
+
+    fn hold_return_after_drain(&self, suspect: bool, now: Instant) -> bool {
+        let mut state = self.lock();
+
+        if !suspect {
+            if state.return_held_after_drain {
+                tracing::info!("level sensors are back, the return pump is released");
+            }
+            state.return_held_after_drain = false;
+            return false;
+        }
+
+        if !state.return_held_after_drain {
+            let draining = match &state.activity {
+                Activity::Idle => false,
+                Activity::Running(operation) | Activity::Suspended(operation) => {
+                    operation.plan.kind == OperationKind::WaterChange
+                }
+                Activity::Resuming(checkpoint) => {
+                    checkpoint.operation.plan.kind == OperationKind::WaterChange
+                }
+            };
+            let unfinished = state.water_change_ended.is_some_and(|(ended, result)| {
+                !matches!(
+                    result,
+                    OperationResult::SumpFull | OperationResult::Completed
+                ) && now.saturating_duration_since(ended) < BLIND_RETURN_HOLD
+            });
+
+            if draining || unfinished {
+                tracing::error!(
+                    "level sensors lost right after a drain, holding the return pump off"
+                );
+                state.return_held_after_drain = true;
+            }
+        }
+
+        state.return_held_after_drain
+    }
+
     fn reset_runtime_at(&self, id: PumpId, now: Instant) {
         let epoch = self.clock.epoch_seconds();
 
@@ -738,6 +930,20 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             tracing::warn!("the sump keeps running dry, circulation is starved");
         } else if changed {
             tracing::info!("the sump stayed wet, circulation recovered");
+        }
+
+        changed
+    }
+
+    pub fn report_level_sensors(&self, suspect: bool) -> bool {
+        let mut state = self.lock();
+        let changed = state.level_sensors_suspect != suspect;
+        state.level_sensors_suspect = suspect;
+
+        if changed && suspect {
+            tracing::warn!("the level sensor harness looks unplugged or shorted, ignoring it");
+        } else if changed {
+            tracing::info!("the level sensor harness reads plausibly again");
         }
 
         changed
@@ -777,14 +983,20 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     ) -> Result<(), StartError> {
         state.admit(&plan, now, epoch)?;
 
-        if let Activity::Running(preempted) = std::mem::replace(&mut state.activity, Activity::Idle)
-        {
-            self.finish(state, &preempted, OperationResult::Aborted, epoch);
+        let operation = Operation::start(plan, epoch);
+        if let Err(reason) = self.record_ahead(state, &operation, epoch) {
+            tracing::error!(kind = ?plan.kind, reason, "pump operation not started, its checkpoint could not be stored");
+            return Err(StartError::NotPersisted(reason));
         }
 
-        state.activity = Activity::Running(Operation::start(plan, epoch));
+        if let Activity::Running(preempted) = std::mem::replace(&mut state.activity, Activity::Idle)
+        {
+            self.finish(state, &preempted, OperationResult::Aborted, epoch, now);
+            state.pending.erase_checkpoint = false;
+        }
+
+        state.activity = Activity::Running(operation);
         state.fresh_operation = true;
-        state.pending.checkpoint = true;
         tracing::info!(kind = ?plan.kind, "pump operation started");
 
         Ok(())
@@ -796,6 +1008,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         operation: &Operation,
         result: OperationResult,
         epoch: Option<u64>,
+        now: Instant,
     ) {
         let sump_low = state.levels.is_some_and(|levels| levels.sump_low);
         let record = operation
@@ -804,6 +1017,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let result = record.result;
 
         state.last.remember(operation, record);
+
+        if record.kind == OperationKind::WaterChange {
+            state.water_change_ended = Some((now, result));
+        }
 
         state.activity = Activity::Idle;
         state.pending.last = true;
@@ -850,6 +1067,9 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
             last_water_change: state.last.water_change,
             last_skipped: state.last_skipped,
             circulation_starved: state.circulation_starved,
+            level_sensors_suspect: state.level_sensors_suspect,
+            return_held_after_drain: state.return_held_after_drain,
+            invalidation_pending: state.invalidation_pending,
         }
     }
 
@@ -967,6 +1187,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
     }
 
     fn resume(&self, kind: OperationKind) -> Result<(), StartError> {
+        let epoch = self.clock.epoch_seconds();
         {
             let mut state = self.lock();
             let mut operation = match std::mem::replace(&mut state.activity, Activity::Idle) {
@@ -982,11 +1203,21 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
                 return Err(StartError::Blocked(blocker));
             }
 
+            let suspended = operation.clone();
             operation.resume();
+            if let Err(reason) = self.record_ahead(&mut state, &operation, epoch) {
+                tracing::error!(
+                    ?kind,
+                    reason,
+                    "pump operation not resumed, its checkpoint could not be stored"
+                );
+                state.activity = Activity::Suspended(suspended);
+                return Err(StartError::NotPersisted(reason));
+            }
+
             tracing::info!(?kind, "pump operation resumed over the API");
             state.activity = Activity::Running(operation);
             state.fresh_operation = true;
-            state.pending.checkpoint = true;
             self.flush_pending(&mut state);
         }
 
@@ -995,10 +1226,10 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
         Ok(())
     }
 
-    fn cancel(&self, kind: OperationKind) {
+    fn cancel(&self, kind: OperationKind) -> Result<(), CancelError> {
         let epoch = self.clock.epoch_seconds();
 
-        {
+        let outcome = {
             let mut state = self.lock();
             let (operation, result) = match std::mem::replace(&mut state.activity, Activity::Idle) {
                 Activity::Running(operation) if operation.plan.kind == kind => {
@@ -1012,15 +1243,24 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
                 }
                 other => {
                     state.activity = other;
-                    return;
+                    return Ok(());
                 }
             };
 
-            self.finish(&mut state, &operation, result, epoch);
+            self.finish(&mut state, &operation, result, epoch, Instant::now());
             self.flush_pending(&mut state);
-        }
+
+            if state.invalidation_pending {
+                Err(CancelError::NotPersisted(
+                    "the cancel was not recorded and is retried",
+                ))
+            } else {
+                Ok(())
+            }
+        };
 
         self.notify.notify_one();
+        outcome
     }
 }
 
@@ -1039,6 +1279,7 @@ impl<S: PumpStore, C: Clock> PumpStatusSource for PumpService<S, C> {
             operation_kind: operation.kind,
             operation_state: operation.state,
             circulation_starved: state.circulation_starved,
+            level_sensors_suspect: state.level_sensors_suspect,
         }
     }
 }
@@ -1137,9 +1378,19 @@ pub struct PumpController<O, S, C> {
     timing: PumpTiming,
     lockout: ReturnLockout,
     circulation: CirculationWatch,
+    harness: HarnessWatch,
     last_tick: Option<Instant>,
     last_checkpoint: Option<Instant>,
     last_flush: Option<Instant>,
+    possibly_on: [bool; 4],
+}
+
+const fn opposite_mover(id: PumpId) -> Option<PumpId> {
+    match id {
+        PumpId::Makeup => Some(PumpId::Drain),
+        PumpId::Drain => Some(PumpId::Makeup),
+        PumpId::Return | PumpId::Uv => None,
+    }
 }
 
 impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
@@ -1150,19 +1401,26 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             timing,
             lockout: ReturnLockout::default(),
             circulation: CirculationWatch::default(),
+            harness: HarnessWatch::default(),
             last_tick: None,
             last_checkpoint: None,
             last_flush: None,
+            possibly_on: PumpId::ALL.map(PumpId::fail_safe_on),
         }
     }
 
     pub fn tick(&mut self, snapshot: Option<&WaterLevelSnapshot>, now: Instant) -> bool {
-        let refill_stop = self.service.refill_stop_sensor();
-        let levels = snapshot.map(|snapshot| LevelConditions::from_snapshot(snapshot, refill_stop));
         let elapsed = self
             .last_tick
             .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
         self.last_tick = Some(now);
+
+        let suspect = self.harness.update(snapshot, elapsed);
+        let suspect_changed = self.service.report_level_sensors(suspect);
+        let refill_stop = self.service.refill_stop_sensor();
+        let levels = snapshot
+            .filter(|_| !suspect)
+            .map(|snapshot| LevelConditions::from_snapshot(snapshot, refill_stop));
 
         let started = self.service.fire_due_windows_deferred(levels, now);
         let observed = self.service.observe_deferred(levels, elapsed, now);
@@ -1175,35 +1433,56 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             now,
         );
         let starvation_changed = self.service.report_circulation(starved);
+        let return_held_after_drain = self.service.hold_return_after_drain(suspect, now);
 
-        let decisions = decide(DecisionInput {
+        let mut decisions = decide(DecisionInput {
             levels,
             return_locked_out: locked_out,
             return_forced_off: observed.return_forced_off,
             uv_forced_off: observed.uv_forced_off,
             phase: observed.phase,
+            return_held_after_drain,
         });
+
+        let mut driven: [(bool, Option<ChannelFault>); 4] = [(false, None); 4];
+        for id in PumpId::ALL {
+            if !decisions[id.index()].on {
+                driven[id.index()] = self.drive(id, false);
+            }
+        }
+
+        for id in PumpId::ALL {
+            let decision = &mut decisions[id.index()];
+            if !decision.on {
+                continue;
+            }
+
+            let return_failed = id == PumpId::Uv && driven[PumpId::Return.index()].1.is_some();
+            let interlocked =
+                opposite_mover(id).is_some_and(|other| self.possibly_on[other.index()]);
+
+            if return_failed || interlocked {
+                *decision = ChannelDecision {
+                    on: false,
+                    blocked_by: Some(if return_failed {
+                        Blocker::ReturnOff
+                    } else {
+                        Blocker::Interlock
+                    }),
+                };
+                driven[id.index()] = self.drive(id, false);
+            } else {
+                driven[id.index()] = self.drive(id, true);
+            }
+        }
 
         let mut outputs_changed = false;
         let mut on_changed = false;
-        let mut return_failed = false;
-        for id in [PumpId::Return, PumpId::Uv, PumpId::Makeup, PumpId::Drain] {
-            let mut decision = decisions[id.index()];
-
-            if id == PumpId::Uv && return_failed {
-                decision = ChannelDecision {
-                    on: false,
-                    blocked_by: Some(Blocker::ReturnOff),
-                };
-            }
-
-            let (on, fault) = self.drive(id, decision.on);
-
-            if id == PumpId::Return {
-                return_failed = fault.is_some();
-            }
-
-            let outcome = self.service.record(id, on, fault, decision.blocked_by);
+        for id in PumpId::ALL {
+            let (on, fault) = driven[id.index()];
+            let outcome = self
+                .service
+                .record(id, on, fault, decisions[id.index()].blocked_by);
             outputs_changed |= outcome.changed;
             on_changed |= outcome.on_changed;
         }
@@ -1222,15 +1501,21 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             self.last_checkpoint = Some(now);
         }
 
-        started || observed.changed || outputs_changed || starvation_changed
+        started || observed.changed || outputs_changed || starvation_changed || suspect_changed
     }
 
     fn drive(&mut self, id: PumpId, on: bool) -> (bool, Option<ChannelFault>) {
         match self.outputs.set(id, on) {
-            Ok(()) => (on, None),
+            Ok(()) => {
+                self.possibly_on[id.index()] = on;
+                (on, None)
+            }
             Err(reason) => {
-                tracing::error!(pump = id.name(), reason, "pump output failed");
-                (false, Some(ChannelFault::OutputError))
+                tracing::error!(pump = id.name(), on, reason, "pump output failed");
+                (
+                    self.possibly_on[id.index()],
+                    Some(ChannelFault::OutputError),
+                )
             }
         }
     }
@@ -1238,7 +1523,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
 
 pub async fn pump_loop<O, S, C>(
     mut controller: PumpController<O, S, C>,
-    mut levels: watch::Receiver<WaterLevelSnapshot>,
+    mut levels: watch::Receiver<Option<LevelSample>>,
     api_changed: Arc<Notify>,
     republish: Arc<Notify>,
     timing: PumpTiming,
@@ -1248,7 +1533,7 @@ pub async fn pump_loop<O, S, C>(
     S: PumpStore,
     C: Clock,
 {
-    let mut latest: Option<(WaterLevelSnapshot, Instant)> = None;
+    let mut latest: Option<LevelSample> = None;
     let mut closed = false;
     let mut ticker = tokio::time::interval(timing.tick);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -1259,7 +1544,7 @@ pub async fn pump_loop<O, S, C>(
         let api_wake = tokio::select! {
             received = levels.changed(), if !closed => {
                 match received {
-                    Ok(()) => latest = Some((levels.borrow_and_update().clone(), Instant::now())),
+                    Ok(()) => latest = levels.borrow_and_update().clone(),
                     Err(_) => {
                         closed = true;
                         latest = None;
@@ -1274,8 +1559,8 @@ pub async fn pump_loop<O, S, C>(
         let now = Instant::now();
         let fresh = latest
             .as_ref()
-            .filter(|(_, at)| now.saturating_duration_since(*at) < timing.level_stale)
-            .map(|(snapshot, _)| snapshot);
+            .filter(|sample| now.saturating_duration_since(sample.measured_at) < timing.level_stale)
+            .map(|sample| &sample.levels);
 
         if controller.tick(fresh, now) || api_wake {
             republish.notify_one();

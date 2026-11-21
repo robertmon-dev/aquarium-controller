@@ -38,6 +38,12 @@ impl Fields {
         let _ = write!(self.0, "{key}={value}i");
     }
 
+    fn optional_integer<T: fmt::Display>(&mut self, key: &str, value: Option<T>) {
+        if let Some(value) = value {
+            self.integer(key, value);
+        }
+    }
+
     fn boolean(&mut self, key: &str, value: bool) {
         self.separate();
         let _ = write!(self.0, "{key}={value}");
@@ -121,7 +127,7 @@ fn ato(snapshot: &TankTelemetryDto) -> Fields {
 fn health(snapshot: &TankTelemetryDto) -> Fields {
     let mut fields = Fields::new();
     fields.integer("uptime_s", snapshot.system_health.uptime_seconds);
-    fields.integer("rssi_dbm", snapshot.system_health.wifi_rssi_dbm);
+    fields.optional_integer("rssi_dbm", snapshot.system_health.wifi_rssi_dbm);
     fields.integer("free_heap_kb", snapshot.system_health.free_heap_kb);
     fields.string("mode", mode_name(&snapshot.system_mode));
     fields.boolean("leak", snapshot.leak_detected);
@@ -175,6 +181,7 @@ fn pumps(snapshot: &TankTelemetryDto) -> Fields {
     fields.integer("water_change_phase", water_change_phase(pumps));
     fields.boolean("top_off", topping_off);
     fields.boolean("circulation_starved", pumps.circulation_starved);
+    fields.boolean("level_sensors_suspect", pumps.level_sensors_suspect);
     fields
 }
 

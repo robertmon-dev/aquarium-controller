@@ -10,7 +10,7 @@ fn populated() -> TankTelemetryDto {
 
     dto.timestamp_epoch_s = 1_750_000_000;
     dto.system_health.uptime_seconds = 3600;
-    dto.system_health.wifi_rssi_dbm = -57;
+    dto.system_health.wifi_rssi_dbm = Some(-57);
     dto.system_health.free_heap_kb = 180;
 
     dto.temperature.tank_celsius = Some(26.5);
@@ -102,6 +102,20 @@ fn integers_carry_the_i_suffix() {
         encoded.contains("aquarium_health uptime_s=3600i,rssi_dbm=-57i,free_heap_kb=180i"),
         "got: {encoded}"
     );
+}
+
+#[test]
+fn an_unreadable_wifi_signal_is_omitted_rather_than_written_as_zero() {
+    let mut dto = populated();
+    dto.system_health.wifi_rssi_dbm = None;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("aquarium_health uptime_s=3600i,free_heap_kb=180i"),
+        "got: {encoded}"
+    );
+    assert!(!encoded.contains("rssi_dbm"), "got: {encoded}");
 }
 
 #[test]
@@ -315,6 +329,17 @@ fn the_heater_state_is_exported() {
 }
 
 #[test]
+fn an_output_error_counts_as_a_heater_fault() {
+    let mut dto = populated();
+    dto.heaters.tank.fault = Some(HeaterFault::OutputError);
+    dto.heaters.sump.fault = Some(HeaterFault::OverTemperature);
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(encoded.contains("heater_fault=2i"), "got: {encoded}");
+}
+
+#[test]
 fn the_ph_target_is_exported_when_configured() {
     let mut dto = populated();
     dto.co2.current_ph = Some(6.85);
@@ -408,13 +433,14 @@ fn the_pump_state_is_its_own_measurement() {
         operation_kind: Some(OperationKind::WaterChange),
         operation_state: OperationState::Draining,
         circulation_starved: false,
+        level_sensors_suspect: false,
     };
 
     let encoded = encode(&dto).expect("encodes");
 
     assert!(
         encoded.contains(
-            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false,circulation_starved=false 1750000000"
+            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false,circulation_starved=false,level_sensors_suspect=false 1750000000"
         ),
         "got: {encoded}"
     );
@@ -516,7 +542,19 @@ fn starved_circulation_is_a_pump_field() {
     dto.pumps.circulation_starved = true;
 
     let encoded = encode(&dto).expect("encodes");
-    assert!(encoded.contains(",circulation_starved=true "), "{encoded}");
+    assert!(encoded.contains(",circulation_starved=true,"), "{encoded}");
+}
+
+#[test]
+fn a_suspect_level_sensor_harness_is_a_pump_field() {
+    let mut dto = populated();
+    dto.pumps.level_sensors_suspect = true;
+
+    let encoded = encode(&dto).expect("encodes");
+    assert!(
+        encoded.contains(",level_sensors_suspect=true "),
+        "{encoded}"
+    );
 }
 
 #[test]

@@ -29,6 +29,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
+    sump_high: false,
 };
 
 fn parse<T: DeserializeOwned>(response: &str) -> T {
@@ -437,6 +438,58 @@ async fn refill_blockers_explain_themselves() {
                 too_soon.contains("the previous water change was too recent"),
                 "got: {too_soon}"
             );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_flooded_sump_or_tank_refuses_a_start() {
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            let water_change = body(
+                "POST",
+                WATER_CHANGE,
+                Some(TOKEN),
+                r#"{"drain_s":10,"refill_s":10}"#,
+            );
+            let top_off = body("POST", TOP_OFF, Some(TOKEN), r#"{"duration_s":60}"#);
+
+            pumps.observe(
+                Some(LevelConditions {
+                    sump_high: true,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+            for request in [&water_change, &top_off] {
+                let refused = raw(addr, request).await;
+                assert_status(&refused, 423);
+                assert!(
+                    refused.contains("a sump flood sensor is wet"),
+                    "got: {refused}"
+                );
+            }
+
+            pumps.observe(
+                Some(LevelConditions {
+                    tank_overflow: true,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+            let refused = raw(addr, &water_change).await;
+            assert_status(&refused, 423);
+            assert!(
+                refused.contains("the tank overflow sensor is wet"),
+                "got: {refused}"
+            );
+
+            let status: PumpsStatus = parse(&raw(addr, &get(STATUS, Some(TOKEN))).await);
+            assert!(!status.level_sensors_suspect);
         })
         .await;
 }

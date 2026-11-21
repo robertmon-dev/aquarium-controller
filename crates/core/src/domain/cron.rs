@@ -26,7 +26,11 @@ impl Firing {
     }
 
     pub fn repeats(&self, at: CivilTime, epoch: u64) -> bool {
-        Self::new(at, epoch).minute == self.minute && self.epoch.abs_diff(epoch) < REPEAT_HORIZON_S
+        Self::new(at, epoch).minute == self.minute && !self.expired(epoch)
+    }
+
+    pub const fn expired(&self, epoch: u64) -> bool {
+        self.epoch.abs_diff(epoch) >= REPEAT_HORIZON_S
     }
 }
 

@@ -92,6 +92,7 @@ pub struct LevelConditions {
     pub reservoir_ready: bool,
     pub tank_overflow: bool,
     pub sump_full: bool,
+    pub sump_high: bool,
 }
 
 impl LevelConditions {
@@ -111,6 +112,8 @@ impl LevelConditions {
             reservoir_ready: !dangerous(WaterLevelRole::ReservoirReady, WaterLevelState::Dry),
             tank_overflow: dangerous(WaterLevelRole::MainTank, WaterLevelState::Wet),
             sump_full: refill_stop.is_some_and(|role| dangerous(role, WaterLevelState::Wet)),
+            sump_high: dangerous(WaterLevelRole::SumpMechanical, WaterLevelState::Wet)
+                || dangerous(WaterLevelRole::SumpBiological, WaterLevelState::Wet),
         }
     }
 }
@@ -129,6 +132,9 @@ pub enum Blocker {
     RecentWaterChange,
     ReservoirLow,
     WaterChange,
+    SumpHigh,
+    Interlock,
+    LevelsUnavailableAfterDrain,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,10 +184,14 @@ pub struct DecisionInput {
     pub return_forced_off: bool,
     pub uv_forced_off: bool,
     pub phase: Option<Phase>,
+    pub return_held_after_drain: bool,
 }
 
 pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
     let return_pump = match input.levels {
+        _ if input.return_held_after_drain => {
+            ChannelDecision::blocked(Blocker::LevelsUnavailableAfterDrain)
+        }
         Some(_) if matches!(input.phase, Some(Phase::Draining | Phase::Settling)) => {
             ChannelDecision::blocked(Blocker::WaterChange)
         }
@@ -201,6 +211,7 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
         Some(levels) if levels.reservoir_empty => ChannelDecision::blocked(Blocker::ReservoirEmpty),
         Some(levels) if levels.tank_overflow => ChannelDecision::blocked(Blocker::TankOverflow),
         Some(levels) if levels.sump_full => ChannelDecision::blocked(Blocker::SumpFull),
+        Some(levels) if levels.sump_high => ChannelDecision::blocked(Blocker::SumpHigh),
         Some(_) if input.return_forced_off => ChannelDecision::blocked(Blocker::ReturnOff),
         Some(_) => ChannelDecision::running(input.phase == Some(Phase::Refilling)),
     };
@@ -592,12 +603,7 @@ pub struct OperationRecord {
 
 impl OperationRecord {
     pub fn graded(mut self, flows: FlowRates, sump_low: bool) -> Self {
-        let claims_full = matches!(
-            self.result,
-            OperationResult::Completed | OperationResult::SumpFull
-        );
-
-        if self.kind != OperationKind::WaterChange || !claims_full {
+        if self.kind != OperationKind::WaterChange || self.result != OperationResult::Completed {
             return self;
         }
 
@@ -635,6 +641,9 @@ pub struct Operation {
     #[serde(default)]
     pub refill_wall_ms: u64,
 
+    #[serde(default)]
+    pub drain_switched: bool,
+
     #[serde(skip)]
     pub refill_armed: bool,
 }
@@ -659,8 +668,13 @@ impl Operation {
             started_at,
             resumed: false,
             refill_wall_ms: 0,
+            drain_switched: false,
             refill_armed: false,
         }
+    }
+
+    pub fn drained(&self) -> bool {
+        self.drain_switched || self.ran_ms[Phase::Draining.index()] > 0
     }
 
     pub const fn ran_s(&self, phase: Phase) -> u32 {
@@ -712,6 +726,7 @@ impl Operation {
             {
                 Step::Finished(OperationResult::SumpFull)
             }
+            Phase::Refilling if levels.sump_high => Step::Finished(OperationResult::Overflow),
             Phase::Refilling if done => Step::Finished(OperationResult::Completed),
             Phase::Refilling if timed_out => Step::Finished(OperationResult::RefillTimeout),
             _ => Step::Continue,
@@ -737,6 +752,10 @@ impl Operation {
 
             if levels.tank_overflow {
                 return Err(Blocker::TankOverflow);
+            }
+
+            if levels.sump_high {
+                return Err(Blocker::SumpHigh);
             }
         }
 
@@ -816,6 +835,7 @@ pub struct OperationEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct StoredOverride {
+    #[serde(deserialize_with = "Option::deserialize")]
     pub expires_at: Option<u64>,
 }
 
@@ -839,7 +859,7 @@ impl LastOperations {
         match record.kind {
             OperationKind::TopOff => self.top_off = Some(record),
             OperationKind::WaterChange => {
-                if operation.ran_ms[Phase::Draining.index()] > 0 {
+                if operation.drained() {
                     self.drained_at = record.started_at;
                 }
                 self.water_change = Some(record);
@@ -970,6 +990,7 @@ impl OperationStatus {
 pub enum SkipReason {
     Busy,
     Blocked,
+    Storage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -995,6 +1016,9 @@ pub struct PumpsStatus {
     pub last_water_change: Option<OperationRecord>,
     pub last_skipped: Option<SkippedWindow>,
     pub circulation_starved: bool,
+    pub level_sensors_suspect: bool,
+    pub return_held_after_drain: bool,
+    pub invalidation_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1008,7 +1032,14 @@ pub struct PumpsTelemetry {
     pub drain: bool,
     pub operation_kind: Option<OperationKind>,
     pub operation_state: OperationState,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
     pub circulation_starved: bool,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
+    pub level_sensors_suspect: bool,
 }
 
 impl PumpsTelemetry {
@@ -1020,6 +1051,7 @@ impl PumpsTelemetry {
         operation_kind: None,
         operation_state: OperationState::Idle,
         circulation_starved: false,
+        level_sensors_suspect: false,
     };
 }
 

@@ -7,6 +7,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
+    sump_high: false,
 };
 
 fn snapshot(wet: &[WaterLevelRole], faulty: &[WaterLevelRole]) -> WaterLevelSnapshot {
@@ -86,6 +87,7 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
             reservoir_ready: false,
             tank_overflow: true,
             sump_full: false,
+            sump_high: false,
         }
     );
 }
@@ -1171,18 +1173,29 @@ fn change_record(drain_ran_s: u32, refill_ran_s: u32, result: OperationResult) -
 
 #[test]
 fn a_refill_that_added_less_than_seventy_percent_of_the_drain_is_incomplete() {
-    for result in [OperationResult::SumpFull, OperationResult::Completed] {
-        let short = change_record(100, 174, result).graded(FLOWS, false);
-        assert_eq!(short.result, OperationResult::Incomplete, "{result:?}");
+    let short = change_record(100, 174, OperationResult::Completed).graded(FLOWS, false);
+    assert_eq!(short.result, OperationResult::Incomplete);
 
-        let enough = change_record(100, 175, result).graded(FLOWS, false);
-        assert_eq!(enough.result, result);
+    let enough = change_record(100, 175, OperationResult::Completed).graded(FLOWS, false);
+    assert_eq!(enough.result, OperationResult::Completed);
+}
+
+#[test]
+fn a_refill_that_ended_on_the_stop_sensor_is_never_incomplete() {
+    for sump_low in [false, true] {
+        assert_eq!(
+            change_record(100, 0, OperationResult::SumpFull)
+                .graded(FLOWS, sump_low)
+                .result,
+            OperationResult::SumpFull
+        );
     }
 }
 
 #[test]
-fn only_refills_that_claim_success_are_graded() {
+fn only_refills_that_ran_out_their_time_are_graded() {
     for result in [
+        OperationResult::SumpFull,
         OperationResult::Overflow,
         OperationResult::ReservoirEmpty,
         OperationResult::Aborted,
@@ -1223,12 +1236,6 @@ fn a_refill_that_ends_with_the_sump_still_low_is_incomplete() {
     assert_eq!(
         change_record(100, 600, OperationResult::Completed)
             .graded(FlowRates::default(), true)
-            .result,
-        OperationResult::Incomplete
-    );
-    assert_eq!(
-        change_record(100, 600, OperationResult::SumpFull)
-            .graded(FLOWS, true)
             .result,
         OperationResult::Incomplete
     );
@@ -1328,4 +1335,160 @@ fn history_stored_before_the_gap_mark_falls_back_to_the_last_water_change() {
     )
     .expect("old history");
     assert_eq!(undrained.last_drain_started_at(), None);
+}
+
+#[test]
+fn the_flood_sensors_report_a_high_sump() {
+    for (wet, faulty) in [
+        (vec![WaterLevelRole::SumpMechanical], vec![]),
+        (vec![WaterLevelRole::SumpBiological], vec![]),
+        (vec![], vec![WaterLevelRole::SumpMechanical]),
+        (vec![], vec![WaterLevelRole::SumpBiological]),
+    ] {
+        let mut roles = vec![
+            WaterLevelRole::SumpPump,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::ReservoirReady,
+        ];
+        roles.extend(wet.iter().copied());
+        let levels = LevelConditions::from_snapshot(
+            &snapshot(&roles, &faulty),
+            Some(WaterLevelRole::SumpReturnLevel),
+        );
+        assert_eq!(
+            levels,
+            LevelConditions {
+                sump_high: true,
+                ..HEALTHY
+            },
+            "wet {wet:?} faulty {faulty:?}"
+        );
+    }
+}
+
+#[test]
+fn a_high_sump_blocks_the_makeup_after_a_full_one() {
+    let refilling = DecisionInput {
+        phase: Some(Phase::Refilling),
+        ..input(Some(HEALTHY))
+    };
+
+    let high = decide(DecisionInput {
+        levels: Some(LevelConditions {
+            sump_high: true,
+            ..HEALTHY
+        }),
+        ..refilling
+    });
+    assert!(!high[2].on);
+    assert_eq!(high[2].blocked_by, Some(Blocker::SumpHigh));
+    assert!(high[0].on && high[1].on);
+
+    let both = decide(DecisionInput {
+        levels: Some(LevelConditions {
+            sump_full: true,
+            sump_high: true,
+            ..HEALTHY
+        }),
+        ..refilling
+    });
+    assert_eq!(both[2].blocked_by, Some(Blocker::SumpFull));
+}
+
+#[test]
+fn a_high_sump_ends_any_refill_with_an_overflow() {
+    let high = LevelConditions {
+        sump_high: true,
+        ..HEALTHY
+    };
+
+    let mut top_off = Operation::start(OperationPlan::top_off(60), None);
+    assert_eq!(
+        top_off.advance(0, 0, Some(high)),
+        Step::Finished(OperationResult::Overflow)
+    );
+
+    let mut change = Operation::start(plan(1, 0, 60), None);
+    assert_eq!(
+        change.advance(SECOND, SECOND, Some(high)),
+        Step::PhaseChanged
+    );
+    assert_eq!(change.advance(0, 0, Some(high)), Step::PhaseChanged);
+    assert_eq!(
+        change.advance(0, 0, Some(high)),
+        Step::Finished(OperationResult::Overflow)
+    );
+
+    let mut armed = Operation::start(OperationPlan::top_off(60), None);
+    assert_eq!(
+        armed.advance(
+            0,
+            0,
+            Some(LevelConditions {
+                sump_full: true,
+                ..high
+            })
+        ),
+        Step::Finished(OperationResult::SumpFull)
+    );
+}
+
+#[test]
+fn a_high_sump_does_not_end_the_drain() {
+    let mut draining = Operation::start(plan(60, 0, 60), None);
+    assert_eq!(
+        draining.advance(
+            SECOND,
+            SECOND,
+            Some(LevelConditions {
+                sump_high: true,
+                ..HEALTHY
+            })
+        ),
+        Step::Continue
+    );
+}
+
+#[test]
+fn a_refill_does_not_resume_into_a_high_sump() {
+    let high = Some(LevelConditions {
+        sump_high: true,
+        ..HEALTHY
+    });
+
+    assert_eq!(
+        Operation::start(OperationPlan::top_off(10), None).ready_to_resume(high),
+        Err(Blocker::SumpHigh)
+    );
+    assert_eq!(
+        Operation::start(plan(10, 0, 10), None).ready_to_resume(high),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_high_sump_blocker_is_snake_case_on_the_wire() {
+    assert_eq!(
+        serde_json::to_string(&Blocker::SumpHigh).expect("encode"),
+        r#""sump_high""#
+    );
+}
+
+#[test]
+fn a_stored_override_needs_an_explicit_expiry() {
+    assert!(serde_json::from_str::<StoredOverride>("{}").is_err());
+    assert_eq!(
+        serde_json::from_str::<StoredOverride>(r#"{"expires_at":null}"#).expect("indefinite"),
+        StoredOverride { expires_at: None }
+    );
+    assert_eq!(
+        serde_json::from_str::<StoredOverride>(r#"{"expires_at":42}"#).expect("timed"),
+        StoredOverride {
+            expires_at: Some(42)
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&StoredOverride { expires_at: None }).expect("encode"),
+        r#"{"expires_at":null}"#
+    );
 }

@@ -17,4 +17,5 @@ ts-rs = { version = "12.0.1", optional = true }
 ts-export = ["dep:ts-rs"]
 
 [dev-dependencies]
+tracing = { version = "0.1", features = ["std"] }
 tokio = { version = "1.40", features = ["rt", "macros", "time", "net", "io-util", "sync", "test-util"] }
