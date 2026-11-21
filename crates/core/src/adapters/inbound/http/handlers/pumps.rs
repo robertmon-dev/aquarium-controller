@@ -197,5 +197,7 @@ const fn blocker_reason(blocker: Blocker) -> &'static str {
         Blocker::TankOverflow => "the tank overflow sensor is wet",
         Blocker::LevelsUnavailable => "water level readings are unavailable",
         Blocker::ReturnOff => "the return pump is off",
+        Blocker::SumpFull => "the sump is full",
+        Blocker::RecentWaterChange => "the previous water change was too recent",
     }
 }
