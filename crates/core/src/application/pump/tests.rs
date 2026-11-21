@@ -25,6 +25,7 @@ const EPOCH: u64 = 1_700_000_000;
 const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
+    reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
 };
@@ -334,6 +335,37 @@ fn operations_need_levels_and_respect_blockers() {
 }
 
 #[test]
+fn a_water_change_needs_a_ready_reservoir_but_a_top_off_does_not() {
+    let (service, _store) = service_and_store();
+    observe(
+        &service,
+        Some(LevelConditions {
+            reservoir_ready: false,
+            ..HEALTHY
+        }),
+    );
+
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::ReservoirLow))
+    );
+    assert_eq!(service.start_top_off(60), Ok(()));
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::ReservoirLow))
+    );
+    assert_eq!(
+        service.status().operation.kind,
+        Some(OperationKind::TopOff),
+        "a refused water change must not abort the running top-off"
+    );
+    service.cancel(OperationKind::TopOff);
+
+    observe(&service, Some(HEALTHY));
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
 fn a_water_change_preempts_a_top_off_but_not_the_other_way_round() {
     let (service, store) = service_and_store();
     observe(&service, Some(HEALTHY));
@@ -408,7 +440,11 @@ fn snapshot(wet: &[WaterLevelRole]) -> WaterLevelSnapshot {
 }
 
 fn healthy() -> WaterLevelSnapshot {
-    snapshot(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve])
+    snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+    ])
 }
 
 fn seed_checkpoint(store: &VolatilePumpStore, operation: Operation, checkpoint_at: Option<u64>) {
@@ -839,6 +875,27 @@ fn a_long_outage_suspends_until_resumed_over_the_api() {
 
     rig.tick(Some(&healthy));
     assert_eq!(rig.pins(), [true, true, false, true]);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Draining
+    );
+}
+
+#[test]
+fn resuming_a_water_change_does_not_need_a_ready_reservoir() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 4000), Some(EPOCH - 3600));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    let reservoir_low = snapshot(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve]);
+
+    rig.tick(Some(&reservoir_low));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Suspended
+    );
+
+    assert_eq!(rig.service.resume(OperationKind::WaterChange), Ok(()));
+    rig.tick(Some(&reservoir_low));
     assert_eq!(
         rig.service.status().operation.state,
         OperationState::Draining
@@ -1699,6 +1756,35 @@ fn a_scheduled_water_change_too_soon_is_skipped() {
     assert_eq!(skipped.kind, OperationKind::WaterChange);
     assert_eq!(skipped.reason, SkipReason::Blocked);
     assert_eq!(skipped.blocked_by, Some(Blocker::RecentWaterChange));
+}
+
+#[test]
+fn a_scheduled_water_change_is_skipped_while_the_reservoir_is_low() {
+    let mut rig = Rig::new();
+    let reservoir_low = snapshot(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve]);
+    rig.service
+        .apply_settings(PumpSettingsPatch {
+            water_change: Some(vec![crate::domain::pump::WaterChangeWindow {
+                cron: "0 10 * * sun".into(),
+                drain_s: 10,
+                settle_s: 0,
+                refill_s: 10,
+            }]),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+
+    rig.tick(Some(&reservoir_low));
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&reservoir_low));
+
+    let status = rig.service.status();
+    assert_eq!(status.operation.state, OperationState::Idle);
+    let skipped = status.last_skipped.expect("skipped");
+    assert_eq!(skipped.kind, OperationKind::WaterChange);
+    assert_eq!(skipped.reason, SkipReason::Blocked);
+    assert_eq!(skipped.blocked_by, Some(Blocker::ReservoirLow));
+    assert_eq!(rig.pins(), [true, true, false, false]);
 }
 
 #[test]

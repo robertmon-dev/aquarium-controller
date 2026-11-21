@@ -83,6 +83,7 @@ impl FromStr for PumpId {
 pub struct LevelConditions {
     pub sump_low: bool,
     pub reservoir_empty: bool,
+    pub reservoir_ready: bool,
     pub tank_overflow: bool,
     pub sump_full: bool,
 }
@@ -100,6 +101,7 @@ impl LevelConditions {
         Self {
             sump_low: dangerous(WaterLevelRole::SumpPump, WaterLevelState::Dry),
             reservoir_empty: dangerous(WaterLevelRole::SumpReserve, WaterLevelState::Dry),
+            reservoir_ready: false,
             tank_overflow: dangerous(WaterLevelRole::MainTank, WaterLevelState::Wet),
             sump_full: refill_stop.is_some_and(|role| dangerous(role, WaterLevelState::Wet)),
         }
@@ -118,6 +120,7 @@ pub enum Blocker {
     ReturnOff,
     SumpFull,
     RecentWaterChange,
+    ReservoirLow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
