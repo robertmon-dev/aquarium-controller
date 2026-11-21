@@ -1,13 +1,16 @@
 use std::time::Duration;
 
+use aquarium_core::application::PumpTiming;
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
+use aquarium_core::domain::pump::PumpSettings;
 use aquarium_core::protocol::ads1115::{Channel, DataRate, Gain, DEFAULT_ADDRESS};
 use aquarium_core::secret::Secret;
 use esp_idf_svc::wifi::AuthMethod;
 
 use crate::adapters::outbound::ds18b20::RomAddress;
 use crate::adapters::outbound::influx::InfluxSettings;
+use crate::adapters::outbound::relay::Contact;
 use crate::adapters::outbound::xkc_y25::{FilterConfig, Polarity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +41,7 @@ pub struct ComponentSettings {
     pub ph: ComponentMode,
     pub tds: ComponentMode,
     pub heaters: ComponentMode,
+    pub pumps: ComponentMode,
     pub health: ComponentMode,
 }
 
@@ -46,17 +50,28 @@ pub enum RunMode {
     Normal,
     RomDiscovery,
     AdcProbe,
+    SsrProbe,
+    RelayProbe,
 }
 
 #[derive(Debug)]
 pub struct Settings {
     pub run_mode: RunMode,
+    pub timezone: &'static str,
     pub components: ComponentSettings,
     pub wifi: WifiSettings,
     pub http: HttpSettings,
     pub sensors: SensorSettings,
     pub influx: Option<InfluxSettings>,
     pub heaters: HeaterControlSettings,
+    pub pumps: PumpControlSettings,
+}
+
+#[derive(Debug)]
+pub struct PumpControlSettings {
+    pub contacts: [Contact; 4],
+    pub timing: PumpTiming,
+    pub defaults: PumpSettings,
 }
 
 #[derive(Debug)]
@@ -119,6 +134,7 @@ impl Settings {
     pub const fn from_env() -> Self {
         Self {
             run_mode: RunMode::Normal,
+            timezone: "CET-1CEST,M3.5.0,M10.5.0/3",
             components: ComponentSettings {
                 wifi: ComponentMode::Running,
                 http: ComponentMode::Running,
@@ -129,6 +145,7 @@ impl Settings {
                 ph: ComponentMode::Off,
                 tds: ComponentMode::Off,
                 heaters: ComponentMode::Off,
+                pumps: ComponentMode::Off,
                 health: ComponentMode::Running,
             },
             wifi: WifiSettings {
@@ -192,6 +209,22 @@ impl Settings {
                     cutoff_celsius: 30.0,
                 },
                 watchdog: Duration::from_secs(6),
+            },
+            pumps: PumpControlSettings {
+                contacts: [
+                    Contact::NormallyClosed,
+                    Contact::NormallyClosed,
+                    Contact::NormallyOpen,
+                    Contact::NormallyOpen,
+                ],
+                timing: PumpTiming {
+                    return_restart_delay: Duration::from_secs(30),
+                    level_stale: Duration::from_secs(1),
+                    tick: Duration::from_secs(1),
+                    checkpoint_interval: Duration::from_secs(10),
+                    runtime_flush: Duration::from_secs(600),
+                },
+                defaults: PumpSettings::DEFAULT,
             },
         }
     }

@@ -9,15 +9,18 @@ use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
 use aquarium_core::application::{
-    heater_loop, CalibrationService, HeaterController, HeaterService, MetricsExporter,
-    TelemetryCollector, TelemetryConfig, TelemetrySources, WaterLevelSampler,
+    heater_loop, pump_loop, CalibrationService, HeaterController, HeaterService, MetricsExporter,
+    PumpController, PumpService, TelemetryCollector, TelemetryConfig, TelemetrySources,
+    WaterLevelSampler,
 };
+use aquarium_core::domain::heater::HeaterId;
 use aquarium_core::domain::metrics::TankTelemetryDto;
+use aquarium_core::domain::pump::{OperationEvent, PumpId};
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
-    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, MetricsWriter, PhReader,
-    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader,
-    WaterLevelPins, WaterLevelSink, WaterLevelSource,
+    CalibrationSource, Clock, HeaterOutputs, HeaterStatusSource, LightingOverrideSource,
+    MetricsWriter, PhReader, ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader,
+    TelemetrySink, TemperatureReader, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -32,7 +35,7 @@ use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::{self, link_patches};
 use tokio::net::TcpListener;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::LocalSet;
 use tokio::time::{sleep, MissedTickBehavior};
 use tracing::{error, info};
@@ -42,6 +45,8 @@ use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBu
 use aquarium_controller::adapters::outbound::influx::InfluxWriter;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::nvs_heater::NvsHeaterSettings;
+use aquarium_controller::adapters::outbound::nvs_pump::NvsPumpStore;
+use aquarium_controller::adapters::outbound::relay::RelayOutputs;
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
@@ -133,6 +138,26 @@ async fn run() -> anyhow::Result<()> {
         return probe_adc(&mut front_end).await;
     }
 
+    if matches!(SETTINGS.run_mode, RunMode::SsrProbe) {
+        let mut outputs = SsrOutputs::new(peripherals.pins.gpio17, peripherals.pins.gpio18)
+            .context("Failed to initialize the heater SSR outputs")?;
+
+        return probe_ssr(&mut outputs).await;
+    }
+
+    if matches!(SETTINGS.run_mode, RunMode::RelayProbe) {
+        let mut relays = RelayOutputs::new(
+            peripherals.pins.gpio5,
+            peripherals.pins.gpio6,
+            peripherals.pins.gpio7,
+            peripherals.pins.gpio16,
+            SETTINGS.pumps.contacts,
+        )
+        .context("Failed to initialize the pump relay outputs")?;
+
+        return probe_relays(&mut relays).await;
+    }
+
     let temperature = if components.temperature.is_initialized() {
         let bus =
             OneWireBus::new(peripherals.pins.gpio4).context("Failed to initialize 1-Wire bus")?;
@@ -177,6 +202,8 @@ async fn run() -> anyhow::Result<()> {
         }
         (None, _) => None,
     };
+
+    let clock = Arc::new(SystemClock::new(SETTINGS.timezone).context("Failed to start SNTP")?);
 
     let store = Arc::new(InMemoryTelemetryStore::new());
     let lighting = Arc::new(InMemoryLightingStore::new());
@@ -228,7 +255,7 @@ async fn run() -> anyhow::Result<()> {
 
     let heaters = Arc::new(HeaterService::new(
         SETTINGS.heaters.defaults,
-        NvsHeaterSettings::new(nvs_partition)
+        NvsHeaterSettings::new(nvs_partition.clone())
             .context("Failed to open the heater namespace in NVS")?,
     ));
     let heaters_republish = Arc::new(Notify::new());
@@ -258,6 +285,51 @@ async fn run() -> anyhow::Result<()> {
         }
         (Some(outputs), false) => {
             info!("Heater outputs held low but not controlled");
+            (None, Some(outputs))
+        }
+        (None, _) => (None, None),
+    };
+
+    let (pump_events, pump_events_rx) = mpsc::unbounded_channel::<OperationEvent>();
+    let pumps = Arc::new(PumpService::new(
+        SETTINGS.pumps.defaults.clone(),
+        NvsPumpStore::new(nvs_partition).context("Failed to open the pump namespace in NVS")?,
+        Arc::clone(&clock),
+        Some(pump_events),
+    ));
+    let pumps_republish = Arc::new(Notify::new());
+
+    let relays = if components.pumps.is_initialized() {
+        Some(
+            RelayOutputs::new(
+                peripherals.pins.gpio5,
+                peripherals.pins.gpio6,
+                peripherals.pins.gpio7,
+                peripherals.pins.gpio16,
+                SETTINGS.pumps.contacts,
+            )
+            .context("Failed to initialize the pump relay outputs")?,
+        )
+    } else {
+        None
+    };
+
+    let (pump_task, _idle_relays) = match (relays, components.pumps.is_running()) {
+        (Some(outputs), true) => {
+            info!("Pump control running");
+            (
+                Some(pump_loop(
+                    PumpController::new(outputs, Arc::clone(&pumps), SETTINGS.pumps.timing),
+                    levels.subscribe(),
+                    pumps.change_signal(),
+                    Arc::clone(&pumps_republish),
+                    SETTINGS.pumps.timing,
+                )),
+                None,
+            )
+        }
+        (Some(outputs), false) => {
+            info!("Pump relays held released but not controlled");
             (None, Some(outputs))
         }
         (None, _) => (None, None),
@@ -293,18 +365,17 @@ async fn run() -> anyhow::Result<()> {
     };
 
     let collector = if components.telemetry.is_initialized() {
-        let clock = SystemClock::new().context("Failed to start SNTP")?;
-
         Some(TelemetryCollector::new(
             TelemetrySources {
                 temperature,
-                clock,
+                clock: Arc::clone(&clock),
                 health: EspSystemHealth,
                 overrides: Arc::clone(&lighting),
                 levels: Arc::clone(&levels),
                 analog,
                 calibration: Arc::clone(&calibration),
                 heaters: Arc::clone(&heaters),
+                pumps: Arc::clone(&pumps),
             },
             Arc::clone(&store),
             TelemetryConfig {
@@ -321,6 +392,7 @@ async fn run() -> anyhow::Result<()> {
             collector,
             lighting.change_signal(),
             Arc::clone(&heaters_republish),
+            Arc::clone(&pumps_republish),
         )),
         (Some(_), false) => {
             info!("Telemetry collector built but not sampling");
@@ -343,6 +415,7 @@ async fn run() -> anyhow::Result<()> {
                         influx.batch_max_snapshots,
                     ),
                     store.subscribe(),
+                    pump_events_rx,
                     influx.retry_backoff,
                 ))
             } else {
@@ -376,6 +449,7 @@ async fn run() -> anyhow::Result<()> {
             Arc::clone(&lighting),
             Arc::clone(&calibration),
             Arc::clone(&heaters),
+            Arc::clone(&pumps),
             HttpConfig {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
@@ -398,6 +472,7 @@ async fn run() -> anyhow::Result<()> {
         optional(export_loop),
         optional(server),
         optional(heater_task),
+        optional(pump_task),
         optional(wifi_loop),
         optional(health_loop),
     );
@@ -417,28 +492,27 @@ async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
 async fn export_task<W>(
     mut exporter: MetricsExporter<W>,
     mut rx: watch::Receiver<TankTelemetryDto>,
+    mut events: mpsc::UnboundedReceiver<OperationEvent>,
     backoff: Duration,
 ) where
     W: MetricsWriter,
 {
     loop {
-        let snapshot = if exporter.pending() > 0 {
-            match tokio::time::timeout(backoff, rx.changed()).await {
-                Ok(Ok(())) => Some(rx.borrow_and_update().clone()),
-                Ok(Err(_)) => return,
-                Err(_) => None,
-            }
-        } else {
-            match rx.changed().await {
-                Ok(()) => Some(rx.borrow_and_update().clone()),
-                Err(_) => return,
-            }
-        };
+        let retrying = exporter.pending() > 0;
 
-        if let Some(snapshot) = snapshot {
-            if !exporter.enqueue(&snapshot) {
-                continue;
+        tokio::select! {
+            changed = rx.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+
+                let snapshot = rx.borrow_and_update().clone();
+                exporter.enqueue(&snapshot);
             }
+            Some(event) = events.recv() => {
+                exporter.enqueue_operation(&event);
+            }
+            () = tokio::time::sleep(backoff), if retrying => {}
         }
 
         while exporter.pending() > 0 {
@@ -465,10 +539,11 @@ where
     }
 }
 
-async fn sensor_task<R, C, H, S, O, W, A, K, T>(
-    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T>,
+async fn sensor_task<R, C, H, S, O, W, A, K, T, P>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T, P>,
     lighting_changed: Arc<Notify>,
     heaters_changed: Arc<Notify>,
+    pumps_changed: Arc<Notify>,
 ) where
     R: TemperatureReader,
     C: Clock,
@@ -479,6 +554,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K, T>(
     A: PhReader + TdsReader,
     K: CalibrationSource,
     T: HeaterStatusSource,
+    P: PumpStatusSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -488,6 +564,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K, T>(
             _ = ticker.tick() => collector.sample().await,
             _ = lighting_changed.notified() => collector.republish(),
             _ = heaters_changed.notified() => collector.republish(),
+            _ = pumps_changed.notified() => collector.republish(),
         }
     }
 }
@@ -526,6 +603,47 @@ async fn probe_adc(front_end: &mut AnalogFrontEnd<'_>) -> anyhow::Result<()> {
             match front_end.probe(channel).await {
                 Ok((raw, volts)) => info!(raw, volts, "{label}"),
                 Err(reason) => error!(reason, "{label}"),
+            }
+        }
+    }
+}
+
+async fn probe_ssr(outputs: &mut SsrOutputs<'_>) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(PROBE_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    info!("SSR probe: GPIO17 is the tank SSR, GPIO18 is the sump SSR");
+
+    let mut on = false;
+
+    loop {
+        ticker.tick().await;
+        on = !on;
+
+        for id in HeaterId::ALL {
+            match outputs.set(id, on) {
+                Ok(()) => info!(heater = id.name(), on, "SSR"),
+                Err(reason) => error!(heater = id.name(), reason, "SSR"),
+            }
+        }
+    }
+}
+
+async fn probe_relays(relays: &mut RelayOutputs<'_>) -> anyhow::Result<()> {
+    let mut ticker = tokio::time::interval(PROBE_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    info!("Relay probe: IN1 GPIO5 return, IN2 GPIO6 uv, IN3 GPIO7 makeup, IN4 GPIO16 drain");
+
+    loop {
+        for id in PumpId::ALL {
+            for coil in [true, false] {
+                ticker.tick().await;
+
+                match relays.set_coil(id, coil) {
+                    Ok(()) => info!(channel = id.name(), coil, "relay"),
+                    Err(reason) => error!(channel = id.name(), reason, "relay"),
+                }
             }
         }
     }
