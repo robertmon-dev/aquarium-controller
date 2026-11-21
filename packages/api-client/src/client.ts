@@ -1,6 +1,7 @@
 import type {
   Calibration,
   CalibrationPatch,
+  ChannelStatus,
   HeaterId,
   HeaterSettings,
   HeaterSettingsPatch,
@@ -9,12 +10,21 @@ import type {
   LightingOverride,
   LightingScheduleDto,
   ProbeVoltagesDto,
+  PumpId,
+  PumpSettings,
+  PumpSettingsPatch,
+  PumpsStatus,
   SetHeaterOverrideRequest,
   SetOverrideRequest,
+  SetPumpOverrideRequest,
+  StartTopOffRequest,
   SystemHealthDto,
   TankTelemetryDto,
+  WaterChangePlan,
 } from "./generated";
 import { request, type Transport } from "./transport";
+
+export type OverridablePump = Extract<PumpId, "return" | "uv">;
 
 export interface DeviceClient {
   telemetry: () => Promise<TankTelemetryDto>;
@@ -34,6 +44,21 @@ export interface DeviceClient {
     body: SetHeaterOverrideRequest,
   ) => Promise<HeaterStatus>;
   clearHeaterOverride: (id: HeaterId) => Promise<void>;
+  pumps: () => Promise<PumpsStatus>;
+  pumpSettings: () => Promise<PumpSettings>;
+  patchPumpSettings: (body: PumpSettingsPatch) => Promise<PumpSettings>;
+  setPumpOverride: (
+    id: OverridablePump,
+    body: SetPumpOverrideRequest,
+  ) => Promise<ChannelStatus>;
+  clearPumpOverride: (id: OverridablePump) => Promise<void>;
+  resetPumpRuntime: (id: PumpId) => Promise<void>;
+  startTopOff: (body: StartTopOffRequest) => Promise<void>;
+  resumeTopOff: () => Promise<void>;
+  cancelTopOff: () => Promise<void>;
+  startWaterChange: (body: WaterChangePlan) => Promise<void>;
+  resumeWaterChange: () => Promise<void>;
+  cancelWaterChange: () => Promise<void>;
 }
 
 export const createClient = (transport: Transport): DeviceClient => {
@@ -96,5 +121,59 @@ export const createClient = (transport: Transport): DeviceClient => {
       request<void>(transport, `/api/heaters/${id}/override`, {
         method: "DELETE",
       }),
+
+    pumps: () => request<PumpsStatus>(transport, "/api/pumps"),
+
+    pumpSettings: () => request<PumpSettings>(transport, "/api/pumps/settings"),
+
+    patchPumpSettings: (body) =>
+      request<PumpSettings>(transport, "/api/pumps/settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+    setPumpOverride: (id, body) =>
+      request<ChannelStatus>(transport, `/api/pumps/${id}/override`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+
+    clearPumpOverride: (id) =>
+      request<void>(transport, `/api/pumps/${id}/override`, {
+        method: "DELETE",
+      }),
+
+    resetPumpRuntime: (id) =>
+      request<void>(transport, `/api/pumps/${id}/runtime/reset`, {
+        method: "POST",
+      }),
+
+    startTopOff: (body) =>
+      request<void>(transport, "/api/pumps/top-off", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    resumeTopOff: () =>
+      request<void>(transport, "/api/pumps/top-off/resume", {
+        method: "POST",
+      }),
+
+    cancelTopOff: () =>
+      request<void>(transport, "/api/pumps/top-off", { method: "DELETE" }),
+
+    startWaterChange: (body) =>
+      request<void>(transport, "/api/water-change", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+
+    resumeWaterChange: () =>
+      request<void>(transport, "/api/water-change/resume", {
+        method: "POST",
+      }),
+
+    cancelWaterChange: () =>
+      request<void>(transport, "/api/water-change", { method: "DELETE" }),
   };
 };

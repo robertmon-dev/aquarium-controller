@@ -11,6 +11,68 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("createClient", () => {
+  it("starts a water change and treats 202 as done", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    const client = createClient({ device, fetchImpl });
+
+    await client.startWaterChange({
+      drain_s: 300,
+      settle_s: 30,
+      refill_s: 420,
+    });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/water-change");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      drain_s: 300,
+      settle_s: 30,
+      refill_s: 420,
+    });
+  });
+
+  it("puts a pump override on the pump's own path", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        on: false,
+        mode: "manual_off",
+        override_expires_in_s: null,
+        fault: null,
+        blocked_by: null,
+        runtime_s: 0,
+        runtime_reset_at: null,
+      }),
+    );
+    const client = createClient({ device, fetchImpl });
+
+    await client.setPumpOverride("uv", { duration_s: null });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/pumps/uv/override");
+    expect(init.method).toBe("PUT");
+  });
+
+  it("cancels a top-off and resets a runtime counter", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const client = createClient({ device, fetchImpl });
+
+    await client.cancelTopOff();
+    await client.resetPumpRuntime("uv");
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe(
+      "http://10.0.0.2:80/api/pumps/top-off",
+    );
+    expect(fetchImpl.mock.calls[0]![1].method).toBe("DELETE");
+    expect(fetchImpl.mock.calls[1]![0]).toBe(
+      "http://10.0.0.2:80/api/pumps/uv/runtime/reset",
+    );
+    expect(fetchImpl.mock.calls[1]![1].method).toBe("POST");
+  });
+
   it("gets a telemetry snapshot", async () => {
     const fetchImpl = vi
       .fn()
