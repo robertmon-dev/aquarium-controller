@@ -26,6 +26,7 @@ const WATER_CHANGE: &str = "/api/water-change";
 const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
+    reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
 };
@@ -370,6 +371,47 @@ async fn refill_blockers_explain_themselves() {
                 too_soon.contains("the previous water change was too recent"),
                 "got: {too_soon}"
             );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_water_change_is_refused_while_the_reservoir_is_low() {
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            pumps.observe(
+                Some(LevelConditions {
+                    reservoir_ready: false,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+
+            let low = raw(
+                addr,
+                &body(
+                    "POST",
+                    WATER_CHANGE,
+                    Some(TOKEN),
+                    r#"{"drain_s":10,"refill_s":10}"#,
+                ),
+            )
+            .await;
+            assert_status(&low, 423);
+            assert!(
+                low.contains("the makeup reservoir does not hold enough for a water change"),
+                "got: {low}"
+            );
+
+            let top_off = raw(
+                addr,
+                &body("POST", TOP_OFF, Some(TOKEN), r#"{"duration_s":60}"#),
+            )
+            .await;
+            assert_status(&top_off, 202);
         })
         .await;
 }
