@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aquarium_core::domain::cron::CivilTime;
@@ -17,14 +18,28 @@ pub struct SystemClock {
     sntp_enabled: bool,
 }
 
-struct SntpStatus;
+#[derive(Default)]
+struct SntpStatus {
+    synced: AtomicBool,
+}
 
 impl SntpStatus {
     fn is_synced(&self) -> bool {
-        matches!(
+        if self.synced.load(Ordering::Relaxed) {
+            return true;
+        }
+
+        let completed = matches!(
             SyncStatus::from(unsafe { esp_idf_svc::sys::sntp_get_sync_status() }),
             SyncStatus::Completed
-        )
+        );
+
+        if completed {
+            self.synced.store(true, Ordering::Relaxed);
+            info!("SNTP time synchronized");
+        }
+
+        completed
     }
 }
 
@@ -45,7 +60,7 @@ impl SystemClock {
         Ok(Self {
             _sntp: sntp,
             booted_at: SystemTime::now(),
-            sntp_handle: SntpStatus,
+            sntp_handle: SntpStatus::default(),
             sntp_enabled: start_sntp,
         })
     }
