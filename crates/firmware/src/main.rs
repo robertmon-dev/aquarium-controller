@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ use aquarium_core::protocol::ds18b20::{
 use esp_idf_hal::gpio::{InputPin, OutputPin};
 use esp_idf_hal::i2c::{I2c, I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_hal::task::watchdog::{TWDTConfig, TWDTDriver};
 use esp_idf_hal::units::FromValueType;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::io::vfs::MountedEventfs;
@@ -38,7 +40,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::LocalSet;
 use tokio::time::{sleep, MissedTickBehavior};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
@@ -58,6 +60,9 @@ use aquarium_controller::settings::{RunMode, Settings};
 const SETTINGS: Settings = Settings::from_env();
 
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
+
+const PUMP_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+const PUMP_WATCHDOG_CHECK: Duration = Duration::from_secs(2);
 
 const I2C_BAUDRATE_KHZ: u32 = 400;
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
@@ -322,6 +327,25 @@ async fn run() -> anyhow::Result<()> {
         pump_events,
     ));
     let pumps_republish = Arc::new(Notify::new());
+    let pump_heartbeat = Arc::new(AtomicU32::new(0));
+
+    let pump_watchdog_task = if components.pumps.is_running() {
+        let config = TWDTConfig {
+            duration: PUMP_WATCHDOG_TIMEOUT,
+            panic_on_trigger: true,
+            subscribed_idle_tasks: Default::default(),
+        };
+
+        match TWDTDriver::new(peripherals.twdt, &config) {
+            Ok(driver) => Some(pump_watchdog(driver, Arc::clone(&pump_heartbeat))),
+            Err(error) => {
+                error!(%error, "Pump watchdog unavailable");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let (pump_task, _idle_relays) = match (relays, components.pumps.is_running()) {
         (Some(outputs), true) => {
@@ -333,6 +357,7 @@ async fn run() -> anyhow::Result<()> {
                     pumps.change_signal(),
                     Arc::clone(&pumps_republish),
                     SETTINGS.pumps.timing,
+                    Arc::clone(&pump_heartbeat),
                 )),
                 None,
             )
@@ -482,6 +507,7 @@ async fn run() -> anyhow::Result<()> {
         optional(server),
         optional(heater_task),
         optional(pump_task),
+        optional(pump_watchdog_task),
         optional(wifi_loop),
         optional(health_loop),
     );
@@ -495,6 +521,44 @@ async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
             task.await;
         }
         None => core::future::pending::<()>().await,
+    }
+}
+
+async fn pump_watchdog(mut driver: TWDTDriver<'static>, heartbeat: Arc<AtomicU32>) {
+    let mut subscription = match driver.watch_current_task() {
+        Ok(subscription) => subscription,
+        Err(error) => {
+            error!(%error, "Pump watchdog could not watch the main task");
+            return;
+        }
+    };
+
+    info!(
+        timeout_s = PUMP_WATCHDOG_TIMEOUT.as_secs(),
+        "Pump watchdog armed"
+    );
+
+    let mut ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + PUMP_WATCHDOG_CHECK,
+        PUMP_WATCHDOG_CHECK,
+    );
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut last_beat = heartbeat.load(Ordering::Relaxed);
+
+    loop {
+        ticker.tick().await;
+        let beat = heartbeat.load(Ordering::Relaxed);
+
+        if beat == last_beat {
+            warn!("Pump loop heartbeat stalled, watchdog not fed");
+            continue;
+        }
+
+        last_beat = beat;
+
+        if let Err(error) = subscription.feed() {
+            error!(%error, "Pump watchdog feed failed");
+        }
     }
 }
 
