@@ -25,7 +25,7 @@ const SLACK_L: f64 = 0.1;
 const SEED: u64 = 0xF1A9;
 const RESTART_DELAY_S: f64 = 30.0;
 const MIN_MAKEUP_BURST_S: f64 = 5.0;
-const BOOT_LOCKOUT_S: f64 = 32.0;
+const BOOT_SETTLE_S: f64 = 32.0;
 const LITRES_TOL: f64 = 0.6;
 const BALANCE_TOL: f64 = 1e-6;
 const EPS_S: f64 = 1e-6;
@@ -74,8 +74,8 @@ async fn start(wave_cm: f64) -> Sim {
 }
 
 async fn settle_boot(sim: &Sim) {
-    sim.run_until(secs(60), "the boot lockout to clear", |_, water| {
-        water.t_s >= BOOT_LOCKOUT_S && water.pump_on(PumpId::Return)
+    sim.run_until(secs(60), "the boot to settle", |_, water| {
+        water.t_s >= BOOT_SETTLE_S && water.pump_on(PumpId::Return)
     })
     .await;
 }
@@ -90,45 +90,43 @@ fn min_restart_gap_s(water: &sim::Aquarium, after_s: f64) -> Option<f64> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn filtered_sensors_hold_the_return_off_for_the_lockout_after_every_boot() {
+async fn filtered_sensors_keep_the_return_running_through_every_boot() {
     LocalSet::new()
         .run_until(async {
             let mut sim = start(0.0).await;
-            sim.run_for(secs(1)).await;
-            {
-                let water = sim.water();
-                assert!(!water.pump_on(PumpId::Return) && !water.pump_on(PumpId::Uv));
-            }
-
-            let on = sim
-                .run_until(secs(60), "the return to restart", |_, water| {
-                    water.pump_on(PumpId::Return)
+            let available = sim
+                .run_until(secs(5), "the first level snapshot", |status, _| {
+                    status.channels.makeup.blocked_by != Some(Blocker::LevelsUnavailable)
                 })
                 .await;
             assert!(
-                (RESTART_DELAY_S + debounce_s() - STEP.as_secs_f64()..=BOOT_LOCKOUT_S)
-                    .contains(&on),
-                "return back {on:.1} s after boot"
+                available <= debounce_s() + STEP.as_secs_f64(),
+                "levels published {available:.1} s after boot"
             );
+            sim.run_for(secs(BOOT_SETTLE_S as u64)).await;
 
             sim.restart(secs(2), true).await;
             let booted = sim.water().t_s;
-            sim.run_for(secs(1)).await;
-            assert!(!sim.water().pump_on(PumpId::Return));
-            let on = sim
-                .run_until(secs(60), "the return to restart", |_, water| {
-                    water.pump_on(PumpId::Return)
+            let available = sim
+                .run_until(secs(5), "the first level snapshot", |status, _| {
+                    status.channels.makeup.blocked_by != Some(Blocker::LevelsUnavailable)
                 })
                 .await;
             assert!(
-                (RESTART_DELAY_S + debounce_s() - STEP.as_secs_f64()..=BOOT_LOCKOUT_S)
-                    .contains(&(on - booted)),
-                "return back {:.1} s after the reboot",
-                on - booted
+                available - booted <= debounce_s() + STEP.as_secs_f64(),
+                "levels published {:.1} s after the reboot",
+                available - booted
             );
+            sim.run_for(secs(BOOT_SETTLE_S as u64)).await;
 
+            let status = sim.service.status();
+            assert_eq!(status.channels.return_pump.blocked_by, None);
+            assert!(!status.circulation_starved);
             let water = sim.water();
-            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 2);
+            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 0);
+            assert_eq!(water.count(Event::Pump(PumpId::Uv, false)), 0);
+            assert!(water.pump_on(PumpId::Return) && water.pump_on(PumpId::Uv));
+            assert_eq!(water.tank_l, water.layout.tank_weir_l);
             assert_eq!(water.return_dry_s, 0.0);
             assert_eq!(water.spilled_l, 0.0);
         })
@@ -156,10 +154,13 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
         .start_water_change(PLAN)
         .expect("water change started");
 
+    let carried = roles(sim.published().sensors.map(|reading| reading.faulty));
     let mut faulty_during = [false; WaterLevelRole::COUNT];
-    sim.run_until(LONG, "the water change to finish", |status, _| {
-        for reading in sim.published().sensors {
-            faulty_during[reading.role.index()] |= reading.faulty;
+    sim.run_until(LONG, "the water change to finish", |status, water| {
+        if water.t_s - started > 2.0 * window_s() {
+            for reading in sim.published().sensors {
+                faulty_during[reading.role.index()] |= reading.faulty;
+            }
         }
         status.operation.state == OperationState::Idle && status.last_water_change.is_some()
     })
@@ -196,7 +197,7 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
         stop_flagged_at_rest_s,
     };
     println!(
-        "waves ±{wave_cm} cm: {record:?}, {} return starts, min restart gap {:.1} s, \
+        "waves ±{wave_cm} cm: {record:?}, faulty at start {carried:?}, {} return starts, min restart gap {:.1} s, \
          {} makeup bursts, shortest {:.1} s, deficit {deficit_l:.2} L, faulty during {:?}, \
          stop sensor faulty for {:.0} s of {REST_S} s at rest",
         waves.restarts,
