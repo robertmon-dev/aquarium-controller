@@ -233,7 +233,7 @@ async fn run(kind: Kind, trigger: Trigger) -> Run {
                     if let Some(extra) = freeze {
                         sim.store.fail_after(ops + extra);
                     }
-                    sim.service.cancel(kind.operation());
+                    sim.service.cancel(kind.operation()).expect("cancelled");
                     cancelled = Some(Cancelled {
                         t_s,
                         acknowledged: !sim.store.frozen(),
@@ -271,7 +271,7 @@ async fn run(kind: Kind, trigger: Trigger) -> Run {
 
         if state == OperationState::Suspended {
             suspended = true;
-            sim.service.cancel(kind.operation());
+            sim.service.cancel(kind.operation()).expect("cancelled");
         }
 
         if !pending && !sim.store.frozen() && state == OperationState::Idle {

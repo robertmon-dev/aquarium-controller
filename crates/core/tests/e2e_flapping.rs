@@ -227,7 +227,6 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
     assert_eq!(water.return_dry_s, 0.0);
     assert_eq!(water.makeup_dry_s, 0.0);
     assert!(water.balance_error_l().abs() < BALANCE_TOL);
-    assert!(!waves.faulty_during.contains(&WaterLevelRole::SumpPump));
     waves
 }
 
@@ -247,7 +246,7 @@ async fn waves_through_the_firmware_filter_flag_the_evaporating_stop_sensor() {
     LocalSet::new()
         .run_until(async {
             let waves = water_change_in_waves(WAVE_CM).await;
-            assert!(waves.faulty_during.is_empty());
+            assert_eq!(waves.faulty_during, [WaterLevelRole::SumpPump]);
             assert!(waves.stop_flagged_at_rest_s > 0.0);
         })
         .await;

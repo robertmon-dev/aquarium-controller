@@ -92,8 +92,7 @@ pub struct Layout {
     pub chamber_widths_cm: [f64; 5],
     pub chamber_depth_cm: f64,
     pub sump_height_cm: f64,
-    pub baffle_cm: f64,
-    pub return_chamber: usize,
+    pub crests_cm: [f64; 2],
     pub return_operating_cm: f64,
     pub return_intake_cm: f64,
     pub sump_pump: Mount,
@@ -110,6 +109,10 @@ pub struct Layout {
     pub makeup_lph: f64,
 }
 
+pub const COMPARTMENTS: usize = 3;
+pub const RETURN_COMPARTMENT: usize = 2;
+const COMPARTMENT_OF_CHAMBER: [usize; 5] = [0, 1, 1, 2, 2];
+
 impl Layout {
     pub const REAL: Self = Self {
         tank_weir_l: 700.0,
@@ -119,8 +122,7 @@ impl Layout {
         chamber_widths_cm: [27.0, 27.0, 27.0, 27.0, 12.0],
         chamber_depth_cm: 43.0,
         sump_height_cm: 40.0,
-        baffle_cm: 30.0,
-        return_chamber: 4,
+        crests_cm: [32.0, 30.0],
         return_operating_cm: 25.0,
         return_intake_cm: 3.0,
         sump_pump: Mount {
@@ -129,11 +131,11 @@ impl Layout {
         },
         sump_biological: Mount {
             chamber: 2,
-            height_cm: 35.0,
+            height_cm: 34.0,
         },
         sump_mechanical: Mount {
             chamber: 1,
-            height_cm: 36.0,
+            height_cm: 34.0,
         },
         sump_return_level: Mount {
             chamber: 4,
@@ -149,13 +151,6 @@ impl Layout {
         makeup_lph: 600.0,
     };
 
-    pub const fn wide_return_chamber(self) -> Self {
-        Self {
-            chamber_widths_cm: [12.0, 27.0, 27.0, 27.0, 27.0],
-            ..self
-        }
-    }
-
     pub const fn with_reservoir(self, litres: f64) -> Self {
         Self {
             reservoir_l: litres,
@@ -163,33 +158,36 @@ impl Layout {
         }
     }
 
-    fn area(&self, chamber: usize) -> f64 {
-        self.chamber_widths_cm[chamber] * self.chamber_depth_cm / 1000.0
+    pub fn compartment_of(chamber: usize) -> usize {
+        COMPARTMENT_OF_CHAMBER[chamber]
     }
 
-    pub fn return_area_l_per_cm(&self) -> f64 {
-        self.area(self.return_chamber)
-    }
-
-    pub fn baffled_area_l_per_cm(&self) -> f64 {
+    pub fn area_l_per_cm(&self, compartment: usize) -> f64 {
         (0..self.chamber_widths_cm.len())
-            .filter(|&chamber| chamber != self.return_chamber)
-            .map(|chamber| self.area(chamber))
+            .filter(|&chamber| Self::compartment_of(chamber) == compartment)
+            .map(|chamber| self.chamber_widths_cm[chamber] * self.chamber_depth_cm / 1000.0)
             .sum()
     }
 
-    pub fn total_area_l_per_cm(&self) -> f64 {
-        self.return_area_l_per_cm() + self.baffled_area_l_per_cm()
+    pub fn return_area_l_per_cm(&self) -> f64 {
+        self.area_l_per_cm(RETURN_COMPARTMENT)
     }
 
-    pub fn baffled_capacity_l(&self) -> f64 {
-        self.baffled_area_l_per_cm() * self.baffle_cm
+    pub fn total_area_l_per_cm(&self) -> f64 {
+        (0..COMPARTMENTS).map(|c| self.area_l_per_cm(c)).sum()
+    }
+
+    pub fn operating_l(&self) -> [f64; COMPARTMENTS] {
+        let levels = [
+            self.crests_cm[0],
+            self.crests_cm[1],
+            self.return_operating_cm,
+        ];
+        std::array::from_fn(|c| levels[c] * self.area_l_per_cm(c))
     }
 
     pub fn full_system_l(&self) -> f64 {
-        self.tank_weir_l
-            + self.baffled_capacity_l()
-            + self.return_operating_cm * self.return_area_l_per_cm()
+        self.tank_weir_l + self.operating_l().iter().sum::<f64>()
     }
 
     pub fn buffer_to_sump_pump_l(&self) -> f64 {
@@ -200,24 +198,35 @@ impl Layout {
         (self.return_operating_cm - self.return_intake_cm) * self.return_area_l_per_cm()
     }
 
-    pub fn headroom_to_baffle_l(&self) -> f64 {
-        (self.baffle_cm - self.return_operating_cm) * self.return_area_l_per_cm()
+    fn sump_l_at(&self, return_cm: f64) -> f64 {
+        let held = [self.crests_cm[0], self.crests_cm[1], 0.0];
+        (0..COMPARTMENTS)
+            .map(|c| held[c].max(return_cm) * self.area_l_per_cm(c))
+            .sum()
     }
 
     pub fn headroom_to_level_l(&self, height_cm: f64) -> f64 {
-        self.headroom_to_baffle_l() + (height_cm - self.baffle_cm) * self.total_area_l_per_cm()
-    }
-
-    pub fn return_level_with_l(&self, extra_l: f64) -> f64 {
-        if extra_l <= self.headroom_to_baffle_l() {
-            self.return_operating_cm + extra_l / self.return_area_l_per_cm()
-        } else {
-            self.baffle_cm + (extra_l - self.headroom_to_baffle_l()) / self.total_area_l_per_cm()
-        }
+        self.sump_l_at(height_cm) - self.sump_l_at(self.return_operating_cm)
     }
 
     pub fn headroom_to_rim_l(&self) -> f64 {
         self.headroom_to_level_l(self.sump_height_cm)
+    }
+
+    pub fn return_level_with_l(&self, extra_l: f64) -> f64 {
+        let target = self.sump_l_at(self.return_operating_cm) + extra_l;
+        let (mut low, mut high) = (0.0, self.sump_height_cm);
+
+        for _ in 0..100 {
+            let mid = (low + high) / 2.0;
+            if self.sump_l_at(mid) < target {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+
+        (low + high) / 2.0
     }
 
     pub fn drain_l_per_s(&self) -> f64 {
@@ -250,8 +259,7 @@ pub enum Event {
 pub struct Aquarium {
     pub layout: Layout,
     pub tank_l: f64,
-    pub baffled_l: f64,
-    pub return_l: f64,
+    pub sump: [f64; COMPARTMENTS],
     pub reservoir_l: f64,
     pub pumps: [bool; 4],
     pub dead: [bool; 4],
@@ -284,8 +292,7 @@ impl Aquarium {
         let mut aquarium = Self {
             layout,
             tank_l: layout.tank_weir_l,
-            baffled_l: layout.baffled_capacity_l(),
-            return_l: layout.return_operating_cm * layout.return_area_l_per_cm(),
+            sump: layout.operating_l(),
             reservoir_l: layout.reservoir_l,
             pumps: PumpId::ALL.map(PumpId::fail_safe_on),
             dead: [false; 4],
@@ -332,7 +339,7 @@ impl Aquarium {
     }
 
     pub fn sump_l(&self) -> f64 {
-        self.baffled_l + self.return_l
+        self.sump.iter().sum()
     }
 
     pub fn system_l(&self) -> f64 {
@@ -351,37 +358,20 @@ impl Aquarium {
         self.solute_mg = mg_per_l * self.system_l();
     }
 
+    pub fn compartment_level_cm(&self, compartment: usize) -> f64 {
+        self.sump[compartment] / self.layout.area_l_per_cm(compartment)
+    }
+
     pub fn return_level_cm(&self) -> f64 {
-        let layout = &self.layout;
-        let below_baffle = layout.return_area_l_per_cm() * layout.baffle_cm;
-
-        if self.return_l <= below_baffle {
-            self.return_l / layout.return_area_l_per_cm()
-        } else {
-            layout.baffle_cm + (self.return_l - below_baffle) / layout.total_area_l_per_cm()
-        }
+        self.compartment_level_cm(RETURN_COMPARTMENT)
     }
 
-    pub fn baffled_level_cm(&self) -> f64 {
-        let level = self.return_level_cm();
-
-        if level > self.layout.baffle_cm {
-            level
-        } else {
-            self.baffled_l / self.layout.baffled_area_l_per_cm()
-        }
-    }
-
-    fn level_at(&self, chamber: usize) -> f64 {
-        if chamber == self.layout.return_chamber {
-            self.return_level_cm()
-        } else {
-            self.baffled_level_cm()
-        }
+    pub fn chamber_level_cm(&self, chamber: usize) -> f64 {
+        self.compartment_level_cm(Layout::compartment_of(chamber))
     }
 
     pub fn evaporate(&mut self, litres: f64) {
-        self.return_l -= litres;
+        self.sump[RETURN_COMPARTMENT] -= litres;
         self.evaporated_l += litres;
         self.track_sensors();
     }
@@ -420,7 +410,7 @@ impl Aquarium {
                 && self.tank_l >= self.layout.tank_weir_l
             {
                 self.tank_l -= self.layout.weir_skim_l;
-                self.return_l += self.layout.weir_skim_l;
+                self.sump[0] += self.layout.weir_skim_l;
                 self.settle_sump();
                 self.track_sensors();
             }
@@ -489,7 +479,7 @@ impl Aquarium {
             let capacity = layout.makeup_l_per_s() * dt;
             let moved = capacity.min(self.reservoir_l.max(0.0));
             self.reservoir_l -= moved;
-            self.return_l += moved;
+            self.sump[RETURN_COMPARTMENT] += moved;
             self.added_l += moved;
             self.solute_mg += moved * self.makeup_mg_l;
             self.makeup_dry_s += dt * (1.0 - moved / capacity);
@@ -498,8 +488,8 @@ impl Aquarium {
         if self.flowing(PumpId::Return) {
             let capacity = layout.return_l_per_s() * dt;
             let intake_l = layout.return_intake_cm * layout.return_area_l_per_cm();
-            let moved = capacity.min((self.return_l - intake_l).max(0.0));
-            self.return_l -= moved;
+            let moved = capacity.min((self.sump[RETURN_COMPARTMENT] - intake_l).max(0.0));
+            self.sump[RETURN_COMPARTMENT] -= moved;
             self.tank_l += moved;
             self.return_dry_s += dt * (1.0 - moved / capacity);
         }
@@ -523,9 +513,7 @@ impl Aquarium {
         } else if self.tank_l > layout.tank_weir_l {
             let excess = self.tank_l - layout.tank_weir_l;
             self.tank_l = layout.tank_weir_l;
-            let into_baffled = excess.min(layout.baffled_capacity_l() - self.baffled_l);
-            self.baffled_l += into_baffled;
-            self.return_l += excess - into_baffled;
+            self.sump[0] += excess;
         }
 
         self.settle_sump();
@@ -534,20 +522,58 @@ impl Aquarium {
 
     fn settle_sump(&mut self) {
         let layout = self.layout;
-        let below_baffle = layout.return_area_l_per_cm() * layout.baffle_cm;
-        if self.return_l > below_baffle && self.baffled_l < layout.baffled_capacity_l() {
-            let back =
-                (self.return_l - below_baffle).min(layout.baffled_capacity_l() - self.baffled_l);
-            self.return_l -= back;
-            self.baffled_l += back;
+
+        for _ in 0..16 {
+            let mut moved_any = false;
+
+            for (crest, &crest_cm) in layout.crests_cm.iter().enumerate() {
+                let (upstream, downstream) = (crest, crest + 1);
+                let (high, low) = if self.compartment_level_cm(upstream)
+                    >= self.compartment_level_cm(downstream)
+                {
+                    (upstream, downstream)
+                } else {
+                    (downstream, upstream)
+                };
+                let (high_cm, low_cm) = (
+                    self.compartment_level_cm(high),
+                    self.compartment_level_cm(low),
+                );
+                let (high_area, low_area) = (layout.area_l_per_cm(high), layout.area_l_per_cm(low));
+
+                if high_cm <= crest_cm || high_cm - low_cm <= 1e-12 {
+                    continue;
+                }
+
+                let excess = (high_cm - crest_cm) * high_area;
+                let room = (crest_cm - low_cm).max(0.0) * low_area;
+                let above = (low_cm - crest_cm).max(0.0) * low_area;
+                let moved = if excess <= room {
+                    excess
+                } else {
+                    room + ((excess - room) * low_area - above * high_area) / (high_area + low_area)
+                };
+
+                if moved > 1e-12 {
+                    self.sump[high] -= moved;
+                    self.sump[low] += moved;
+                    moved_any = true;
+                }
+            }
+
+            if !moved_any {
+                break;
+            }
         }
 
-        let level = self.return_level_cm();
-        if level > layout.sump_height_cm {
-            let excess = (level - layout.sump_height_cm) * layout.total_area_l_per_cm();
-            self.solute_mg -= excess * self.concentration_mg_l();
-            self.return_l -= excess;
-            self.spilled_l += excess;
+        for compartment in 0..COMPARTMENTS {
+            let level = self.compartment_level_cm(compartment);
+            if level > layout.sump_height_cm {
+                let excess = (level - layout.sump_height_cm) * layout.area_l_per_cm(compartment);
+                self.solute_mg -= excess * self.concentration_mg_l();
+                self.sump[compartment] -= excess;
+                self.spilled_l += excess;
+            }
         }
     }
 
@@ -565,14 +591,14 @@ impl Aquarium {
 
     pub fn surface_distance_cm(&self, role: WaterLevelRole) -> Option<f64> {
         self.mount(role)
-            .map(|mount| self.level_at(mount.chamber) - mount.height_cm)
+            .map(|mount| self.chamber_level_cm(mount.chamber) - mount.height_cm)
     }
 
     fn truth(&self, role: WaterLevelRole) -> bool {
         let layout = &self.layout;
 
         if let Some(mount) = self.mount(role) {
-            return self.level_at(mount.chamber) >= mount.height_cm;
+            return self.chamber_level_cm(mount.chamber) >= mount.height_cm;
         }
 
         match role {
@@ -651,13 +677,14 @@ impl Aquarium {
 
     pub fn describe(&self) -> String {
         format!(
-            "t={:.1}s tank={:.2}L return={:.2}cm baffled={:.2}cm reservoir={:.2}L pumps={:?} \
+            "t={:.1}s tank={:.2}L sump={:.2}/{:.2}/{:.2}cm reservoir={:.2}L pumps={:?} \
              drained={:.2}L added={:.2}L spilled={:.2}L tank_spilled={:.2}L \
              return_dry={:.1}s makeup_dry={:.1}s drain_dry={:.1}s",
             self.t_s,
             self.tank_l,
-            self.return_level_cm(),
-            self.baffled_level_cm(),
+            self.compartment_level_cm(0),
+            self.compartment_level_cm(1),
+            self.compartment_level_cm(2),
             self.reservoir_l,
             self.pumps,
             self.drained_l,
@@ -681,18 +708,44 @@ fn state(wet: bool) -> WaterLevelState {
 
 pub type Water = Arc<Mutex<Aquarium>>;
 
+#[derive(Default)]
+pub struct Relays {
+    refuse_off: Mutex<Option<PumpId>>,
+    switch_ons: Mutex<Vec<(PumpId, bool)>>,
+}
+
+impl Relays {
+    pub fn refuse_off(&self, id: Option<PumpId>) {
+        *self.refuse_off.lock().expect("relays poisoned") = id;
+    }
+
+    pub fn switch_ons(&self) -> Vec<(PumpId, bool)> {
+        self.switch_ons.lock().expect("relays poisoned").clone()
+    }
+}
+
 pub struct SimOutputs {
     water: Water,
     store: Arc<SimStore>,
+    relays: Arc<Relays>,
 }
 
 impl PumpOutputs for SimOutputs {
     fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
+        if !on && *self.relays.refuse_off.lock().expect("relays poisoned") == Some(id) {
+            return Err("relay driver refused");
+        }
+
         if !self.store.frozen() {
-            self.water
-                .lock()
-                .expect("aquarium poisoned")
-                .set_pump(id, on);
+            let mut water = self.water.lock().expect("aquarium poisoned");
+            if on && !water.pump_on(id) {
+                self.relays
+                    .switch_ons
+                    .lock()
+                    .expect("relays poisoned")
+                    .push((id, self.store.holds_checkpoint()));
+            }
+            water.set_pump(id, on);
         }
         Ok(())
     }
@@ -879,6 +932,7 @@ pub struct SimStore {
     inner: VolatilePumpStore,
     budget: Mutex<Option<usize>>,
     drop_when: Mutex<Option<DropWhen>>,
+    refuse_when: Mutex<Option<DropWhen>>,
     frozen: AtomicBool,
     ops: Mutex<Vec<StoreOp>>,
 }
@@ -894,6 +948,29 @@ impl SimStore {
 
     pub fn fail_on(&self, predicate: DropWhen) {
         *self.drop_when.lock().expect("store poisoned") = Some(predicate);
+    }
+
+    pub fn refuse(&self, predicate: Option<DropWhen>) {
+        *self.refuse_when.lock().expect("store poisoned") = predicate;
+    }
+
+    fn refuses(&self, record: PumpRecord, bytes: &[u8], erase: bool) -> bool {
+        let refused = self
+            .refuse_when
+            .lock()
+            .expect("store poisoned")
+            .is_some_and(|predicate| predicate(record, bytes));
+
+        if refused {
+            self.ops.lock().expect("store poisoned").push(StoreOp {
+                record,
+                erase,
+                applied: false,
+                tombstone: !erase && bytes == b"null",
+            });
+        }
+
+        refused
     }
 
     pub fn frozen(&self) -> bool {
@@ -958,6 +1035,10 @@ impl PumpStore for SimStore {
     }
 
     fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        if self.refuses(record, bytes, false) {
+            return Err("flash refused the write");
+        }
+
         if self.admit(record, bytes, false) {
             self.inner.store(record, bytes)
         } else {
@@ -966,6 +1047,10 @@ impl PumpStore for SimStore {
     }
 
     fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        if self.refuses(record, &[], true) {
+            return Err("flash refused the erase");
+        }
+
         if self.admit(record, &[], true) {
             self.inner.erase(record)
         } else {
@@ -1095,6 +1180,7 @@ pub struct Sim {
     pub water: Water,
     pub clock: Arc<SimClock>,
     pub store: Arc<SimStore>,
+    pub relays: Arc<Relays>,
     pub service: Arc<Service>,
     pub addr: SocketAddr,
     pub options: Options,
@@ -1115,6 +1201,7 @@ async fn boot(
     water: &Water,
     clock: &Arc<SimClock>,
     store: &Arc<SimStore>,
+    relays: &Arc<Relays>,
     levels: &Arc<InMemoryWaterLevelStore>,
     options: &Options,
 ) -> Booted {
@@ -1130,6 +1217,7 @@ async fn boot(
             SimOutputs {
                 water: Arc::clone(water),
                 store: Arc::clone(store),
+                relays: Arc::clone(relays),
             },
             Arc::clone(&service),
             options.timing,
@@ -1196,12 +1284,14 @@ impl Sim {
             Some(Mutex::new(publisher))
         };
 
-        let booted = boot(&water, &clock, &store, &levels, &options).await;
+        let relays = Arc::new(Relays::default());
+        let booted = boot(&water, &clock, &store, &relays, &levels, &options).await;
 
         Self {
             water,
             clock,
             store,
+            relays,
             service: booted.service,
             addr: booted.addr,
             options,
@@ -1249,6 +1339,7 @@ impl Sim {
             &self.water,
             &self.clock,
             &self.store,
+            &self.relays,
             &self.levels,
             &self.options,
         )

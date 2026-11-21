@@ -8,8 +8,8 @@ use std::time::Duration;
 use tokio::task::LocalSet;
 
 use aquarium_core::domain::pump::{
-    Blocker, OperationRecord, OperationResult, OperationState, PumpId, PumpSettingsPatch,
-    WaterChangePlan,
+    Blocker, ChannelFault, OperationRecord, OperationResult, OperationState, PumpId,
+    PumpSettingsPatch, WaterChangePlan,
 };
 use aquarium_core::ports::inbound::PumpControl;
 use aquarium_core::ports::outbound::PumpStatusSource;
@@ -31,10 +31,10 @@ fn secs(seconds: u64) -> Duration {
 }
 
 async fn start(dead: PumpId) -> Sim {
-    start_stopping_at(dead, "sump_return_level").await
+    start_stopping_at(Some(dead), "sump_return_level").await
 }
 
-async fn start_stopping_at(dead: PumpId, stop_sensor: &str) -> Sim {
+async fn start_stopping_at(dead: Option<PumpId>, stop_sensor: &str) -> Sim {
     let sim = Sim::start(Layout::REAL.with_reservoir(RESERVOIR_L)).await;
     let patch: PumpSettingsPatch = serde_json::from_str(&format!(
         r#"{{"flow_lph":{{"makeup":600,"drain":1500}},"refill_stop_sensor":"{stop_sensor}"}}"#
@@ -44,7 +44,9 @@ async fn start_stopping_at(dead: PumpId, stop_sensor: &str) -> Sim {
         .apply_settings(patch)
         .expect("settings accepted");
     sim.run_for(secs(5)).await;
-    sim.water().dead[dead.index()] = true;
+    if let Some(dead) = dead {
+        sim.water().dead[dead.index()] = true;
+    }
     sim
 }
 
@@ -165,14 +167,14 @@ async fn a_dead_return_pump_never_arms_the_refill_at_the_return_level() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_dead_return_pump_under_a_high_stop_hides_a_small_drain_in_the_sump() {
+async fn a_dead_return_pump_under_a_high_stop_hides_any_drain_in_the_sump() {
     LocalSet::new()
         .run_until(async {
             for (drain_s, expected) in [
                 (PLAN.drain_s, OperationResult::SumpFull),
-                (200, OperationResult::Incomplete),
+                (200, OperationResult::SumpFull),
             ] {
-                let sim = start_stopping_at(PumpId::Return, "sump_mechanical").await;
+                let sim = start_stopping_at(Some(PumpId::Return), "sump_mechanical").await;
                 let record = water_change_with(&sim, WaterChangePlan { drain_s, ..PLAN }).await;
                 report(
                     &format!("dead return, stop at sump_mechanical, drain {drain_s} s"),
@@ -221,6 +223,73 @@ async fn a_dead_drain_pump_moves_nothing_and_times_out_the_refill() {
 
             sim.run_for(STARVED_AFTER).await;
             assert!(!sim.service.status().circulation_starved);
+        })
+        .await;
+}
+
+fn overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
+    a.iter()
+        .any(|&(a_on, a_off)| b.iter().any(|&(b_on, b_off)| a_on < b_off && b_on < a_off))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_drain_relay_that_refuses_to_switch_off_keeps_the_makeup_off() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start_stopping_at(None, "sump_return_level").await;
+            sim.service
+                .start_water_change(WaterChangePlan {
+                    drain_s: 60,
+                    settle_s: 30,
+                    refill_s: 600,
+                })
+                .expect("water change started");
+            sim.run_until(LONG, "30 s of drain", |status, _| {
+                status.operation.drain_ran_s >= 30
+            })
+            .await;
+
+            sim.relays.refuse_off(Some(PumpId::Drain));
+            sim.run_until(LONG, "the refill phase", |status, _| {
+                status.operation.state == OperationState::Refilling
+            })
+            .await;
+            sim.run_for(secs(10)).await;
+
+            let status = sim.service.status();
+            assert_eq!(status.channels.drain.fault, Some(ChannelFault::OutputError));
+            assert!(status.channels.drain.on);
+            assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::Interlock));
+            assert_eq!(status.operation.refill_ran_s, 0);
+            let stuck_l = {
+                let water = sim.water();
+                println!("drain stuck on: {}", water.describe());
+                assert!(water.pump_on(PumpId::Drain));
+                assert!(!water.pump_on(PumpId::Makeup));
+                assert_eq!(water.added_l, 0.0);
+                water.drained_l
+            };
+
+            sim.relays.refuse_off(None);
+            sim.run_until(LONG, "the water change to finish", |status, _| {
+                status.operation.state == OperationState::Idle
+            })
+            .await;
+
+            let record = sim.service.status().last_water_change.expect("a record");
+            let water = sim.water();
+            println!(
+                "after the drain relay recovered: {record:?} / {}",
+                water.describe()
+            );
+            assert_eq!(record.result, OperationResult::SumpFull);
+            assert!(water.drained_l - stuck_l < 0.5);
+            assert!(!overlap(
+                &water.runs(PumpId::Drain, 0.0),
+                &water.runs(PumpId::Makeup, 0.0)
+            ));
+            assert_eq!(water.spilled_l, 0.0);
+            assert!(water.balance_error_l().abs() < BALANCE_TOL);
         })
         .await;
 }

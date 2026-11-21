@@ -410,7 +410,7 @@ impl Soak {
             if self.sim.service.resume(kind).is_ok() {
                 self.report.operator_resumes += 1;
             } else {
-                self.sim.service.cancel(kind);
+                self.sim.service.cancel(kind).expect("cancelled");
                 self.report.operator_cancels += 1;
             }
         }
@@ -567,6 +567,11 @@ async fn soak(days: u64) -> Report {
         "{completed} completed water changes in {days} days"
     );
     drop(water);
+    for (id, recorded) in soak.sim.relays.switch_ons() {
+        if matches!(id, PumpId::Drain | PumpId::Makeup) {
+            assert!(recorded, "{id:?} switched on before pump_op was stored");
+        }
+    }
     report
 }
 

@@ -488,7 +488,9 @@ async fn api_water_change_cancelled_before_it_drained_does_not_start_the_gap() {
                     refill_s: 600,
                 })
                 .expect("idle");
-            sim.service.cancel(OperationKind::WaterChange);
+            sim.service
+                .cancel(OperationKind::WaterChange)
+                .expect("cancelled");
             let cancelled = sim.service.status().last_water_change.expect("a record");
             assert_eq!(cancelled.result, OperationResult::Aborted);
             assert_eq!(cancelled.drain_ran_s, 0);
@@ -584,6 +586,41 @@ async fn api_settings_patch_mid_phase_keeps_the_running_plan() {
                 assert_eq!(settings.water_change.first().map(|w| w.drain_s), Some(1));
                 assert_eq!(settings.flow_lph.makeup, Some(300));
             }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn api_water_change_cancelled_right_after_the_drain_switched_on_holds_the_gap() {
+    LocalSet::new()
+        .run_until(async {
+            let mut sim = start_sim().await;
+            sim.run_for(secs(5)).await;
+            accepted(&sim, "POST", WATER_CHANGE, PLAN, 202).await;
+            sim.run_until(LONG, "the drain relay", |_, water| {
+                water.pump_on(PumpId::Drain)
+            })
+            .await;
+
+            sim.service
+                .cancel(OperationKind::WaterChange)
+                .expect("cancelled");
+            let cancelled = sim.service.status().last_water_change.expect("a record");
+            assert_eq!(cancelled.result, OperationResult::Aborted);
+            assert_eq!(cancelled.drain_ran_s, 0);
+
+            sim.run_for(secs(5)).await;
+            let response = accepted(&sim, "POST", WATER_CHANGE, PLAN, 423).await;
+            assert!(response.contains("recent"), "got: {response}");
+
+            sim.restart(secs(30), true).await;
+            sim.run_for(secs(5)).await;
+            let response = accepted(&sim, "POST", WATER_CHANGE, PLAN, 423).await;
+            assert!(response.contains("recent"), "got: {response}");
+
+            let water = sim.water();
+            assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 1);
+            assert!(water.drained_l < 0.1, "{}", water.describe());
         })
         .await;
 }

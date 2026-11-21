@@ -7,11 +7,10 @@ use std::time::Duration;
 
 use tokio::task::LocalSet;
 
-use aquarium_core::domain::pump::{
-    Blocker, OperationResult, OperationState, PumpId, PumpSettingsPatch,
-};
+use aquarium_core::domain::pump::{Blocker, OperationResult, PumpId, PumpSettingsPatch};
 use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::ports::inbound::PumpControl;
+use aquarium_core::ports::outbound::PumpStatusSource;
 
 use sim::{Event, Fault, Layout, Options, Sensors, Sim, FIRMWARE_FILTER};
 
@@ -158,65 +157,112 @@ async fn a_stuck_wet_return_level_over_a_dry_sump_pump_sensor_is_flagged_faulty(
 }
 
 #[tokio::test(start_paused = true)]
-async fn an_unplugged_harness_reads_all_dry_and_stops_the_circulation() {
+async fn an_unplugged_harness_is_flagged_and_the_return_keeps_circulating() {
     LocalSet::new()
         .run_until(async {
             let sim = start(Layout::REAL.with_reservoir(150.0)).await;
             sim.water().faults = [Some(Fault::StuckDry); WaterLevelRole::COUNT];
-            let unplugged = sim.water().t_s;
             sim.run_for(secs(3)).await;
 
             assert!(faulty(&sim).is_empty(), "all-dry is self-consistent");
             let status = sim.status().await;
-            assert_eq!(
-                status.channels.return_pump.blocked_by,
-                Some(Blocker::SumpLow)
-            );
-            assert_eq!(status.channels.uv.blocked_by, Some(Blocker::ReturnOff));
+            assert!(status.level_sensors_suspect);
+            assert!(!status.return_held_after_drain);
+            assert!(sim.service.pump_telemetry().level_sensors_suspect);
+            assert!(status.channels.return_pump.on && status.channels.uv.on);
+            assert_eq!(status.channels.return_pump.blocked_by, None);
             assert_eq!(
                 status.channels.makeup.blocked_by,
-                Some(Blocker::ReservoirEmpty)
+                Some(Blocker::LevelsUnavailable)
             );
-            assert!(!status.channels.drain.on);
-            {
-                let water = sim.water();
-                let stopped = water
-                    .first_after(Event::Pump(PumpId::Return, false), unplugged)
-                    .expect("the return stopped");
-                assert!(
-                    stopped - unplugged <= 1.2,
-                    "stopped after {:.1} s",
-                    stopped - unplugged
-                );
-                assert!(!water.pump_on(PumpId::Uv));
-                assert_eq!(
-                    water.tank_l,
-                    water.layout.tank_weir_l - water.layout.weir_skim_l
-                );
-            }
+            assert_eq!(
+                status.channels.drain.blocked_by,
+                Some(Blocker::LevelsUnavailable)
+            );
 
-            let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
-            assert_eq!(code, 423, "got: {response}");
-            assert!(response.contains("does not hold enough"), "got: {response}");
-            let (code, response) = sim.send("POST", TOP_OFF, r#"{"duration_s":60}"#).await;
-            assert_eq!(code, 423, "got: {response}");
-            assert!(response.contains("reservoir is empty"), "got: {response}");
+            for (path, plan) in [(WATER_CHANGE, PLAN), (TOP_OFF, r#"{"duration_s":60}"#)] {
+                let (code, response) = sim.send("POST", path, plan).await;
+                assert_eq!(code, 423, "got: {response}");
+                assert!(response.contains("unavailable"), "got: {response}");
+            }
 
             sim.run_for(STARVED_AFTER).await;
             let status = sim.status().await;
-            assert!(status.circulation_starved);
-            assert!(!status.channels.return_pump.on);
-            let water = sim.water();
-            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
-            assert_eq!(water.spilled_l, 0.0);
-            assert_eq!(water.return_dry_s, 0.0);
-            println!("all dry: {}", water.describe());
+            assert!(status.level_sensors_suspect);
+            assert!(!status.circulation_starved);
+            {
+                let water = sim.water();
+                println!("unplugged: {}", water.describe());
+                assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 0);
+                assert_eq!(water.return_dry_s, 0.0);
+                assert_eq!(water.spilled_l, 0.0);
+                assert_eq!(water.tank_l, water.layout.tank_weir_l);
+                assert_eq!(water.drained_l + water.added_l, 0.0);
+            }
+            assert_balanced(&sim);
+
+            sim.water().faults = [None; WaterLevelRole::COUNT];
+            sim.run_for(secs(3)).await;
+            let status = sim.status().await;
+            assert!(!status.level_sensors_suspect);
+            assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpFull));
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_shorted_harness_reads_all_wet_and_a_water_change_then_runs_the_return_dry() {
+async fn an_unplugged_harness_mid_drain_aborts_and_holds_the_return_off() {
+    LocalSet::new()
+        .run_until(async {
+            for unplug_after_s in [60, 100] {
+                let sim = start(Layout::REAL.with_reservoir(150.0)).await;
+                let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
+                assert_eq!(code, 202, "got: {response}");
+                sim.run_until(LONG, "the drain", |status, _| {
+                    status.operation.drain_ran_s >= unplug_after_s
+                })
+                .await;
+
+                sim.water().faults = [Some(Fault::StuckDry); WaterLevelRole::COUNT];
+                sim.run_for(secs(600)).await;
+
+                let status = sim.status().await;
+                assert!(status.level_sensors_suspect);
+                assert!(status.return_held_after_drain);
+                assert_eq!(
+                    status.channels.return_pump.blocked_by,
+                    Some(Blocker::LevelsUnavailableAfterDrain)
+                );
+                assert_eq!(
+                    status.last_water_change.map(|record| record.result),
+                    Some(OperationResult::Aborted)
+                );
+                {
+                    let water = sim.water();
+                    println!(
+                        "unplugged after {unplug_after_s} s of drain: {}",
+                        water.describe()
+                    );
+                    assert!(!water.pump_on(PumpId::Return));
+                    assert!(!water.pump_on(PumpId::Uv));
+                    assert!(!water.pump_on(PumpId::Drain));
+                    assert_eq!(water.return_dry_s, 0.0, "{}", water.describe());
+                    assert_eq!(water.spilled_l, 0.0);
+                }
+                assert_balanced(&sim);
+
+                sim.water().faults = [None; WaterLevelRole::COUNT];
+                sim.run_for(secs(3)).await;
+                let status = sim.status().await;
+                assert!(!status.level_sensors_suspect);
+                assert!(!status.return_held_after_drain);
+            }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shorted_harness_is_flagged_and_refuses_the_water_change() {
     LocalSet::new()
         .run_until(async {
             let sim = start(Layout::REAL.with_reservoir(150.0)).await;
@@ -225,45 +271,73 @@ async fn a_shorted_harness_reads_all_wet_and_a_water_change_then_runs_the_return
 
             assert!(faulty(&sim).is_empty(), "all-wet is self-consistent");
             let status = sim.status().await;
-            assert_eq!(status.channels.return_pump.blocked_by, None);
+            assert!(status.level_sensors_suspect);
             assert!(status.channels.return_pump.on && status.channels.uv.on);
             assert_eq!(
                 status.channels.makeup.blocked_by,
-                Some(Blocker::TankOverflow)
+                Some(Blocker::LevelsUnavailable)
             );
-            let (code, response) = sim.send("POST", TOP_OFF, r#"{"duration_s":60}"#).await;
-            assert_eq!(code, 423, "got: {response}");
-            assert!(response.contains("overflow"), "got: {response}");
-
-            let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
-            assert_eq!(code, 202, "got: {response}");
-            sim.run_until(LONG, "the water change to end", |status, _| {
-                status.operation.state == OperationState::Idle && status.last_water_change.is_some()
-            })
-            .await;
-            let record = sim.service.status().last_water_change.expect("a record");
-            assert_eq!(record.result, OperationResult::Overflow);
-            assert_eq!(record.drain_ran_s, 112);
-            assert_eq!(record.refill_ran_s, 0);
+            for (path, plan) in [(WATER_CHANGE, PLAN), (TOP_OFF, r#"{"duration_s":60}"#)] {
+                let (code, response) = sim.send("POST", path, plan).await;
+                assert_eq!(code, 423, "got: {response}");
+            }
 
             sim.run_for(secs(120)).await;
-            let water = sim.water();
-            println!(
-                "all wet after a water change: {record:?} {}",
-                water.describe()
-            );
-            assert_eq!(water.added_l, 0.0);
-            assert!((water.deficit_l() - water.drained_l).abs() < 1e-9);
-            assert!(water.drained_l > 46.0);
-            assert!(water.pump_on(PumpId::Return));
-            assert!(
-                water.return_dry_s > 60.0,
-                "the stuck-wet sump pump sensor never stops the return: {}",
-                water.describe()
-            );
-            assert!(!sim.service.status().circulation_starved);
-            drop(water);
+            let status = sim.status().await;
+            assert!(status.level_sensors_suspect);
+            assert_eq!(status.last_water_change, None);
+            {
+                let water = sim.water();
+                println!("all wet: {}", water.describe());
+                assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 0);
+                assert_eq!(water.drained_l, 0.0);
+                assert_eq!(water.return_dry_s, 0.0);
+                assert!(water.deficit_l().abs() < 1e-9);
+                assert!(water.pump_on(PumpId::Return));
+            }
             assert_balanced(&sim);
+
+            sim.water().faults[WaterLevelRole::MainTank.index()] = None;
+            sim.run_for(secs(3)).await;
+            let status = sim.status().await;
+            assert!(!status.level_sensors_suspect);
+            let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
+            assert_eq!(code, 423, "got: {response}");
+            assert!(response.contains("flood sensor"), "got: {response}");
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_wet_flood_sensor_ends_a_top_off_and_refuses_the_next() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start(Layout::REAL.with_reservoir(150.0)).await;
+            sim.water().evaporate(5.0);
+            sim.run_for(secs(2)).await;
+            let (code, response) = sim.send("POST", TOP_OFF, r#"{"duration_s":120}"#).await;
+            assert_eq!(code, 202, "got: {response}");
+            sim.run_for(secs(5)).await;
+
+            sim.water().faults[WaterLevelRole::SumpBiological.index()] = Some(Fault::StuckWet);
+            sim.run_until(secs(5), "the top-off to end", |status, _| {
+                status.last_top_off.is_some()
+            })
+            .await;
+            let status = sim.status().await;
+            assert!(!status.level_sensors_suspect);
+            assert_eq!(
+                status.last_top_off.map(|record| record.result),
+                Some(OperationResult::Overflow)
+            );
+            assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpHigh));
+            for (path, plan) in [(WATER_CHANGE, PLAN), (TOP_OFF, r#"{"duration_s":60}"#)] {
+                let (code, response) = sim.send("POST", path, plan).await;
+                assert_eq!(code, 423, "got: {response}");
+                assert!(response.contains("flood sensor"), "got: {response}");
+            }
+            assert!(sim.water().pump_on(PumpId::Return));
+            assert_eq!(sim.water().spilled_l, 0.0);
         })
         .await;
 }

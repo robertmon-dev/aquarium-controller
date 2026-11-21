@@ -199,20 +199,87 @@ async fn history_without_the_drain_mark_still_enforces_the_gap() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn unreadable_history_loses_the_gap_and_the_last_results() {
+async fn an_unsynced_cancel_does_not_erase_the_gap_of_an_old_history() {
     LocalSet::new()
         .run_until(async {
-            for (label, json) in [
+            let mut sim = boot_with(&[(PumpRecord::LastOperations, OLD_HISTORY)]).await;
+            sim.clock.lose_sync();
+            sim.service
+                .start_water_change(aquarium_core::domain::pump::WaterChangePlan {
+                    drain_s: 60,
+                    settle_s: 30,
+                    refill_s: 600,
+                })
+                .expect("the gap needs a synced clock");
+            sim.service
+                .cancel(OperationKind::WaterChange)
+                .expect("cancelled");
+
+            sim.restart(secs(30), true).await;
+            sim.run_for(secs(3)).await;
+            let (code, response) = sim
+                .send(
+                    "POST",
+                    "/api/water-change",
+                    r#"{"drain_s":60,"refill_s":600}"#,
+                )
+                .await;
+            assert_eq!(code, 423, "got: {response}");
+            assert!(response.contains("recent"), "got: {response}");
+            assert_eq!(sim.water().count(Event::Pump(PumpId::Drain, true)), 0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unknown_result_drops_only_its_entry_and_keeps_the_gap() {
+    LocalSet::new()
+        .run_until(async {
+            for (label, json, kept) in [
                 (
-                    "unknown result",
+                    "unknown top-off result",
                     r#"{"top_off":{"kind":"top_off","started_at":1795334000,"drain_ran_s":0,
                         "settle_ran_s":0,"refill_ran_s":60,"result":"exploded","resumed":false},
                         "water_change":{"kind":"water_change","started_at":1795334400,
                         "drain_ran_s":112,"settle_ran_s":30,"refill_ran_s":290,
                         "result":"sump_full","resumed":false}}"#,
+                    true,
                 ),
+                (
+                    "unknown water-change result",
+                    r#"{"top_off":null,"water_change":{"kind":"water_change",
+                        "started_at":1795334400,"drain_ran_s":112,"settle_ran_s":30,
+                        "refill_ran_s":290,"result":"exploded","resumed":false},
+                        "drained_at":1795334400}"#,
+                    false,
+                ),
+            ] {
+                let sim = boot_with(&[(PumpRecord::LastOperations, json)]).await;
+                let status = sim.service.status();
+                assert_eq!(status.last_top_off, None, "{label}");
+                assert_eq!(status.last_water_change.is_some(), kept, "{label}");
+                let (code, response) = sim
+                    .send(
+                        "POST",
+                        "/api/water-change",
+                        r#"{"drain_s":60,"refill_s":600}"#,
+                    )
+                    .await;
+                assert_eq!(code, 423, "{label}: {response}");
+                assert!(response.contains("recent"), "{label}: {response}");
+            }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn unreadable_history_loses_the_gap_and_the_last_results() {
+    LocalSet::new()
+        .run_until(async {
+            for (label, json) in [
                 ("truncated", &OLD_HISTORY[..60]),
                 ("garbage", "~"),
+                ("wrong shape", "[1,2]"),
             ] {
                 let sim = boot_with(&[(PumpRecord::LastOperations, json)]).await;
                 let status = sim.service.status();
@@ -226,7 +293,9 @@ async fn unreadable_history_loses_the_gap_and_the_last_results() {
                     )
                     .await;
                 assert_eq!(code, 202, "{label}: {response}");
-                sim.service.cancel(OperationKind::WaterChange);
+                sim.service
+                    .cancel(OperationKind::WaterChange)
+                    .expect("cancelled");
             }
         })
         .await;
@@ -238,10 +307,25 @@ async fn override_records_of_every_shape_boot_without_a_panic() {
         .run_until(async {
             for (label, json, uv_off) in [
                 ("indefinite uv", r#"[null,{"expires_at":null}]"#, true),
-                ("uv without the field", r#"[null,{}]"#, true),
+                ("uv without the field", r#"[null,{}]"#, false),
+                (
+                    "malformed uv expiry",
+                    r#"[null,{"expires_at":"later"}]"#,
+                    false,
+                ),
+                (
+                    "malformed return slot",
+                    r#"[{"expires_at":-1},{"expires_at":null}]"#,
+                    true,
+                ),
                 ("expired", r#"[{"expires_at":1},{"expires_at":1}]"#, false),
                 ("one slot", r#"[null]"#, false),
                 ("three slots", r#"[null,null,null]"#, false),
+                (
+                    "three slots with uv",
+                    r#"[null,{"expires_at":null},null]"#,
+                    true,
+                ),
                 (
                     "unknown field",
                     r#"[null,{"expires_at":null,"reason":"x"}]"#,

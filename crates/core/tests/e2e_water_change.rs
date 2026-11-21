@@ -313,6 +313,12 @@ async fn water_change_exchange(
         .first_after(Event::Sensor(WaterLevelRole::ReservoirFull, false), 0.0)
         .is_some());
 
+    println!(
+        "exchange {drain_s} s: {record:?}, return starts {} during refill, {}",
+        water.count_after(Event::Pump(PumpId::Return, true), refill_at),
+        water.describe()
+    );
+
     Exchange {
         record,
         drained_l: water.drained_l,
@@ -349,12 +355,12 @@ async fn return_level_typical_water_change_exchanges_the_drained_volume() {
             );
             assert_near(
                 exchange.return_level_after_settle_cm,
-                30.08,
+                26.79,
                 LEVEL_TOL_CM,
-                "skim floods the small chamber over the baffle",
+                "the skim stays in chambers 4 and 5",
             );
             assert!(
-                (18..=20).contains(&exchange.return_starts),
+                (14..=16).contains(&exchange.return_starts),
                 "return starts: {}",
                 exchange.return_starts
             );
@@ -365,50 +371,51 @@ async fn return_level_typical_water_change_exchanges_the_drained_volume() {
         .await;
 }
 
-#[tokio::test(start_paused = true)]
-async fn return_level_wide_return_chamber_exchanges_the_same_volume() {
-    LocalSet::new()
-        .run_until(async {
-            let small = Layout::REAL;
-            let wide = Layout::REAL.wide_return_chamber().with_reservoir(150.0);
-            let exchange = water_change_exchange(wide, 300, OperationResult::SumpFull).await;
+#[test]
+fn real_sump_geometry_puts_the_variable_volume_in_chambers_four_and_five() {
+    let layout = Layout::REAL;
 
-            assert_near(exchange.drained_l, 125.0, LITRES_TOL, "drained");
-            assert_near(exchange.added_l, 125.0, LITRES_TOL, "added");
-            assert_near(
-                f64::from(exchange.record.refill_ran_s),
-                750.0,
-                3.0,
-                "refill_ran_s",
-            );
-            assert_near(
-                exchange.return_level_after_settle_cm,
-                27.58,
-                LEVEL_TOL_CM,
-                "skim stays below the baffle in the wide chamber",
-            );
-            assert!(
-                (15..=17).contains(&exchange.return_starts),
-                "return starts: {}",
-                exchange.return_starts
-            );
-            assert_eq!(exchange.return_dry_s, 0.0);
-            assert_eq!(exchange.makeup_dry_s, 0.0);
-            assert_eq!(exchange.drain_dry_s, 0.0);
-
-            assert_near(small.buffer_to_sump_pump_l(), 8.772, 0.01, "small buffer");
-            assert_near(
-                wide.buffer_to_sump_pump_l() / small.buffer_to_sump_pump_l(),
-                27.0 / 12.0,
-                1e-9,
-                "buffer ratio",
-            );
-            assert_near(small.headroom_to_baffle_l(), 2.58, 0.01, "small headroom");
-            assert_near(wide.headroom_to_baffle_l(), 5.805, 0.01, "wide headroom");
-            assert_near(small.headroom_to_rim_l(), 54.18, 0.01, "small rim headroom");
-            assert_near(wide.headroom_to_rim_l(), 57.405, 0.01, "wide rim headroom");
-        })
-        .await;
+    assert_near(layout.area_l_per_cm(0), 1.161, 1e-9, "chamber 1");
+    assert_near(layout.area_l_per_cm(1), 2.322, 1e-9, "chambers 2 and 3");
+    assert_near(
+        layout.return_area_l_per_cm(),
+        1.677,
+        1e-9,
+        "chambers 4 and 5",
+    );
+    assert_near(layout.buffer_to_sump_pump_l(), 28.509, 0.01, "buffer");
+    assert_near(
+        layout.headroom_to_level_l(layout.crests_cm[1]),
+        8.385,
+        0.01,
+        "headroom to the 3-4 crest",
+    );
+    assert_near(
+        layout.headroom_to_level_l(layout.crests_cm[0]),
+        16.383,
+        0.01,
+        "headroom to the 1-2 crest",
+    );
+    assert_near(
+        layout.headroom_to_level_l(layout.sump_mechanical.height_cm),
+        26.703,
+        0.01,
+        "headroom to the flood sensors",
+    );
+    assert_near(
+        layout.headroom_to_rim_l(),
+        57.663,
+        0.01,
+        "headroom to the rim",
+    );
+    assert_near(
+        layout.return_level_with_l(layout.weir_skim_l),
+        26.789,
+        0.01,
+        "weir skim",
+    );
+    assert!(layout.sump_mechanical.height_cm > layout.crests_cm[0]);
+    assert!(layout.sump_biological.height_cm > layout.crests_cm[0]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -416,7 +423,7 @@ async fn return_level_long_drain_is_bounded_by_the_drain_intake() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL.with_reservoir(200.0);
-            let exchange = water_change_exchange(layout, 600, OperationResult::Incomplete).await;
+            let exchange = water_change_exchange(layout, 600, OperationResult::SumpFull).await;
 
             let reachable_l = layout.tank_weir_l - layout.weir_skim_l - layout.drain_intake_l;
             assert_near(exchange.drained_l, reachable_l, LITRES_TOL, "drained");
@@ -442,7 +449,7 @@ async fn return_level_long_drain_is_bounded_by_the_drain_intake() {
                 "drained litres the record implies",
             );
             assert!(
-                (19..=21).contains(&exchange.return_starts),
+                (16..=18).contains(&exchange.return_starts),
                 "return starts: {}",
                 exchange.return_starts
             );
@@ -453,7 +460,7 @@ async fn return_level_long_drain_is_bounded_by_the_drain_intake() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn real_layout_default_reservoir_cannot_cover_a_typical_drain() {
+async fn real_layout_default_reservoir_leaves_the_typical_shortfall_above_the_sump_pump() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL;
@@ -467,12 +474,21 @@ async fn real_layout_default_reservoir_cannot_cover_a_typical_drain() {
             sim.run_for(secs(60)).await;
 
             let water = sim.water();
+            println!("default reservoir: {}", water.describe());
             let usable_l = layout.reservoir_l - layout.reserve_wet_l;
             assert_near(water.drained_l, 125.0, LITRES_TOL, "drained");
             assert_near(water.added_l, usable_l, 0.05, "added");
-            assert_near(water.tank_l, 680.9, 1.0, "tank left short of the weir");
-            assert!(water.return_level_cm() < layout.sump_pump.height_cm);
-            assert!(!water.pump_on(PumpId::Return));
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
+            let short_l = water.drained_l - water.added_l;
+            assert_near(
+                water.return_level_cm(),
+                layout.return_operating_cm - short_l / layout.return_area_l_per_cm(),
+                LEVEL_TOL_CM,
+                "the shortfall sits in chambers 4 and 5",
+            );
+            assert_near(water.return_level_cm(), 8.34, LEVEL_TOL_CM, "return level");
+            assert!(water.return_level_cm() > layout.sump_pump.height_cm);
+            assert!(water.pump_on(PumpId::Return));
             assert_eq!(water.makeup_dry_s, 0.0);
             assert_eq!(water.return_dry_s, 0.0);
             assert_eq!(water.spilled_l, 0.0);
@@ -510,12 +526,12 @@ async fn real_layout_stop_sensor_in_a_baffled_chamber_never_trips() {
             assert_near(overshoot, 17.5, LITRES_TOL, "overshoot");
             assert_near(
                 water.return_level_cm(),
-                layout.baffle_cm
-                    + (overshoot - layout.headroom_to_baffle_l()) / layout.total_area_l_per_cm(),
+                layout.return_level_with_l(overshoot),
                 LEVEL_TOL_CM,
                 "flooded level",
             );
-            assert!(water.return_level_cm() > 32.5);
+            assert!(water.return_level_cm() > layout.crests_cm[0]);
+            assert!(water.return_level_cm() < layout.sump_biological.height_cm);
             assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
             assert_eq!(water.spilled_l, 0.0);
         })
@@ -543,7 +559,7 @@ async fn real_layout_stop_sensor_trips_only_once_the_whole_sump_floods() {
                 LITRES_TOL,
                 "overshoot before the baffled sensor trips",
             );
-            assert_near(overshoot, 28.38, LITRES_TOL, "overshoot");
+            assert_near(overshoot, 26.70, LITRES_TOL, "overshoot");
             assert_near(
                 water.return_level_cm(),
                 layout.sump_biological.height_cm,
@@ -556,7 +572,7 @@ async fn real_layout_stop_sensor_trips_only_once_the_whole_sump_floods() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn real_layout_without_stop_sensor_spills_on_a_long_refill() {
+async fn real_layout_without_stop_sensor_the_flood_sensors_end_a_long_refill() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL.with_reservoir(150.0);
@@ -565,20 +581,26 @@ async fn real_layout_without_stop_sensor_spills_on_a_long_refill() {
             start_water_change(&sim, 30, 30, 750).await;
 
             let record = finish(&sim).await;
-            assert_eq!(record.result, OperationResult::Completed);
+            assert_eq!(record.result, OperationResult::Overflow);
+            assert!(record.refill_ran_s < 750);
             assert_record_litres(&sim, &record);
             assert_balanced(&sim);
+            sim.run_for(secs(5)).await;
 
+            let status = sim.status().await;
+            assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpHigh));
             let water = sim.water();
-            let expected = water.added_l - water.drained_l - layout.headroom_to_rim_l();
-            assert_near(water.spilled_l, expected, LITRES_TOL, "spill");
-            assert_near(water.spilled_l, 58.32, LITRES_TOL, "spill");
+            let overshoot = water.added_l - water.drained_l;
             assert_near(
-                water.return_level_cm(),
-                layout.sump_height_cm,
-                1e-9,
-                "sump at rim",
+                overshoot,
+                layout.headroom_to_level_l(layout.sump_mechanical.height_cm),
+                LITRES_TOL,
+                "overshoot up to the flood sensors",
             );
+            assert_eq!(water.spilled_l, 0.0);
+            assert!(water.return_level_cm() < layout.sump_height_cm);
+            assert!(!water.pump_on(PumpId::Makeup));
+            assert!(water.pump_on(PumpId::Return));
         })
         .await;
 }
@@ -670,7 +692,7 @@ async fn return_level_return_override_pauses_the_refill() {
 async fn return_level_restart_mid_drain_resumes_and_completes() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::REAL.wide_return_chamber();
+            let layout = Layout::REAL;
             let mut sim = Sim::start(layout).await;
             configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 40, 30, 750).await;
@@ -742,7 +764,7 @@ async fn return_level_restart_mid_drain_resumes_and_completes() {
 async fn return_level_second_restart_in_one_operation_suspends() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::REAL.wide_return_chamber();
+            let layout = Layout::REAL;
             let mut sim = Sim::start(layout).await;
             configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 40, 30, 750).await;
@@ -872,7 +894,7 @@ async fn return_level_sump_pump_stuck_wet_runs_the_return_dry_while_refilling() 
             let starved_s = (water.drained_l - r * to_intake_s) / m;
             let expected_dry_s = starved_s * (1.0 - m / r);
             assert_near(water.return_dry_s, expected_dry_s, 5.0, "return dry-run");
-            assert_near(water.return_dry_s, 531.9, 5.0, "return dry-run");
+            assert_near(water.return_dry_s, 378.6, 5.0, "return dry-run");
             assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
             assert_near(
                 water.added_l,

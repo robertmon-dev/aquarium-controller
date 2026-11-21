@@ -19,6 +19,10 @@ const TOP_OFF_AT_0230: &str = r#"{
     "flow_lph":{"makeup":600,"drain":1500},
     "top_off":[{"cron":"30 2 * * *","duration_s":120}]}"#;
 
+const TOP_OFF_AT_0200_AND_0230: &str = r#"{
+    "flow_lph":{"makeup":600,"drain":1500},
+    "top_off":[{"cron":"0,30 2 * * *","duration_s":120}]}"#;
+
 const WATER_CHANGE_AT_0230: &str = r#"{
     "flow_lph":{"makeup":600,"drain":1500},
     "reservoir_ready_l":47,
@@ -130,6 +134,40 @@ async fn dst_fall_back_fires_a_0230_top_off_once() {
             assert_eq!(water.count(Event::Pump(PumpId::Makeup, true)), 1);
             assert!((water.added_l - EVAPORATED_L).abs() < 0.5);
             assert!((water.deficit_l() - EVAPORATED_L).abs() < 0.5);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn dst_fall_back_fires_each_minute_of_a_two_minute_window_once() {
+    LocalSet::new()
+        .run_until(async {
+            let matches = [
+                utc(2026, 10, 25, 0, 0),
+                utc(2026, 10, 25, 0, 30),
+                utc(2026, 10, 25, 1, 0),
+                utc(2026, 10, 25, 1, 30),
+            ];
+            let sim = start(utc(2026, 10, 24, 22, 0), TOP_OFF_AT_0200_AND_0230).await;
+            let evaporations: Vec<u64> = matches.iter().map(|at| at - 600).collect();
+
+            let firings = run_until_epoch(&sim, utc(2026, 10, 25, 3, 0), &evaporations).await;
+
+            let started: Vec<_> = firings
+                .top_offs
+                .iter()
+                .map(|record| record.started_at)
+                .collect();
+            assert_eq!(started, [Some(matches[0]), Some(matches[1])]);
+            assert_eq!(local_hm(matches[0]), local_hm(matches[2]));
+            assert_eq!(local_hm(matches[1]), local_hm(matches[3]));
+            assert!(firings.skipped.is_empty());
+
+            let water = sim.water();
+            println!("two-minute window over the fall-back: {}", water.describe());
+            assert_eq!(water.count(Event::Pump(PumpId::Makeup, true)), 2);
+            assert!((water.added_l - 2.0 * EVAPORATED_L).abs() < 0.5);
+            assert!((water.deficit_l() - 2.0 * EVAPORATED_L).abs() < 0.5);
         })
         .await;
 }
