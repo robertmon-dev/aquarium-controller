@@ -1,9 +1,14 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::ports::outbound::Clock;
 use esp_idf_svc::sntp::{EspSntp, SntpConf, SyncStatus};
 use esp_idf_svc::sys::EspError;
 use tracing::info;
+
+extern "C" {
+    fn tzset();
+}
 
 pub struct SystemClock {
     _sntp: EspSntp<'static>,
@@ -23,9 +28,12 @@ impl SntpStatus {
 }
 
 impl SystemClock {
-    pub fn new() -> Result<Self, EspError> {
+    pub fn new(timezone: &str) -> Result<Self, EspError> {
+        std::env::set_var("TZ", timezone);
+        unsafe { tzset() };
+
         let sntp = EspSntp::new(&SntpConf::default())?;
-        info!("SNTP started");
+        info!(timezone, "SNTP started");
 
         Ok(Self {
             _sntp: sntp,
@@ -34,22 +42,17 @@ impl SystemClock {
         })
     }
 
-    fn civil(&self) -> Option<(u16, u8)> {
+    fn local_tm(&self) -> Option<esp_idf_svc::sys::tm> {
         let epoch = self.epoch_seconds()?;
 
-        let local = unsafe {
+        unsafe {
             let t = epoch as esp_idf_svc::sys::time_t;
             let tm = esp_idf_svc::sys::localtime(&t);
             if tm.is_null() {
                 return None;
             }
-            *tm
-        };
-
-        let minute_of_day = (local.tm_hour as u16) * 60 + local.tm_min as u16;
-        let month = (local.tm_mon as u8) + 1;
-
-        Some((minute_of_day, month))
+            Some(*tm)
+        }
     }
 }
 
@@ -73,10 +76,21 @@ impl Clock for SystemClock {
     }
 
     fn local_minute_of_day(&self) -> Option<u16> {
-        self.civil().map(|(minute, _)| minute)
+        self.local_tm()
+            .map(|tm| (tm.tm_hour as u16) * 60 + tm.tm_min as u16)
     }
 
     fn local_month(&self) -> Option<u8> {
-        self.civil().map(|(_, month)| month)
+        self.local_tm().map(|tm| (tm.tm_mon as u8) + 1)
+    }
+
+    fn local_civil_time(&self) -> Option<CivilTime> {
+        self.local_tm().map(|tm| CivilTime {
+            minute: tm.tm_min as u8,
+            hour: tm.tm_hour as u8,
+            day: tm.tm_mday as u8,
+            month: (tm.tm_mon as u8) + 1,
+            weekday: tm.tm_wday as u8,
+        })
     }
 }
