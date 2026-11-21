@@ -24,6 +24,9 @@ mod hw {
             pump: impl InputPin + 'd,
             tank: impl InputPin + 'd,
             reserve: impl InputPin + 'd,
+            return_level: impl InputPin + 'd,
+            reservoir_ready: impl InputPin + 'd,
+            reservoir_full: impl InputPin + 'd,
         ) -> Result<Self, EspError> {
             Ok(Self {
                 pins: [
@@ -40,6 +43,18 @@ mod hw {
                     (
                         WaterLevelRole::SumpReserve,
                         PinDriver::input(reserve, Pull::Up)?,
+                    ),
+                    (
+                        WaterLevelRole::SumpReturnLevel,
+                        PinDriver::input(return_level, Pull::Up)?,
+                    ),
+                    (
+                        WaterLevelRole::ReservoirReady,
+                        PinDriver::input(reservoir_ready, Pull::Up)?,
+                    ),
+                    (
+                        WaterLevelRole::ReservoirFull,
+                        PinDriver::input(reservoir_full, Pull::Up)?,
                     ),
                 ],
             })
