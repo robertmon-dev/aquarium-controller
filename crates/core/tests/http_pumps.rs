@@ -331,6 +331,65 @@ async fn the_refill_stop_sensor_is_set_kept_and_cleared_over_the_api() {
 }
 
 #[tokio::test]
+async fn the_reservoir_volume_bounds_a_water_change_over_the_api() {
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            pumps.observe(Some(HEALTHY), Duration::ZERO, Instant::now());
+            let patch = |payload: &'static str| body("PATCH", SETTINGS, Some(TOKEN), payload);
+
+            let set: PumpSettings = parse(
+                &raw(
+                    addr,
+                    &patch(r#"{"flow_lph":{"makeup":600,"drain":1500},"reservoir_ready_l":50}"#),
+                )
+                .await,
+            );
+            assert_eq!(set.reservoir_ready_l, Some(50));
+
+            let kept: PumpSettings = parse(&raw(addr, &patch(r#"{"resume_window_s":60}"#)).await);
+            assert_eq!(kept.reservoir_ready_l, Some(50));
+
+            assert_status(&raw(addr, &patch(r#"{"reservoir_ready_l":0}"#)).await, 400);
+            let window = raw(
+                addr,
+                &patch(
+                    r#"{"water_change":[{"cron":"0 10 * * sun","drain_s":121,"refill_s":300}]}"#,
+                ),
+            )
+            .await;
+            assert_status(&window, 400);
+            assert!(
+                window.contains("a water-change window drains more than reservoir_ready_l holds"),
+                "got: {window}"
+            );
+
+            let refused = raw(
+                addr,
+                &body(
+                    "POST",
+                    WATER_CHANGE,
+                    Some(TOKEN),
+                    r#"{"drain_s":121,"refill_s":300}"#,
+                ),
+            )
+            .await;
+            assert_status(&refused, 400);
+            assert!(
+                refused.contains("the planned drain exceeds the water the reservoir holds"),
+                "got: {refused}"
+            );
+            assert_eq!(pumps.status().operation.state, OperationState::Idle);
+
+            let cleared: PumpSettings =
+                parse(&raw(addr, &patch(r#"{"reservoir_ready_l":null}"#)).await);
+            assert_eq!(cleared.reservoir_ready_l, None);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn refill_blockers_explain_themselves() {
     LocalSet::new()
         .run_until(async {
