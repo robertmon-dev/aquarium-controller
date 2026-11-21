@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::ports::outbound::Clock;
@@ -13,7 +13,7 @@ extern "C" {
 
 pub struct SystemClock {
     _sntp: Option<EspSntp<'static>>,
-    booted_at: SystemTime,
+    booted_at: Instant,
     sntp_handle: SntpStatus,
     sntp_enabled: bool,
 }
@@ -59,7 +59,7 @@ impl SystemClock {
 
         Ok(Self {
             _sntp: sntp,
-            booted_at: SystemTime::now(),
+            booted_at: Instant::now(),
             sntp_handle: SntpStatus::default(),
             sntp_enabled: start_sntp,
         })
@@ -92,10 +92,7 @@ impl Clock for SystemClock {
     }
 
     fn uptime_seconds(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(self.booted_at)
-            .map(|d| d.as_secs())
-            .unwrap_or(0)
+        self.booted_at.elapsed().as_secs()
     }
 
     fn local_minute_of_day(&self) -> Option<u16> {
