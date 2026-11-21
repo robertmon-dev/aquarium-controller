@@ -226,11 +226,8 @@ impl WaterLevelSink for InMemoryWaterLevelStore {
 }
 
 impl WaterLevelSource for InMemoryWaterLevelStore {
-    fn levels(&self) -> WaterLevelSnapshot {
-        self.tx
-            .borrow()
-            .as_ref()
-            .map_or_else(WaterLevelSnapshot::dry, |sample| sample.levels.clone())
+    fn levels(&self) -> Option<LevelSample> {
+        self.tx.borrow().clone()
     }
 }
 
@@ -241,7 +238,7 @@ impl WaterLevelSink for Arc<InMemoryWaterLevelStore> {
 }
 
 impl WaterLevelSource for Arc<InMemoryWaterLevelStore> {
-    fn levels(&self) -> WaterLevelSnapshot {
+    fn levels(&self) -> Option<LevelSample> {
         self.as_ref().levels()
     }
 }

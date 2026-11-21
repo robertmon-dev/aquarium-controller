@@ -37,6 +37,15 @@ export function waterLevelCard(
   levels: WaterLevelMetricsDto,
   t: Translate,
 ): WaterLevelCardData {
+  if (levels.available === false) {
+    return {
+      title: t("water.title"),
+      status: "off",
+      statusLabel: t("common.noData"),
+      chips: SENSORS.map(([key]) => ({ label: t(key), variant: "default" })),
+    };
+  }
+
   const chips = SENSORS.map(([key, field]) => ({
     label: t(key),
     variant: variantOf(levels[field] as WaterLevelEntryDto),

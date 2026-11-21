@@ -17,5 +17,5 @@ pub trait WaterLevelSink {
 }
 
 pub trait WaterLevelSource {
-    fn levels(&self) -> WaterLevelSnapshot;
+    fn levels(&self) -> Option<LevelSample>;
 }

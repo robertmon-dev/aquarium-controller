@@ -285,6 +285,7 @@ export const en = {
       refilling: "refilling",
       resuming: "resuming",
       suspended: "suspended",
+      unsupervised: "no watchdog",
     },
     lighting: {
       title: "lighting",

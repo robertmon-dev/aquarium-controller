@@ -1,4 +1,7 @@
 use std::sync::Mutex;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use crate::domain::calibration::{Calibration, PhCalibration};
@@ -8,10 +11,12 @@ use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{
     LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
-use crate::domain::pump::{OperationKind, OperationState, PumpsTelemetry};
+use crate::domain::pump::{
+    OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry, Supervision,
+};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
-    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
+    CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingOverrideSource, PhReader,
     ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
     TemperatureError, TemperatureReader, TemperatureSample, TemperatureSampleSink,
     TemperatureSensorRole, WaterLevelSource,
@@ -128,11 +133,29 @@ impl LightingOverrideSource for FakeOverrides {
     }
 }
 
-struct FakeLevels(WaterLevelSnapshot);
+struct FakeLevels(Option<LevelSample>);
 
 impl FakeLevels {
+    fn sampled(levels: WaterLevelSnapshot) -> Self {
+        Self(Some(LevelSample {
+            levels,
+            measured_at: Instant::now(),
+        }))
+    }
+
+    fn never_sampled() -> Self {
+        Self(None)
+    }
+
+    fn stale(levels: WaterLevelSnapshot) -> Self {
+        Self(Some(LevelSample {
+            levels,
+            measured_at: Instant::now() - LEVEL_STALE,
+        }))
+    }
+
     fn all_dry() -> Self {
-        Self(WaterLevelSnapshot::dry())
+        Self::sampled(WaterLevelSnapshot::dry())
     }
 
     fn wet(roles: &[WaterLevelRole]) -> Self {
@@ -140,18 +163,18 @@ impl FakeLevels {
         for role in roles {
             snapshot.sensors[role.index()].state = WaterLevelState::Wet;
         }
-        Self(snapshot)
+        Self::sampled(snapshot)
     }
 
     fn faulty(role: WaterLevelRole) -> Self {
         let mut snapshot = WaterLevelSnapshot::dry();
         snapshot.sensors[role.index()].faulty = true;
-        Self(snapshot)
+        Self::sampled(snapshot)
     }
 }
 
 impl WaterLevelSource for FakeLevels {
-    fn levels(&self) -> WaterLevelSnapshot {
+    fn levels(&self) -> Option<LevelSample> {
         self.0.clone()
     }
 }
@@ -221,11 +244,15 @@ impl CalibrationSource for FakeCalibration {
     }
 }
 
-struct FakePumps(PumpsTelemetry);
+struct FakePumps(PumpsTelemetry, Option<OperationRecord>);
 
 impl PumpStatusSource for FakePumps {
     fn pump_telemetry(&self) -> PumpsTelemetry {
         self.0
+    }
+
+    fn last_top_off(&self) -> Option<OperationRecord> {
+        self.1
     }
 }
 
@@ -245,10 +272,13 @@ const CAL: PhCalibration = PhCalibration {
 
 const NOMINAL_VOLTS_PER_PH: f32 = 0.05916;
 
+const LEVEL_STALE: Duration = Duration::from_secs(2);
+
 fn config() -> TelemetryConfig {
     TelemetryConfig {
         target_celsius: 27.0,
         ph_nominal_volts_per_ph: NOMINAL_VOLTS_PER_PH,
+        level_stale: LEVEL_STALE,
     }
 }
 
@@ -410,7 +440,7 @@ fn with_analog(
             analog,
             calibration,
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
-            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
         },
         sink,
         config(),
@@ -531,7 +561,7 @@ async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
-            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
         },
         &sink,
         config(),
@@ -775,8 +805,145 @@ async fn the_sump_is_not_low_for_the_ato_while_the_pump_chamber_is_wet() {
 
     let s = sink.last();
     assert!(!s.ato.sump_water_low);
-    assert!(!s.ato.reservoir_empty);
     assert!(!s.ato.pump_active);
+}
+
+#[tokio::test]
+async fn levels_before_the_first_sample_are_reported_as_unavailable() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::never_sampled())
+        .sample()
+        .await;
+
+    let s = sink.last();
+    assert!(!s.water_level.available);
+    assert!(!s.water_level.sensors_healthy);
+    assert!(!s.water_level.sump_pump.wet);
+    assert!(!s.ato.sump_water_low);
+    assert!(!s.ato.reservoir_empty);
+}
+
+#[tokio::test]
+async fn a_real_all_dry_reading_is_available_and_drives_the_ato_flags() {
+    let sink = RecordingSink::default();
+    with_levels(&sink, FakeLevels::all_dry()).sample().await;
+
+    let s = sink.last();
+    assert!(s.water_level.available);
+    assert!(s.water_level.sensors_healthy);
+    assert!(s.ato.sump_water_low);
+    assert!(s.ato.reservoir_empty);
+}
+
+#[tokio::test]
+async fn levels_from_a_stopped_sampler_are_reported_as_unavailable() {
+    let sink = RecordingSink::default();
+    with_levels(
+        &sink,
+        FakeLevels::stale(
+            FakeLevels::wet(&[WaterLevelRole::SumpPump])
+                .0
+                .unwrap()
+                .levels,
+        ),
+    )
+    .sample()
+    .await;
+
+    let s = sink.last();
+    assert!(!s.water_level.available);
+    assert!(!s.water_level.sensors_healthy);
+    assert!(!s.water_level.sump_pump.wet);
+    assert!(!s.ato.sump_water_low);
+}
+
+#[tokio::test]
+async fn a_filled_reservoir_is_not_empty_for_the_ato() {
+    let sink = RecordingSink::default();
+    with_levels(
+        &sink,
+        FakeLevels::wet(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve]),
+    )
+    .sample()
+    .await;
+
+    assert!(!sink.last().ato.reservoir_empty);
+}
+
+async fn ato_with(
+    pumps: PumpsTelemetry,
+    last_top_off: Option<OperationRecord>,
+) -> TankTelemetryDto {
+    let sink = RecordingSink::default();
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::wet(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve]),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(pumps, last_top_off),
+        },
+        &sink,
+        config(),
+    )
+    .sample()
+    .await;
+    sink.last()
+}
+
+fn top_off_record(refill_ran_s: u32) -> OperationRecord {
+    OperationRecord {
+        kind: OperationKind::TopOff,
+        started_at: Some(1_750_000_000),
+        drain_ran_s: 0,
+        settle_ran_s: 0,
+        refill_ran_s,
+        result: OperationResult::Completed,
+        resumed: false,
+        finished_at: Some(1_750_000_000 + u64::from(refill_ran_s)),
+    }
+}
+
+#[tokio::test]
+async fn the_ato_card_follows_a_running_top_off_and_the_last_fill() {
+    let topping_off = PumpsTelemetry {
+        makeup: true,
+        operation_kind: Some(OperationKind::TopOff),
+        operation_state: OperationState::Refilling,
+        ..PumpsTelemetry::UNAVAILABLE
+    };
+
+    let s = ato_with(topping_off, Some(top_off_record(42))).await;
+    assert!(s.ato.pump_active);
+    assert_eq!(s.ato.last_fill_duration_ms, 42_000);
+
+    let interlocked = PumpsTelemetry {
+        makeup: false,
+        ..topping_off
+    };
+    assert!(!ato_with(interlocked, None).await.ato.pump_active);
+    assert_eq!(
+        ato_with(interlocked, None).await.ato.last_fill_duration_ms,
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_water_change_refill_is_not_an_ato_top_off() {
+    let refilling = PumpsTelemetry {
+        makeup: true,
+        operation_kind: Some(OperationKind::WaterChange),
+        operation_state: OperationState::Refilling,
+        ..PumpsTelemetry::UNAVAILABLE
+    };
+
+    let s = ato_with(refilling, Some(top_off_record(42))).await;
+    assert!(!s.ato.pump_active);
+    assert_eq!(s.ato.last_fill_duration_ms, 42_000);
 }
 
 #[tokio::test]
@@ -1282,7 +1449,7 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(heaters),
-            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
         },
         &sink,
         config(),
@@ -1305,6 +1472,9 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
         operation_state: OperationState::Refilling,
         circulation_starved: true,
         level_sensors_suspect: true,
+        return_held_after_drain: true,
+        invalidation_pending: true,
+        supervision: Supervision::Unavailable,
     };
 
     TelemetryCollector::new(
@@ -1317,7 +1487,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
-            pumps: FakePumps(pumps),
+            pumps: FakePumps(pumps, None),
         },
         &sink,
         config(),

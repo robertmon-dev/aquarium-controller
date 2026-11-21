@@ -36,6 +36,18 @@ const valid = {
     circulation_starved: false,
     level_sensors_suspect: false,
   },
+  water_level: {
+    sump_mechanical: { wet: false, faulty: false },
+    sump_biological: { wet: false, faulty: false },
+    sump_pump: { wet: true, faulty: false },
+    main_tank: { wet: false, faulty: false },
+    sump_reserve: { wet: true, faulty: false },
+    sump_return_level: { wet: true, faulty: false },
+    reservoir_ready: { wet: true, faulty: false },
+    reservoir_full: { wet: false, faulty: false },
+    sensors_healthy: true,
+    available: true,
+  },
   lighting: {
     profile: "daylight",
     channel_white_pct: 60,
@@ -105,6 +117,61 @@ describe("assertTelemetry", () => {
     void level_sensors_suspect;
 
     expect(assertTelemetry({ ...valid, pumps }).pumps.return).toBe(true);
+  });
+
+  it("accepts the pump hold, storage and supervision flags", () => {
+    const snapshot = {
+      ...valid,
+      pumps: {
+        ...valid.pumps,
+        return_held_after_drain: true,
+        invalidation_pending: false,
+        supervision: "unavailable",
+      },
+    };
+
+    expect(assertTelemetry(snapshot).pumps.supervision).toBe("unavailable");
+  });
+
+  it("rejects an unknown supervision state", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        pumps: { ...valid.pumps, supervision: "maybe" },
+      }),
+    ).toThrow(/pumps\.supervision/);
+  });
+
+  it("accepts water levels that are not available yet", () => {
+    const snapshot = {
+      ...valid,
+      water_level: {
+        ...valid.water_level,
+        sump_pump: { wet: false, faulty: false },
+        sensors_healthy: false,
+        available: false,
+      },
+    };
+
+    expect(assertTelemetry(snapshot).water_level.available).toBe(false);
+  });
+
+  it("accepts water levels from firmware without the availability flag", () => {
+    const { available, ...water_level } = valid.water_level;
+    void available;
+
+    expect(
+      assertTelemetry({ ...valid, water_level }).water_level.sensors_healthy,
+    ).toBe(true);
+  });
+
+  it("rejects a non-boolean water level availability", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        water_level: { ...valid.water_level, available: "no" },
+      }),
+    ).toThrow(/water_level\.available/);
   });
 
   it("rejects a non-boolean suspect harness flag", () => {

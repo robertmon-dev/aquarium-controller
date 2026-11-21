@@ -203,17 +203,7 @@ impl TankTelemetryDto {
                 channel_rgb_pct: 0,
                 override_active: false,
             },
-            water_level: WaterLevelMetricsDto {
-                sump_mechanical: WaterLevelEntryDto::UNKNOWN,
-                sump_biological: WaterLevelEntryDto::UNKNOWN,
-                sump_pump: WaterLevelEntryDto::UNKNOWN,
-                main_tank: WaterLevelEntryDto::UNKNOWN,
-                sump_reserve: WaterLevelEntryDto::UNKNOWN,
-                sump_return_level: WaterLevelEntryDto::UNKNOWN,
-                reservoir_ready: WaterLevelEntryDto::UNKNOWN,
-                reservoir_full: WaterLevelEntryDto::UNKNOWN,
-                sensors_healthy: false,
-            },
+            water_level: WaterLevelMetricsDto::UNAVAILABLE,
             heaters: HeatersStatus::UNAVAILABLE,
             pumps: PumpsTelemetry::UNAVAILABLE,
             leak_detected: false,
@@ -324,6 +314,29 @@ pub struct WaterLevelMetricsDto {
     pub reservoir_ready: WaterLevelEntryDto,
     pub reservoir_full: WaterLevelEntryDto,
     pub sensors_healthy: bool,
+
+    #[serde(default = "assumed_available")]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
+    pub available: bool,
+}
+
+const fn assumed_available() -> bool {
+    true
+}
+
+impl WaterLevelMetricsDto {
+    pub const UNAVAILABLE: Self = Self {
+        sump_mechanical: WaterLevelEntryDto::UNKNOWN,
+        sump_biological: WaterLevelEntryDto::UNKNOWN,
+        sump_pump: WaterLevelEntryDto::UNKNOWN,
+        main_tank: WaterLevelEntryDto::UNKNOWN,
+        sump_reserve: WaterLevelEntryDto::UNKNOWN,
+        sump_return_level: WaterLevelEntryDto::UNKNOWN,
+        reservoir_ready: WaterLevelEntryDto::UNKNOWN,
+        reservoir_full: WaterLevelEntryDto::UNKNOWN,
+        sensors_healthy: false,
+        available: false,
+    };
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -356,6 +369,7 @@ impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
             reservoir_ready: entry(WaterLevelRole::ReservoirReady),
             reservoir_full: entry(WaterLevelRole::ReservoirFull),
             sensors_healthy: snapshot.all_healthy(),
+            available: true,
         }
     }
 }

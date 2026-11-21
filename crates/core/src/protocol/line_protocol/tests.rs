@@ -2,7 +2,8 @@ use super::*;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
 use crate::domain::pump::{
-    OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry,
+    OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState,
+    PumpsTelemetry, Supervision,
 };
 
 fn populated() -> TankTelemetryDto {
@@ -37,6 +38,7 @@ fn populated() -> TankTelemetryDto {
     dto.lighting.channel_white_pct = 60;
     dto.lighting.channel_rgb_pct = 40;
 
+    dto.water_level.available = true;
     dto.water_level.sump_pump = WaterLevelEntryDto {
         wet: true,
         faulty: false,
@@ -434,13 +436,16 @@ fn the_pump_state_is_its_own_measurement() {
         operation_state: OperationState::Draining,
         circulation_starved: false,
         level_sensors_suspect: false,
+        return_held_after_drain: false,
+        invalidation_pending: false,
+        supervision: Supervision::Active,
     };
 
     let encoded = encode(&dto).expect("encodes");
 
     assert!(
         encoded.contains(
-            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false,circulation_starved=false,level_sensors_suspect=false 1750000000"
+            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false,circulation_starved=false,level_sensors_suspect=false,return_held_after_drain=false,invalidation_pending=false,supervision=\"active\" 1750000000"
         ),
         "got: {encoded}"
     );
@@ -493,6 +498,7 @@ fn finished_water_change() -> OperationEvent {
             refill_ran_s: 280,
             result: OperationResult::Overflow,
             resumed: true,
+            finished_at: Some(1_750_000_610),
         },
         finished_at: Some(1_750_000_610),
         drained_l: Some(50.0),
@@ -552,7 +558,52 @@ fn a_suspect_level_sensor_harness_is_a_pump_field() {
 
     let encoded = encode(&dto).expect("encodes");
     assert!(
-        encoded.contains(",level_sensors_suspect=true "),
+        encoded.contains(",level_sensors_suspect=true,"),
+        "{encoded}"
+    );
+}
+
+#[test]
+fn the_return_hold_and_a_pending_invalidation_are_pump_fields() {
+    let mut dto = populated();
+    dto.pumps.return_held_after_drain = true;
+    dto.pumps.invalidation_pending = true;
+
+    let encoded = encode(&dto).expect("encodes");
+    assert!(
+        encoded.contains(",return_held_after_drain=true,invalidation_pending=true,"),
+        "{encoded}"
+    );
+}
+
+#[test]
+fn every_supervision_state_has_a_name() {
+    for (supervision, name) in [
+        (Supervision::Active, "active"),
+        (Supervision::Unavailable, "unavailable"),
+        (Supervision::Off, "off"),
+    ] {
+        let mut dto = populated();
+        dto.pumps.supervision = supervision;
+        let encoded = encode(&dto).expect("encodes");
+        assert!(
+            encoded.contains(&format!(",supervision=\"{name}\" ")),
+            "{encoded}"
+        );
+    }
+}
+
+#[test]
+fn unavailable_water_levels_write_no_sensor_lines_and_no_level_based_ato_fields() {
+    let mut dto = populated();
+    dto.water_level.available = false;
+    dto.ato.pump_active = true;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(!encoded.contains("aquarium_water_level"), "{encoded}");
+    assert!(
+        encoded.contains("aquarium_ato pump_active=true,last_fill_ms=0i "),
         "{encoded}"
     );
 }

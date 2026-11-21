@@ -312,6 +312,7 @@ describe("createClient calibration", () => {
       refill_ran_s: 250,
       result: "sump_full",
       resumed: false,
+      finished_at: 1700000900,
     },
     last_skipped: {
       kind: "top_off",
@@ -324,6 +325,7 @@ describe("createClient calibration", () => {
     level_sensors_suspect: true,
     return_held_after_drain: true,
     invalidation_pending: false,
+    supervision: "active",
   };
 
   const pumpSettings = {
@@ -380,6 +382,35 @@ describe("createClient calibration", () => {
     const client = createClient({ device, fetchImpl });
 
     await expect(call(client)).rejects.toMatchObject({ kind: "malformed" });
+  });
+
+  it("rejects a pump status without the supervision state", async () => {
+    const { supervision, ...rest } = pumpsStatus;
+    void supervision;
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(rest));
+    const client = createClient({ device, fetchImpl });
+
+    await expect(client.pumps()).rejects.toMatchObject({
+      kind: "malformed",
+      detail: expect.stringContaining("supervision"),
+    });
+  });
+
+  it("accepts a history record from firmware without an end time", async () => {
+    const { finished_at, ...record } = pumpsStatus.last_water_change;
+    void finished_at;
+    const status = {
+      ...pumpsStatus,
+      last_water_change: record,
+      channels: {
+        ...pumpsStatus.channels,
+        drain: { ...channel, blocked_by: "supervision_unavailable" },
+      },
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(status));
+    const client = createClient({ device, fetchImpl });
+
+    await expect(client.pumps()).resolves.toEqual(status);
   });
 
   it("names the malformed pump status fields", async () => {

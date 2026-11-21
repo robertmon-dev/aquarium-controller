@@ -279,11 +279,13 @@ mod water_level {
     }
 
     #[test]
-    fn serves_an_all_dry_snapshot_before_the_first_sample() {
+    fn serves_no_levels_before_the_first_sample() {
         let store = InMemoryWaterLevelStore::new();
 
-        let levels = store.levels();
+        assert_eq!(store.levels(), None);
 
+        store.publish(WaterLevelSnapshot::dry());
+        let levels = store.levels().expect("published").levels;
         for role in WaterLevelRole::ALL {
             assert_eq!(levels.get(role).state, WaterLevelState::Dry);
             assert!(!levels.get(role).faulty);
@@ -296,12 +298,17 @@ mod water_level {
 
         store.publish(snapshot_with_wet(WaterLevelRole::SumpPump));
         assert_eq!(
-            store.levels().get(WaterLevelRole::SumpPump).state,
+            store
+                .levels()
+                .unwrap()
+                .levels
+                .get(WaterLevelRole::SumpPump)
+                .state,
             WaterLevelState::Wet
         );
 
         store.publish(snapshot_with_wet(WaterLevelRole::MainTank));
-        let levels = store.levels();
+        let levels = store.levels().unwrap().levels;
         assert_eq!(
             levels.get(WaterLevelRole::SumpPump).state,
             WaterLevelState::Dry,
@@ -321,7 +328,12 @@ mod water_level {
         writer.publish(snapshot_with_wet(WaterLevelRole::SumpBiological));
 
         assert_eq!(
-            store.levels().get(WaterLevelRole::SumpBiological).state,
+            store
+                .levels()
+                .unwrap()
+                .levels
+                .get(WaterLevelRole::SumpBiological)
+                .state,
             WaterLevelState::Wet
         );
     }

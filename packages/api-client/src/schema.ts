@@ -33,6 +33,14 @@ const pumpsGuard = z.object({
   ]),
   circulation_starved: z.boolean().optional(),
   level_sensors_suspect: z.boolean().optional(),
+  return_held_after_drain: z.boolean().optional(),
+  invalidation_pending: z.boolean().optional(),
+  supervision: z.enum(["active", "unavailable", "off"]).optional(),
+});
+
+const waterLevelEntryGuard = z.object({
+  wet: z.boolean(),
+  faulty: z.boolean(),
 });
 
 const telemetryGuard = z.object({
@@ -53,6 +61,18 @@ const telemetryGuard = z.object({
     sump: heaterStatusGuard,
   }),
   pumps: pumpsGuard,
+  water_level: z.object({
+    sump_mechanical: waterLevelEntryGuard,
+    sump_biological: waterLevelEntryGuard,
+    sump_pump: waterLevelEntryGuard,
+    main_tank: waterLevelEntryGuard,
+    sump_reserve: waterLevelEntryGuard,
+    sump_return_level: waterLevelEntryGuard,
+    reservoir_ready: waterLevelEntryGuard,
+    reservoir_full: waterLevelEntryGuard,
+    sensors_healthy: z.boolean(),
+    available: z.boolean().optional(),
+  }),
   lighting: z.object({
     profile: z.enum(["off", "sunrise", "daylight", "sunset", "moonlight"]),
     channel_white_pct: z.number(),
@@ -97,6 +117,7 @@ const blocker = z.enum([
   "sump_high",
   "interlock",
   "levels_unavailable_after_drain",
+  "supervision_unavailable",
 ]);
 
 const channelStatusGuard = z.object({
@@ -126,6 +147,7 @@ const operationRecordGuard = z.object({
     "incomplete",
   ]),
   resumed: z.boolean(),
+  finished_at: z.number().nullable().exactOptional(),
 });
 
 const pumpsStatusGuard = z.object({
@@ -160,6 +182,7 @@ const pumpsStatusGuard = z.object({
   level_sensors_suspect: z.boolean(),
   return_held_after_drain: z.boolean(),
   invalidation_pending: z.boolean(),
+  supervision: pumpsGuard.shape.supervision.unwrap(),
 });
 
 const pumpSettingsGuard = z.object({

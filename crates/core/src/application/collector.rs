@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::time::Instant;
 
 use crate::domain::calibration::{Calibration, PhCalibration};
@@ -5,6 +7,7 @@ use crate::domain::light::{self, LightingSchedule};
 use crate::domain::metrics::{
     LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
 };
+use crate::domain::pump::{LevelConditions, OperationKind};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
     ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
@@ -29,6 +32,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K, T, P> {
 pub struct TelemetryConfig {
     pub target_celsius: f32,
     pub ph_nominal_volts_per_ph: f32,
+    pub level_stale: Duration,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -168,11 +172,25 @@ where
         }
 
         dto.lighting = self.evaluate_lighting();
-        let levels = self.sources.levels.levels();
-        dto.water_level = WaterLevelMetricsDto::from(&levels);
-        dto.ato.sump_water_low = levels.sump_water_low();
+        let now = Instant::now();
+        let levels = self.sources.levels.levels().filter(|sample| {
+            now.saturating_duration_since(sample.measured_at) < self.config.level_stale
+        });
+        if let Some(sample) = levels {
+            dto.water_level = WaterLevelMetricsDto::from(&sample.levels);
+            dto.ato.sump_water_low = sample.levels.sump_water_low();
+            dto.ato.reservoir_empty =
+                LevelConditions::from_snapshot(&sample.levels, None).reservoir_empty;
+        }
         dto.heaters = self.sources.heaters.heater_status();
         dto.pumps = self.sources.pumps.pump_telemetry();
+        dto.ato.pump_active =
+            dto.pumps.operation_kind == Some(OperationKind::TopOff) && dto.pumps.makeup;
+        dto.ato.last_fill_duration_ms = self
+            .sources
+            .pumps
+            .last_top_off()
+            .map_or(0, |record| record.refill_ran_s.saturating_mul(1000));
 
         dto
     }

@@ -96,6 +96,45 @@ describe("waterLevelCard", () => {
     expect(card.statusLabel).toBe("2 sensors faulty");
   });
 
+  it("shows no data instead of dry sensors when levels are unavailable", () => {
+    const unavailable: WaterLevelMetricsDto = {
+      ...healthy,
+      sump_mechanical: { wet: false, faulty: false },
+      sump_biological: { wet: false, faulty: false },
+      sump_pump: { wet: false, faulty: false },
+      main_tank: { wet: false, faulty: false },
+      sump_return_level: { wet: false, faulty: false },
+      sensors_healthy: false,
+      available: false,
+    };
+
+    const card = waterLevelCard(unavailable, t);
+
+    expect(card.status).toBe("off");
+    expect(card.statusLabel).toBe("no data");
+    expect(card.chips.every((chip) => chip.variant === "default")).toBe(true);
+    expect(waterLevelCard(unavailable, translator("pl")).statusLabel).toBe(
+      "brak danych",
+    );
+  });
+
+  it("treats a real all-dry reading as available", () => {
+    const dry: WaterLevelMetricsDto = {
+      ...healthy,
+      sump_mechanical: { wet: false, faulty: false },
+      sump_biological: { wet: false, faulty: false },
+      sump_pump: { wet: false, faulty: false },
+      main_tank: { wet: false, faulty: false },
+      sump_return_level: { wet: false, faulty: false },
+      available: true,
+    };
+
+    const card = waterLevelCard(dry, t);
+
+    expect(card.status).toBe("ok");
+    expect(card.chips.every((chip) => chip.variant === "dry")).toBe(true);
+  });
+
   it("is off when the firmware reports the sensors unhealthy with none faulty", () => {
     const card = waterLevelCard({ ...healthy, sensors_healthy: false }, t);
 

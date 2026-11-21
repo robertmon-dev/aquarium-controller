@@ -164,6 +164,23 @@ export function atoCard(s: TankTelemetryDto, t: Translate): CardData {
     last_fill_duration_ms,
   } = s.ato;
 
+  if (s.water_level.available === false) {
+    return {
+      title: t("cards.ato.title"),
+      status: "off",
+      statusLabel: t("common.noData"),
+      metrics: [
+        { label: t("cards.ato.pump"), value: onOff(t, pump_active) },
+        { label: t("cards.ato.sumpLow"), value: EM_DASH },
+        { label: t("cards.ato.reservoir"), value: EM_DASH },
+        {
+          label: t("cards.ato.lastFill"),
+          value: formatDuration(Math.round(last_fill_duration_ms / 1000)),
+        },
+      ],
+    };
+  }
+
   const statusLabel = reservoir_empty
     ? t("cards.ato.reservoirEmpty")
     : sump_water_low
@@ -249,6 +266,9 @@ export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
   const pumps = s.pumps;
   const starved = pumps.circulation_starved ?? false;
   const suspect = pumps.level_sensors_suspect ?? false;
+  const held = pumps.return_held_after_drain ?? false;
+  const unsaved = pumps.invalidation_pending ?? false;
+  const unsupervised = pumps.supervision === "unavailable";
   const toppingOff =
     pumps.operation_kind === "top_off" && pumps.operation_state === "refilling";
 
@@ -256,9 +276,11 @@ export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
     ? t("cards.pumps.toppingOff")
     : pumps.operation_state !== "idle"
       ? t(OPERATION_LABELS[pumps.operation_state])
-      : pumps.return
-        ? t("cards.pumps.circulating")
-        : t("cards.pumps.stopped");
+      : unsupervised
+        ? t("cards.pumps.unsupervised")
+        : pumps.return
+          ? t("cards.pumps.circulating")
+          : t("cards.pumps.stopped");
 
   return {
     title: t("cards.pumps.title"),
@@ -266,7 +288,10 @@ export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
       pumps.return &&
       pumps.operation_state !== "suspended" &&
       !starved &&
-      !suspect
+      !suspect &&
+      !held &&
+      !unsaved &&
+      !unsupervised
         ? "ok"
         : "degraded",
     statusLabel,

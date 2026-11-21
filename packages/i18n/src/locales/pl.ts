@@ -287,6 +287,7 @@ export const pl: DeepString<typeof en> = {
       refilling: "uzupełnianie",
       resuming: "wznawianie",
       suspended: "wstrzymana",
+      unsupervised: "brak watchdoga",
     },
     lighting: {
       title: "oświetlenie",

@@ -2,7 +2,7 @@ use std::fmt::{self, Write};
 
 use crate::domain::metrics::{LightingProfile, SystemMode, TankTelemetryDto, WaterLevelEntryDto};
 use crate::domain::pump::{
-    OperationEvent, OperationKind, OperationResult, OperationState, PumpsTelemetry,
+    OperationEvent, OperationKind, OperationResult, OperationState, PumpsTelemetry, Supervision,
 };
 
 struct Fields(String);
@@ -117,8 +117,10 @@ fn tds(snapshot: &TankTelemetryDto) -> Fields {
 
 fn ato(snapshot: &TankTelemetryDto) -> Fields {
     let mut fields = Fields::new();
-    fields.boolean("sump_low", snapshot.ato.sump_water_low);
-    fields.boolean("reservoir_empty", snapshot.ato.reservoir_empty);
+    if snapshot.water_level.available {
+        fields.boolean("sump_low", snapshot.ato.sump_water_low);
+        fields.boolean("reservoir_empty", snapshot.ato.reservoir_empty);
+    }
     fields.boolean("pump_active", snapshot.ato.pump_active);
     fields.integer("last_fill_ms", snapshot.ato.last_fill_duration_ms);
     fields
@@ -182,7 +184,18 @@ fn pumps(snapshot: &TankTelemetryDto) -> Fields {
     fields.boolean("top_off", topping_off);
     fields.boolean("circulation_starved", pumps.circulation_starved);
     fields.boolean("level_sensors_suspect", pumps.level_sensors_suspect);
+    fields.boolean("return_held_after_drain", pumps.return_held_after_drain);
+    fields.boolean("invalidation_pending", pumps.invalidation_pending);
+    fields.string("supervision", supervision_name(pumps.supervision));
     fields
+}
+
+fn supervision_name(supervision: Supervision) -> &'static str {
+    match supervision {
+        Supervision::Active => "active",
+        Supervision::Unavailable => "unavailable",
+        Supervision::Off => "off",
+    }
 }
 
 fn kind_name(kind: OperationKind) -> &'static str {
@@ -270,7 +283,10 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
     lines.extend(line("aquarium_ato", ato(snapshot), timestamp_s));
     lines.extend(line("aquarium_pumps", pumps(snapshot), timestamp_s));
 
-    for (tag, entry) in sensors {
+    for (tag, entry) in sensors
+        .into_iter()
+        .filter(|_| snapshot.water_level.available)
+    {
         lines.extend(line(
             &format!("aquarium_water_level,sensor={tag}"),
             water_level(entry),

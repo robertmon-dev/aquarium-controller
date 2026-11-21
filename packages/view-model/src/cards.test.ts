@@ -197,6 +197,30 @@ describe("atoCard", () => {
     expect(card.statusLabel).toBe("reservoir empty");
   });
 
+  it("shows no level data instead of a low sump or an empty reservoir", () => {
+    const card = atoCard(
+      {
+        ...snapshot,
+        ato: { ...snapshot.ato, sump_water_low: false, reservoir_empty: false },
+        water_level: {
+          ...snapshot.water_level,
+          sensors_healthy: false,
+          available: false,
+        },
+      },
+      t,
+    );
+
+    expect(card.status).toBe("off");
+    expect(card.statusLabel).toBe("no data");
+    expect(card.metrics.find((m) => m.label === "sump low")?.value).toBe(
+      EM_DASH,
+    );
+    expect(card.metrics.find((m) => m.label === "reservoir")?.value).toBe(
+      EM_DASH,
+    );
+  });
+
   it("formats the last fill from milliseconds", () => {
     const value = atoCard(snapshot, t).metrics.find(
       (m) => m.label === "last fill",
@@ -331,6 +355,41 @@ describe("pumpsCard", () => {
       expect(card.status).toBe("degraded");
       expect(card.statusLabel).toBe("circulating");
     }
+  });
+
+  it("is degraded while the return is held, storage lags or supervision is unavailable", () => {
+    for (const flag of [
+      { return_held_after_drain: true },
+      { invalidation_pending: true },
+      { supervision: "unavailable" as const },
+    ]) {
+      const card = pumpsCard(
+        { ...snapshot, pumps: { ...snapshot.pumps, ...flag } },
+        t,
+      );
+
+      expect(card.status).toBe("degraded");
+    }
+
+    for (const supervision of ["active", "off"] as const) {
+      expect(
+        pumpsCard(
+          { ...snapshot, pumps: { ...snapshot.pumps, supervision } },
+          t,
+        ).status,
+      ).toBe("ok");
+    }
+  });
+
+  it("names a missing watchdog in the pump card", () => {
+    const pumps = { ...snapshot.pumps, supervision: "unavailable" as const };
+
+    expect(pumpsCard({ ...snapshot, pumps }, t).statusLabel).toBe(
+      "no watchdog",
+    );
+    expect(
+      pumpsCard({ ...snapshot, pumps }, translator("pl")).statusLabel,
+    ).toBe("brak watchdoga");
   });
 
   it("reads missing flags from older firmware as clear", () => {
