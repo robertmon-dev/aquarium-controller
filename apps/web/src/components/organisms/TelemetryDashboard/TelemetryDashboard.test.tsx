@@ -77,6 +77,7 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
       drain: false,
       operation_kind: null,
       operation_state: "idle",
+      circulation_starved: false,
     },
     leak_detected: false,
     ...overrides,
