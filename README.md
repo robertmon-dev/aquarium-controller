@@ -113,6 +113,28 @@ Notes:
 * Firmware safeguards: a reading at or above `cutoff_celsius` or a missing reading turns a heater off even under a manual ON override, and both heaters switch off if no telemetry snapshot arrives for 6 s. Targets, hysteresis and the cutoff live in NVS and are set over `PATCH /api/heaters/settings`; overrides live in RAM and do not survive a reboot.
 * Enable control with `components.heaters` in `crates/firmware/src/settings.rs`.
 
+### Pump relay module (4-channel, 5 V, optocoupled)
+
+One relay module switches the return pump, the UV lamp, the makeup pump and the drain pump. The ESP32 drives only the module's `IN` pins.
+
+```text
+ESP32-S3                               Relay module                  Load side
+
+5 V    ──────────────────────────────  VCC
+GND    ──────────────────────────────  GND
+GPIO5  ──────────────────────────────  IN1   NC contact ── return pump
+GPIO6  ──────────────────────────────  IN2   NC contact ── UV lamp
+GPIO7  ──────────────────────────────  IN3   NO contact ── makeup pump
+GPIO16 ──────────────────────────────  IN4   NO contact ── drain pump
+```
+
+Notes:
+* Set the trigger jumper to **High** and leave the `JD-VCC`–`VCC` jumper in place. The `IN` pins are driven directly from the GPIOs — no resistors.
+* The return pump and the UV lamp use the **NC** contacts, so they keep running while the ESP32 is dead or resetting. The makeup and drain pumps use the **NO** contacts and stand still in that case. The firmware inverts the coil for NC channels (`Contact` in `crates/firmware/src/adapters/outbound/relay.rs`), so `on` always means the device runs.
+* Run `RunMode::RelayProbe` (no WiFi or HTTP) to verify the wiring: it energizes and releases each coil in turn every 2 s and logs `relay channel=… coil=…`.
+* Enable control with `components.pumps` in `crates/firmware/src/settings.rs`.
+* The relay pins are driven low once the firmware initialises the relay module (`components.pumps` not `Off`). Before that, and with `pumps: Off`, they float, which the module reads as released — the same physical fail-safe.
+
 ### Pin map
 
 | Peripheral | Pin(s) | Mode |
@@ -129,6 +151,10 @@ Notes:
 | XKC-Y25 — ATO reservoir | `GPIO15` | input, internal pull-up, active-low |
 | Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
 | Heater SSR — sump | `GPIO18` | push-pull output, low at boot, drives the SSR input directly |
+| Pump relay IN1 — return pump (NC) | `GPIO5` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
+| Pump relay IN2 — UV lamp (NC) | `GPIO6` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
+| Pump relay IN3 — makeup pump (NO) | `GPIO7` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
+| Pump relay IN4 — drain pump (NO) | `GPIO16` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
 
 Board configuration lives in `sdkconfig.defaults`: 240 MHz, 8 MiB flash, octal PSRAM at 80 MHz, and a 128 KiB main-task stack (one `picoserve` connection costs roughly 78 KiB of stack on that task).
 
@@ -160,8 +186,9 @@ The panel refuses to capture a point while the reading is still moving. That gat
 * **Water level with fault detection:** five XKC-Y25 inputs sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
 * **pH and TDS on one external ADC:** an ADS1115 over I2C serves both probes; 16 averaged samples per reading at 16-bit resolution. pH goes through a two-point calibration with a nominal Nernst slope and sump-temperature compensation; TDS through DFRobot's polynomial with a hand-entered compensation temperature and a correction factor.
 * **Calibration over the API, persisted in NVS:** buffer points, the top-up tank temperature and the TDS factor are set from the apps and survive a reboot. The write goes to flash before the value takes effect, so a calibration that cannot be stored is refused rather than silently lost at the next power cycle.
-* **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, and lighting override control.
+* **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, and pump control.
 * **Lighting overrides:** set a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit channel percentages, optionally time-boxed; overrides republish telemetry immediately rather than waiting for the next sample tick.
+* **Pumps, UV, top-off and water changes:** four relay channels (return pump, UV lamp, makeup pump, drain pump) with water-level interlocks, cron-scheduled or on-demand top-offs and water changes, OFF overrides, runtime counters, and checkpoints in NVS so an interrupted operation resumes after a restart.
 * **InfluxDB 2.x export:** optional, compile-time gated on the `INFLUX_*` variables being present. Snapshots are buffered and batched, with bounded retry backoff, on a dedicated worker.
 * **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
 * **Secrets that do not leak:** credentials and the API token are wrapped in a `Secret` newtype whose `Debug`/`Display` redact the value.
@@ -227,6 +254,8 @@ INFLUX_TOKEN="<influx api token>"
 
 Everything that is not a secret is a `const` in `crates/firmware/src/settings.rs`, evaluated at compile time: per-component modes, the HTTP port (`80`), connection limit and SSE keepalive, sampling intervals, the two DS18B20 ROM addresses, the target temperature, the ADS1115 front-end (address, gain, data rate, sample count, channel assignment), and the water-level polarity and debounce/flap windows.
 
+`Settings.timezone` (a POSIX TZ string, default `CET-1CEST,M3.5.0,M10.5.0/3`) sets the local time used by the lighting schedule and the pump cron schedules.
+
 Calibration is the exception: `sensors.calibration` holds only the **defaults used when NVS is empty**. Once a calibration has been written over the API it comes from flash, and editing the constants no longer changes what the device uses. `make erase` wipes NVS — and with it both the calibration and the stored WiFi credentials.
 
 ## HTTP API
@@ -249,6 +278,18 @@ All routes sit behind a bearer-token layer: `Authorization: Bearer <API_TOKEN>`.
 | `PATCH` | `/api/heaters/settings` | Partial update, merged and validated as a whole; `400` on values the device rejects, `500` when it cannot write them to NVS |
 | `PUT` | `/api/heaters/{tank\|sump}/override` | Force a heater `on` or `off`; `on` needs `duration_s` of 1–3600, `off` without one lasts until cleared; `400` otherwise, `404` on an unknown heater |
 | `DELETE` | `/api/heaters/{tank\|sump}/override` | Return the heater to the thermostat (`204`) |
+| `GET` | `/api/pumps` | Status of the four channels, the current operation, the last top-off and water change, and the last skipped window |
+| `GET` | `/api/pumps/settings` | Stored pump settings: top-off and water-change cron windows, flow rates, resume window |
+| `PATCH` | `/api/pumps/settings` | Partial update, merged and validated as a whole; `400` on values the device rejects, `500` when it cannot write them to NVS |
+| `PUT` | `/api/pumps/{return\|uv}/override` | Force a channel OFF; `duration_s` is required for `return` (60–7200 s) and optional for `uv` (60–2592000 s; without it the override lasts until cleared); `400` otherwise, `404` on `makeup` or `drain` |
+| `DELETE` | `/api/pumps/{return\|uv}/override` | Clear the override (`204`); `404` on `makeup` or `drain` |
+| `POST` | `/api/pumps/{id}/runtime/reset` | Zero the channel's runtime counter (`204`) |
+| `POST` | `/api/pumps/top-off` | Start a top-off of `duration_s` seconds (`202`); `400` on an invalid duration, `409` while another operation runs, `423` when blocked |
+| `POST` | `/api/pumps/top-off/resume` | Resume a suspended top-off (`202`); `409` when none is suspended, `423` when blocked |
+| `DELETE` | `/api/pumps/top-off` | Cancel the top-off (`204`) |
+| `POST` | `/api/water-change` | Start a water change from `drain_s`, `settle_s` and `refill_s` (`202`); `400` on an invalid plan, `409` while another operation runs, `423` when blocked or water levels are unavailable |
+| `POST` | `/api/water-change/resume` | Resume a suspended water change (`202`); `409` when none is suspended, `423` when blocked |
+| `DELETE` | `/api/water-change` | Cancel the water change (`204`) |
 
 ```bash
 curl -H "Authorization: Bearer $API_TOKEN" http://192.168.1.50/api/telemetry
@@ -274,13 +315,23 @@ curl -X PUT http://192.168.1.50/api/heaters/tank/override \
 curl -X PATCH http://192.168.1.50/api/heaters/settings \
   -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
   -d '{"sump":{"target_celsius":26.5,"hysteresis_celsius":0.3}}'
+
+curl -X POST http://192.168.1.50/api/water-change \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"drain_s":300,"settle_s":30,"refill_s":420}'
+
+curl -X PATCH http://192.168.1.50/api/pumps/settings \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"water_change":[{"cron":"0 10 * * sun","drain_s":300,"refill_s":420}],"flow_lph":{"makeup":300,"drain":600}}'
 ```
 
 A `PATCH` carries only the fields being changed. The three pH points are one unit: send all of them or none, because the device validates them together and will not accept half a calibration. The same holds for a heater zone in `/api/heaters/settings`: `target_celsius` and `hysteresis_celsius` travel together.
 
 Limits: targets 15–32 °C, hysteresis 0.1–2.0 °C, and a cutoff of at most 35 °C that must sit above both targets. A manual `on` never beats the safeguards — at or above the cutoff, or without a temperature reading, the heater stays off and its status says why. Overrides live in RAM; with `components.heaters` not running the API still accepts them, but nothing acts on them and the status reports `unavailable`.
 
-A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
+Pump safeguards: a dry `sump_pump` chamber stops the return pump and the UV lamp, which restart once it has been wet for 30 s. Missing water-level data stops the makeup and drain pumps. A wet `main_tank` sensor ends refilling with the result `overflow`, which counts as a success. An operation interrupted by a restart resumes if the checkpoint is younger than `resume_window_s`, and is suspended otherwise. Cron schedules are evaluated in local time (`Settings.timezone`), and need an SNTP-synchronised clock to fire. SNTP starts only with WiFi (`components.wifi` not `Off`), so without WiFi the schedules never fire.
+
+A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).
@@ -303,7 +354,7 @@ generated from these Rust types — see [The HTTP contract](#the-http-contract).
 │   └── firmware/                # aquarium-controller — ESP32-S3 firmware
 │       ├── .cargo/config.toml   # xtensa target, linker, ESP-IDF env
 │       ├── src/
-│       │   ├── adapters/outbound/  # ds18b20, xkc_y25, ads1115, nvs_calibration, temperature, influx
+│       │   ├── adapters/outbound/  # ds18b20, xkc_y25, ads1115, nvs_calibration, temperature, influx, relay, nvs_pump
 │       │   ├── infrastructure/  # wifi, clock (SNTP), system_health
 │       │   ├── settings.rs      # compile-time configuration
 │       │   └── main.rs          # peripheral wiring, task graph, ROM discovery + ADC probe modes
