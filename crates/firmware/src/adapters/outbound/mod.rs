@@ -3,6 +3,8 @@ pub mod ds18b20;
 pub mod influx;
 pub mod nvs_calibration;
 pub mod nvs_heater;
+pub mod nvs_pump;
+pub mod relay;
 pub mod ssr;
 pub mod temperature;
 pub mod xkc_y25;
