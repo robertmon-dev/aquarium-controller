@@ -159,6 +159,10 @@ fn override_rejection(id: PumpId, error: OverrideError) -> Rejection {
             tracing::warn!(pump = id.name(), reason, "override rejected");
             (StatusCode::BAD_REQUEST, reason)
         }
+        OverrideError::NotPersisted(reason) => {
+            tracing::error!(pump = id.name(), reason, "override not persisted");
+            (StatusCode::INTERNAL_SERVER_ERROR, reason)
+        }
     }
 }
 
