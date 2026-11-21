@@ -450,9 +450,9 @@ fn finished_water_change() -> OperationEvent {
         record: OperationRecord {
             kind: OperationKind::WaterChange,
             started_at: Some(1_750_000_000),
-            drain_s: 300,
-            settle_s: 30,
-            refill_s: 280,
+            drain_ran_s: 300,
+            settle_ran_s: 30,
+            refill_ran_s: 280,
             result: OperationResult::Overflow,
             resumed: true,
         },
@@ -467,7 +467,7 @@ fn a_finished_operation_becomes_a_tagged_point() {
     assert_eq!(
         encode_operation(&finished_water_change()).as_deref(),
         Some(
-            "aquarium_pump_operation,kind=water_change,result=overflow drain_s=300i,settle_s=30i,refill_s=280i,drained_l=50,resumed=true 1750000610"
+            "aquarium_pump_operation,kind=water_change,result=overflow drain_ran_s=300i,settle_ran_s=30i,refill_ran_s=280i,drained_l=50,resumed=true 1750000610"
         )
     );
 }

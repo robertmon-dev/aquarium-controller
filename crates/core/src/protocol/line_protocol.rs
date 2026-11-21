@@ -199,9 +199,9 @@ pub fn encode_operation(event: &OperationEvent) -> Option<String> {
     let record = event.record;
 
     let mut fields = Fields::new();
-    fields.integer("drain_s", record.drain_s);
-    fields.integer("settle_s", record.settle_s);
-    fields.integer("refill_s", record.refill_s);
+    fields.integer("drain_ran_s", record.drain_ran_s);
+    fields.integer("settle_ran_s", record.settle_ran_s);
+    fields.integer("refill_ran_s", record.refill_ran_s);
     fields.optional_float("drained_l", event.drained_l);
     fields.optional_float("refilled_l", event.refilled_l);
     fields.boolean("resumed", record.resumed);
