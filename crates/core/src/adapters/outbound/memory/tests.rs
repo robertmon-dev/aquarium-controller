@@ -3,7 +3,10 @@ use std::sync::Arc;
 use super::{InMemoryTelemetryStore, VolatilePumpStore};
 use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
 use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
-use crate::ports::outbound::{ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink};
+use crate::ports::outbound::{
+    ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink, TemperatureSample,
+    TemperatureSampleSink,
+};
 
 fn snapshot_with_uptime(uptime: u64) -> TankTelemetryDto {
     let mut s = TankTelemetryDto::empty();
@@ -51,6 +54,28 @@ async fn slow_subscriber_sees_only_the_latest_value() {
 
     rx.changed().await.unwrap();
     assert_eq!(rx.borrow().system_health.uptime_seconds, 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn temperature_samples_travel_on_their_own_channel() {
+    let store = Arc::new(InMemoryTelemetryStore::new());
+    let mut samples = store.subscribe_temperature();
+    let snapshots = store.subscribe();
+    assert_eq!(*samples.borrow(), None);
+
+    let sample = TemperatureSample {
+        tank_celsius: Some(25.5),
+        sump_celsius: None,
+        measured_at: tokio::time::Instant::now(),
+    };
+    store.publish_temperature(sample);
+
+    samples
+        .changed()
+        .await
+        .expect("the channel must live as long as the store does");
+    assert_eq!(*samples.borrow(), Some(sample));
+    assert!(!snapshots.has_changed().unwrap());
 }
 
 #[test]
@@ -231,7 +256,26 @@ mod water_level {
         store.publish(wet.clone());
 
         assert!(receiver.has_changed().expect("sender alive"));
-        assert_eq!(*receiver.borrow_and_update(), wet);
+        assert_eq!(
+            receiver
+                .borrow_and_update()
+                .as_ref()
+                .map(|sample| &sample.levels),
+            Some(&wet)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_published_sample_keeps_its_measurement_time() {
+        let store = InMemoryWaterLevelStore::new();
+        let receiver = store.subscribe();
+        let measured = tokio::time::Instant::now();
+
+        store.publish(snapshot_with_wet(WaterLevelRole::SumpPump));
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        let sample = receiver.borrow().clone().expect("published");
+        assert_eq!(sample.measured_at, measured);
     }
 
     #[test]

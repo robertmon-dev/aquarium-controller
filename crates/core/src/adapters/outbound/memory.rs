@@ -10,12 +10,14 @@ use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
 use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
-    CalibrationPersistence, HeaterPersistence, LightingOverrideSource, ProbeVoltageSink,
-    PumpRecord, PumpStore, TelemetrySink, WaterLevelSink, WaterLevelSource,
+    CalibrationPersistence, HeaterPersistence, LevelSample, LightingOverrideSource,
+    ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink, TemperatureSample,
+    TemperatureSampleSink, WaterLevelSink, WaterLevelSource,
 };
 
 pub struct InMemoryTelemetryStore {
     tx: watch::Sender<TankTelemetryDto>,
+    temperature: watch::Sender<Option<TemperatureSample>>,
     probes: Mutex<ProbeVoltagesDto>,
 }
 
@@ -23,8 +25,13 @@ impl InMemoryTelemetryStore {
     pub fn new() -> Self {
         Self {
             tx: watch::channel(TankTelemetryDto::empty()).0,
+            temperature: watch::channel(None).0,
             probes: Mutex::new(ProbeVoltagesDto::NEVER_SAMPLED),
         }
+    }
+
+    pub fn subscribe_temperature(&self) -> watch::Receiver<Option<TemperatureSample>> {
+        self.temperature.subscribe()
     }
 }
 
@@ -53,6 +60,18 @@ impl TelemetryQuery for InMemoryTelemetryStore {
 impl TelemetrySink for Arc<InMemoryTelemetryStore> {
     fn publish(&self, snapshot: TankTelemetryDto) {
         self.as_ref().publish(snapshot);
+    }
+}
+
+impl TemperatureSampleSink for InMemoryTelemetryStore {
+    fn publish_temperature(&self, sample: TemperatureSample) {
+        self.temperature.send_replace(Some(sample));
+    }
+}
+
+impl TemperatureSampleSink for Arc<InMemoryTelemetryStore> {
+    fn publish_temperature(&self, sample: TemperatureSample) {
+        self.as_ref().publish_temperature(sample);
     }
 }
 
@@ -176,17 +195,17 @@ impl LightingOverrideSource for Arc<InMemoryLightingStore> {
 }
 
 pub struct InMemoryWaterLevelStore {
-    tx: watch::Sender<WaterLevelSnapshot>,
+    tx: watch::Sender<Option<LevelSample>>,
 }
 
 impl InMemoryWaterLevelStore {
     pub fn new() -> Self {
         Self {
-            tx: watch::channel(WaterLevelSnapshot::dry()).0,
+            tx: watch::channel(None).0,
         }
     }
 
-    pub fn subscribe(&self) -> watch::Receiver<WaterLevelSnapshot> {
+    pub fn subscribe(&self) -> watch::Receiver<Option<LevelSample>> {
         self.tx.subscribe()
     }
 }
@@ -199,13 +218,19 @@ impl Default for InMemoryWaterLevelStore {
 
 impl WaterLevelSink for InMemoryWaterLevelStore {
     fn publish(&self, snapshot: WaterLevelSnapshot) {
-        self.tx.send_replace(snapshot);
+        self.tx.send_replace(Some(LevelSample {
+            levels: snapshot,
+            measured_at: Instant::now(),
+        }));
     }
 }
 
 impl WaterLevelSource for InMemoryWaterLevelStore {
     fn levels(&self) -> WaterLevelSnapshot {
-        self.tx.borrow().clone()
+        self.tx
+            .borrow()
+            .as_ref()
+            .map_or_else(WaterLevelSnapshot::dry, |sample| sample.levels.clone())
     }
 }
 

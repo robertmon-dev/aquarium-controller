@@ -22,6 +22,6 @@ pub use probe::ProbeVoltageSink;
 pub use pump::{PumpOutputs, PumpRecord, PumpStatusSource, PumpStore};
 pub use system_health::SystemHealthProvider;
 pub use tds::TdsReader;
-pub use telemetry::TelemetrySink;
+pub use telemetry::{TelemetrySink, TemperatureSample, TemperatureSampleSink};
 pub use temperature::{TemperatureError, TemperatureReader, TemperatureSensorRole};
-pub use water_level::{WaterLevelPins, WaterLevelSink, WaterLevelSource};
+pub use water_level::{LevelSample, WaterLevelPins, WaterLevelSink, WaterLevelSource};

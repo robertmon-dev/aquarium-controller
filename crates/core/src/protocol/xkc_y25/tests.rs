@@ -224,3 +224,54 @@ fn a_settled_filter_debounces_as_before() {
     assert!(filter.push(WaterLevelState::Wet));
     assert_eq!(filter.state(), WaterLevelState::Wet);
 }
+
+const FIRMWARE: FilterConfig = FilterConfig {
+    debounce_samples: 10,
+    flap_window_samples: 300,
+    flap_max_transitions: 60,
+};
+
+fn push_series(filter: &mut LevelFilter, series: u16, samples: u16) {
+    for i in 0..samples {
+        let raw = if (i / series) % 2 == 0 {
+            WaterLevelState::Wet
+        } else {
+            WaterLevelState::Dry
+        };
+        filter.push(raw);
+    }
+}
+
+#[test]
+fn a_signal_that_never_agrees_long_enough_settles_as_faulty() {
+    let mut filter = LevelFilter::unsettled(FIRMWARE);
+
+    push_series(&mut filter, 9, 600);
+
+    assert!(filter.is_settled());
+    assert!(filter.is_faulty());
+}
+
+#[test]
+fn the_unstable_fault_holds_until_a_full_agreeing_series() {
+    let mut filter = LevelFilter::unsettled(FIRMWARE);
+    push_series(&mut filter, 9, 300);
+    assert!(filter.is_settled() && filter.is_faulty());
+
+    push_n(&mut filter, WaterLevelState::Wet, 9);
+    assert!(filter.is_faulty(), "nine agreeing samples are one short");
+
+    filter.push(WaterLevelState::Wet);
+    assert!(!filter.is_faulty());
+    assert_eq!(filter.state(), WaterLevelState::Wet);
+}
+
+#[test]
+fn the_unstable_fault_survives_a_quiet_flap_window() {
+    let mut filter = LevelFilter::unsettled(FIRMWARE);
+    push_series(&mut filter, 9, 300);
+
+    push_series(&mut filter, 9, 300);
+
+    assert!(filter.is_faulty());
+}

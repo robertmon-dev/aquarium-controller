@@ -1,3 +1,5 @@
+use core::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +111,83 @@ const STACKED: [(WaterLevelRole, WaterLevelRole); 3] = [
     ),
     (WaterLevelRole::ReservoirReady, WaterLevelRole::SumpReserve),
 ];
+
+pub const HARNESS_WINDOW: Duration = Duration::from_secs(3);
+
+const UNPLUGGED: [WaterLevelRole; 2] = [WaterLevelRole::SumpPump, WaterLevelRole::SumpReturnLevel];
+
+const SHORTED: [WaterLevelRole; 3] = [
+    WaterLevelRole::MainTank,
+    WaterLevelRole::SumpMechanical,
+    WaterLevelRole::SumpBiological,
+];
+
+#[derive(Debug, Clone, Default)]
+pub struct HarnessWatch {
+    last: Option<[WaterLevelState; WaterLevelRole::COUNT]>,
+    since_snapshot: Duration,
+    since_dried: [Option<Duration>; WaterLevelRole::COUNT],
+    since_wetted: [Option<Duration>; WaterLevelRole::COUNT],
+    unplugged: bool,
+    shorted: bool,
+}
+
+impl HarnessWatch {
+    pub fn update(&mut self, snapshot: Option<&WaterLevelSnapshot>, elapsed: Duration) -> bool {
+        for since in self
+            .since_dried
+            .iter_mut()
+            .chain(self.since_wetted.iter_mut())
+            .flatten()
+        {
+            *since = since.saturating_add(elapsed);
+        }
+        self.since_snapshot = self.since_snapshot.saturating_add(elapsed);
+
+        let Some(snapshot) = snapshot else {
+            return self.suspect();
+        };
+
+        let states = snapshot.sensors.map(|reading| reading.state);
+        let continuous = core::mem::take(&mut self.since_snapshot) <= HARNESS_WINDOW;
+
+        if let Some(last) = self.last.filter(|_| continuous) {
+            for role in WaterLevelRole::ALL {
+                let slot = role.index();
+                match (last[slot], states[slot]) {
+                    (WaterLevelState::Wet, WaterLevelState::Dry) => {
+                        self.since_dried[slot] = Some(Duration::ZERO);
+                    }
+                    (WaterLevelState::Dry, WaterLevelState::Wet) => {
+                        self.since_wetted[slot] = Some(Duration::ZERO);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        self.last = Some(states);
+
+        let all = |roles: &[WaterLevelRole], state: WaterLevelState| {
+            roles.iter().all(|role| states[role.index()] == state)
+        };
+        let together = |roles: &[WaterLevelRole], since: &[Option<Duration>]| {
+            roles
+                .iter()
+                .all(|role| since[role.index()].is_some_and(|since| since <= HARNESS_WINDOW))
+        };
+
+        self.unplugged = all(&UNPLUGGED, WaterLevelState::Dry)
+            && (self.unplugged || together(&UNPLUGGED, &self.since_dried));
+        self.shorted = all(&SHORTED, WaterLevelState::Wet)
+            && (self.shorted || together(&SHORTED, &self.since_wetted));
+
+        self.suspect()
+    }
+
+    pub const fn suspect(&self) -> bool {
+        self.unplugged || self.shorted
+    }
+}
 
 #[cfg(test)]
 mod tests;
