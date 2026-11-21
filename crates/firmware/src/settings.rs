@@ -217,13 +217,7 @@ impl Settings {
                     Contact::NormallyOpen,
                     Contact::NormallyOpen,
                 ],
-                timing: PumpTiming {
-                    return_restart_delay: Duration::from_secs(30),
-                    level_stale: Duration::from_secs(1),
-                    tick: Duration::from_secs(1),
-                    checkpoint_interval: Duration::from_secs(10),
-                    runtime_flush: Duration::from_secs(600),
-                },
+                timing: PumpTiming::DEFAULT,
                 defaults: PumpSettings::DEFAULT,
             },
         }
