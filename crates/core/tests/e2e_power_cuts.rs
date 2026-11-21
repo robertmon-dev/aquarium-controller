@@ -14,7 +14,7 @@ use aquarium_core::domain::pump::{
 use aquarium_core::ports::inbound::PumpControl;
 use aquarium_core::ports::outbound::PumpRecord;
 
-use sim::{Event, Layout, Options, Sim, StoreOp};
+use sim::{Event, Layout, Options, Sim, StoreOp, TIMING};
 
 const RESERVOIR_L: f64 = 150.0;
 const PLAN: WaterChangePlan = WaterChangePlan {
@@ -24,13 +24,12 @@ const PLAN: WaterChangePlan = WaterChangePlan {
 };
 const TOP_OFF_S: u32 = 300;
 const TOP_OFF_DEFICIT_L: f64 = 4.0;
-const CHECKPOINT_S: f64 = 10.0;
 
 const SHORT_OUTAGE: Duration = Duration::from_secs(5);
 const LONG_OUTAGE: Duration = Duration::from_secs(700);
 const SNTP_DELAY: Duration = Duration::from_secs(30);
 const SETTLE_AFTER: Duration = Duration::from_secs(120);
-const OFFSETS_S: [f64; 7] = [0.0, 0.5, 5.0, 9.5, 10.5, 20.0, 29.5];
+const OFFSETS_S: [f64; 7] = [0.0, 0.5, 1.5, 2.9, 3.1, 4.5, 29.5];
 const CANCEL_AFTER_S: f64 = 5.0;
 const CUT_AFTER_CANCEL_S: f64 = 30.0;
 const LIMIT_S: f64 = 5000.0;
@@ -317,7 +316,8 @@ fn assert_invariants(run: &Run, kind: Kind, label: &str) {
         run.resumes
     );
 
-    let max_drain_l = (f64::from(PLAN.drain_s) + CHECKPOINT_S) * layout.drain_l_per_s();
+    let max_drain_l = (f64::from(PLAN.drain_s) + TIMING.checkpoint_interval.as_secs_f64())
+        * layout.drain_l_per_s();
     match kind {
         Kind::WaterChange => assert!(
             water.drained_l <= max_drain_l + LITRES_TOL,
