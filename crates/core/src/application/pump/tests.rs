@@ -895,6 +895,10 @@ fn sunday_ten_am() -> CivilTime {
 }
 
 fn schedule_top_off(service: &Service) {
+    schedule_top_off_on(service);
+}
+
+fn schedule_top_off_on<S: PumpStore, C: Clock>(service: &PumpService<S, C>) {
     service
         .apply_settings(PumpSettingsPatch {
             top_off: Some(vec![TopOffWindow {
@@ -1009,6 +1013,9 @@ async fn an_api_change_is_applied_without_waiting_for_the_ticker() {
             levels.publish(healthy());
             tokio::time::sleep(Duration::from_millis(10)).await;
             assert!(outputs.state()[1]);
+            tokio::time::timeout(Duration::from_millis(10), republish.notified())
+                .await
+                .expect("startup republished");
 
             service.set_override(PumpId::Uv, None).expect("valid");
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1228,4 +1235,238 @@ fn an_api_resume_does_not_credit_the_elapsed_gap() {
     let operation = rig.service.status().operation;
     assert_eq!(operation.state, OperationState::Draining);
     assert_eq!(operation.drain_ran_s, 4);
+}
+
+type Log = Arc<Mutex<Vec<String>>>;
+
+struct LogStore {
+    inner: Arc<VolatilePumpStore>,
+    log: Log,
+    failing: Option<PumpRecord>,
+}
+
+impl LogStore {
+    fn new(log: &Log) -> Self {
+        Self {
+            inner: Arc::new(VolatilePumpStore::default()),
+            log: Arc::clone(log),
+            failing: None,
+        }
+    }
+
+    fn failing(record: PumpRecord) -> Self {
+        Self {
+            failing: Some(record),
+            ..Self::new(&Log::default())
+        }
+    }
+}
+
+impl PumpStore for LogStore {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.inner.load(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("store {}", record.key()));
+
+        if self.failing == Some(record) {
+            return Err("flash is full");
+        }
+
+        self.inner.store(record, bytes)
+    }
+
+    fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("erase {}", record.key()));
+        self.inner.erase(record)
+    }
+}
+
+struct LogOutputs {
+    log: Log,
+}
+
+impl PumpOutputs for LogOutputs {
+    fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
+        self.log.lock().unwrap().push(format!(
+            "set {} {}",
+            id.name(),
+            if on { "on" } else { "off" }
+        ));
+        Ok(())
+    }
+}
+
+fn position(log: &Log, entry: &str) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .position(|logged| logged == entry)
+        .unwrap_or_else(|| panic!("{entry} missing from {:?}", log.lock().unwrap()))
+}
+
+type LoggedService = PumpService<LogStore, Arc<TestClock>>;
+
+fn logged_service(log: &Log) -> (Arc<LoggedService>, Arc<TestClock>) {
+    let clock = TestClock::synced(EPOCH);
+    let service = Arc::new(PumpService::new(
+        PumpSettings::DEFAULT,
+        LogStore::new(log),
+        Arc::clone(&clock),
+        None,
+    ));
+
+    (service, clock)
+}
+
+#[test]
+fn a_finished_operation_erases_its_checkpoint_before_recording_the_history() {
+    let log = Log::default();
+    let (service, _clock) = logged_service(&log);
+
+    service.observe(Some(HEALTHY), Duration::ZERO, Instant::now());
+    service.start_top_off(60).expect("idle");
+    log.lock().unwrap().clear();
+    service.cancel(OperationKind::TopOff);
+
+    assert!(position(&log, "erase pump_op") < position(&log, "store pump_last"));
+}
+
+#[test]
+fn an_overflow_stops_the_makeup_pump_before_the_flash_writes() {
+    let log = Log::default();
+    let (service, clock) = logged_service(&log);
+    let mut controller = PumpController::new(
+        LogOutputs {
+            log: Arc::clone(&log),
+        },
+        Arc::clone(&service),
+        timing(),
+    );
+    let healthy = healthy();
+    let overflow = snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::MainTank,
+    ]);
+    let mut now = Instant::now();
+
+    controller.tick(Some(&healthy), now);
+    service.start_top_off(60).expect("idle");
+    now += Duration::from_secs(1);
+    clock.advance(1);
+    controller.tick(Some(&healthy), now);
+
+    log.lock().unwrap().clear();
+    now += Duration::from_secs(1);
+    clock.advance(1);
+    controller.tick(Some(&overflow), now);
+
+    let makeup_off = position(&log, "set makeup off");
+    assert!(makeup_off < position(&log, "store pump_last"));
+    assert!(makeup_off < position(&log, "erase pump_op"));
+}
+
+#[test]
+fn a_scheduled_start_switches_the_relay_before_writing_its_checkpoint() {
+    let log = Log::default();
+    let (service, clock) = logged_service(&log);
+    schedule_top_off_on(&service);
+    let mut controller = PumpController::new(
+        LogOutputs {
+            log: Arc::clone(&log),
+        },
+        Arc::clone(&service),
+        timing(),
+    );
+    let healthy = healthy();
+    let now = Instant::now();
+
+    controller.tick(Some(&healthy), now);
+    clock.set_civil(Some(sunday_ten_am()));
+    log.lock().unwrap().clear();
+    controller.tick(Some(&healthy), now + Duration::from_secs(1));
+
+    assert!(position(&log, "set makeup on") < position(&log, "store pump_op"));
+}
+
+#[test]
+fn a_failed_override_write_is_reported_and_rolled_back() {
+    let service = PumpService::new(
+        PumpSettings::DEFAULT,
+        LogStore::failing(PumpRecord::Overrides),
+        TestClock::synced(EPOCH),
+        None,
+    );
+
+    assert_eq!(
+        service.set_override(PumpId::Uv, None),
+        Err(OverrideError::NotPersisted("flash is full"))
+    );
+    assert_eq!(service.status().channels.uv.mode, ChannelMode::Auto);
+
+    let store = Arc::new(VolatilePumpStore::default());
+    store.put(
+        PumpRecord::Overrides,
+        serde_json::to_vec(&[Some(StoredOverride { expires_at: None }), None]).expect("encode"),
+    );
+    let service = PumpService::new(
+        PumpSettings::DEFAULT,
+        LogStore {
+            inner: store,
+            log: Log::default(),
+            failing: Some(PumpRecord::Overrides),
+        },
+        TestClock::synced(EPOCH),
+        None,
+    );
+
+    assert_eq!(service.clear_override(PumpId::Uv), Ok(()));
+    assert_eq!(
+        service.clear_override(PumpId::Return),
+        Err(OverrideError::NotPersisted("flash is full"))
+    );
+    assert_eq!(
+        service.status().channels.return_pump.mode,
+        ChannelMode::ManualOff
+    );
+}
+
+#[test]
+fn a_timed_override_without_time_sync_never_fails_on_persistence() {
+    let service = PumpService::new(
+        PumpSettings::DEFAULT,
+        LogStore::failing(PumpRecord::Overrides),
+        TestClock::unsynced(),
+        None,
+    );
+
+    let status = service
+        .set_override(PumpId::Uv, Some(600))
+        .expect("volatile");
+    assert_eq!(status.mode, ChannelMode::ManualOff);
+}
+
+#[test]
+fn a_runtime_reset_credits_only_the_time_after_it() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    let start = rig.now;
+    rig.now += Duration::from_secs(10);
+    rig.service
+        .reset_runtime_at(PumpId::Uv, start + Duration::from_secs(8));
+    rig.tick(Some(&healthy));
+
+    let status = rig.service.status().channels;
+    assert_eq!(status.uv.runtime_s, 2);
+    assert_eq!(status.return_pump.runtime_s, 10);
 }

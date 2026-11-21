@@ -102,17 +102,27 @@ impl Schedule {
     }
 }
 
+#[derive(Default)]
+struct Pending {
+    checkpoint: bool,
+    erase_checkpoint: bool,
+    last: bool,
+    overrides: bool,
+    events: Vec<OperationEvent>,
+}
+
 struct State {
     settings: PumpSettings,
     schedule: Schedule,
     overrides: [Option<Expiry>; 2],
-    overrides_dirty: bool,
+    pending: Pending,
     activity: Activity,
     fresh_operation: bool,
     levels: Option<LevelConditions>,
     outputs: [Option<Output>; 4],
     runtime_ms: [u64; 4],
     reset_at: [Option<u64>; 4],
+    reset_instant: [Option<Instant>; 4],
     last: LastOperations,
     last_skipped: Option<SkippedWindow>,
     last_fired_minute: Option<u64>,
@@ -130,7 +140,7 @@ impl State {
 
         if expired {
             self.overrides[slot] = None;
-            self.overrides_dirty = true;
+            self.pending.overrides = true;
         }
 
         self.overrides[slot]
@@ -305,13 +315,14 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 schedule: Schedule::compile(&settings),
                 settings,
                 overrides,
-                overrides_dirty: false,
+                pending: Pending::default(),
                 activity,
                 fresh_operation: false,
                 levels: None,
                 outputs: [None; 4],
                 runtime_ms: runtime.runtime_s.map(|seconds| seconds * 1000),
                 reset_at: runtime.reset_at,
+                reset_instant: [None; 4],
                 last,
                 last_skipped: None,
                 last_fired_minute: None,
@@ -329,6 +340,17 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     }
 
     pub fn observe(
+        &self,
+        levels: Option<LevelConditions>,
+        elapsed: Duration,
+        now: Instant,
+    ) -> Observation {
+        let observation = self.observe_deferred(levels, elapsed, now);
+        self.persist_pending();
+        observation
+    }
+
+    fn observe_deferred(
         &self,
         levels: Option<LevelConditions>,
         elapsed: Duration,
@@ -360,8 +382,15 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
 
         for id in PumpId::ALL {
+            let credited_ms = match state.reset_instant[id.index()].take() {
+                Some(reset) => {
+                    elapsed_ms.min(now.saturating_duration_since(reset).as_millis() as u64)
+                }
+                None => elapsed_ms,
+            };
+
             if state.outputs[id.index()].is_some_and(|output| output.on) {
-                state.runtime_ms[id.index()] += elapsed_ms;
+                state.runtime_ms[id.index()] += credited_ms;
             }
         }
 
@@ -394,7 +423,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                     );
                     state.activity = Activity::Running(operation);
                     operation_elapsed_ms = 0;
-                    self.save_checkpoint(&state, epoch);
+                    state.pending.checkpoint = true;
                     changed = true;
                 }
                 ResumeVerdict::Suspend => {
@@ -423,7 +452,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
 
         if phase_changed {
-            self.save_checkpoint(&state, epoch);
+            state.pending.checkpoint = true;
             changed = true;
         }
 
@@ -435,8 +464,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let return_forced_off = state.forced_off(PumpId::Return, now, epoch);
         let uv_forced_off = state.forced_off(PumpId::Uv, now, epoch);
 
-        if std::mem::take(&mut state.overrides_dirty) {
-            self.persist(PumpRecord::Overrides, &state.stored_overrides());
+        if state.pending.overrides {
             changed = true;
         }
 
@@ -449,6 +477,12 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     }
 
     pub fn fire_due_windows(&self, levels: Option<LevelConditions>) -> bool {
+        let started = self.fire_due_windows_deferred(levels);
+        self.persist_pending();
+        started
+    }
+
+    fn fire_due_windows_deferred(&self, levels: Option<LevelConditions>) -> bool {
         let (Some(epoch), Some(civil)) =
             (self.clock.epoch_seconds(), self.clock.local_civil_time())
         else {
@@ -549,9 +583,68 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     }
 
     pub fn checkpoint(&self) {
+        let mut state = self.lock();
+        state.pending.checkpoint = true;
+        self.flush_pending(&mut state);
+    }
+
+    pub fn persist_pending(&self) {
+        let mut state = self.lock();
+        self.flush_pending(&mut state);
+    }
+
+    fn flush_pending(&self, state: &mut State) {
+        let pending = std::mem::take(&mut state.pending);
+
+        if pending.erase_checkpoint {
+            if let Err(reason) = self.store.erase(PumpRecord::Checkpoint) {
+                tracing::warn!(reason, "pump checkpoint not erased, writing a tombstone");
+
+                if let Err(reason) = self.write(PumpRecord::Checkpoint, &None::<Checkpoint>) {
+                    tracing::error!(reason, "pump checkpoint tombstone not stored");
+                }
+            }
+        }
+
+        if pending.last {
+            self.persist(PumpRecord::LastOperations, &state.last);
+        }
+
+        if pending.checkpoint {
+            if let Activity::Running(operation) = &state.activity {
+                self.persist(
+                    PumpRecord::Checkpoint,
+                    &Checkpoint {
+                        operation: operation.clone(),
+                        checkpoint_at: self.clock.epoch_seconds(),
+                    },
+                );
+            }
+        }
+
+        if pending.overrides {
+            self.persist(PumpRecord::Overrides, &state.stored_overrides());
+        }
+
+        if let Some(events) = &self.events {
+            for event in pending.events {
+                let _ = events.send(event);
+            }
+        }
+    }
+
+    fn reset_runtime_at(&self, id: PumpId, now: Instant) {
         let epoch = self.clock.epoch_seconds();
-        let state = self.lock();
-        self.save_checkpoint(&state, epoch);
+
+        {
+            let mut state = self.lock();
+            state.runtime_ms[id.index()] = 0;
+            state.reset_at[id.index()] = epoch;
+            state.reset_instant[id.index()] = Some(now);
+            self.persist(PumpRecord::Runtime, &state.runtime());
+        }
+
+        self.notify.notify_one();
     }
 
     pub fn flush_runtime(&self) {
@@ -561,7 +654,11 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
 
     fn start(&self, plan: OperationPlan) -> Result<(), StartError> {
         let epoch = self.clock.epoch_seconds();
-        self.begin(&mut self.lock(), plan, epoch)?;
+        {
+            let mut state = self.lock();
+            self.begin(&mut state, plan, epoch)?;
+            self.flush_pending(&mut state);
+        }
         self.notify.notify_one();
         Ok(())
     }
@@ -581,7 +678,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
 
         state.activity = Activity::Running(Operation::start(plan, epoch));
         state.fresh_operation = true;
-        self.save_checkpoint(state, epoch);
+        state.pending.checkpoint = true;
         tracing::info!(kind = ?plan.kind, "pump operation started");
 
         Ok(())
@@ -602,39 +699,18 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
 
         state.activity = Activity::Idle;
-        self.persist(PumpRecord::LastOperations, &state.last);
-
-        if let Err(reason) = self.store.erase(PumpRecord::Checkpoint) {
-            tracing::warn!(reason, "pump checkpoint not erased, writing a tombstone");
-
-            if let Err(reason) = self.write(PumpRecord::Checkpoint, &None::<Checkpoint>) {
-                tracing::error!(reason, "pump checkpoint tombstone not stored");
-            }
-        }
+        state.pending.last = true;
+        state.pending.erase_checkpoint = true;
 
         tracing::info!(kind = ?record.kind, ?result, "pump operation finished");
 
-        if let Some(events) = &self.events {
-            let flows = state.settings.flow_lph;
-            let _ = events.send(OperationEvent {
-                record,
-                finished_at: epoch,
-                drained_l: litres(record.drain_ran_s, flows.drain),
-                refilled_l: litres(record.refill_ran_s, flows.makeup),
-            });
-        }
-    }
-
-    fn save_checkpoint(&self, state: &State, epoch: Option<u64>) {
-        if let Activity::Running(operation) = &state.activity {
-            self.persist(
-                PumpRecord::Checkpoint,
-                &Checkpoint {
-                    operation: operation.clone(),
-                    checkpoint_at: epoch,
-                },
-            );
-        }
+        let flows = state.settings.flow_lph;
+        state.pending.events.push(OperationEvent {
+            record,
+            finished_at: epoch,
+            drained_l: litres(record.drain_ran_s, flows.drain),
+            refilled_l: litres(record.refill_ran_s, flows.makeup),
+        });
     }
 
     fn write<T: Serialize>(&self, record: PumpRecord, value: &T) -> Result<(), &'static str> {
@@ -716,8 +792,22 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
 
         let status = {
             let mut state = self.lock();
-            state.overrides[slot] = Some(expiry);
-            self.persist(PumpRecord::Overrides, &state.stored_overrides());
+            let previous = state.overrides[slot].replace(expiry);
+
+            if expiry.stored().is_some() {
+                if let Err(reason) = self.write(PumpRecord::Overrides, &state.stored_overrides()) {
+                    state.overrides[slot] = previous;
+                    tracing::error!(
+                        record = PumpRecord::Overrides.key(),
+                        reason,
+                        "override not stored"
+                    );
+                    return Err(OverrideError::NotPersisted(reason));
+                }
+            } else {
+                self.persist(PumpRecord::Overrides, &state.stored_overrides());
+            }
+
             state.channel(id, now, epoch)
         };
 
@@ -731,8 +821,19 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
 
         {
             let mut state = self.lock();
-            state.overrides[slot] = None;
-            self.persist(PumpRecord::Overrides, &state.stored_overrides());
+            let previous = state.overrides[slot].take();
+
+            if previous.and_then(Expiry::stored).is_some() {
+                if let Err(reason) = self.write(PumpRecord::Overrides, &state.stored_overrides()) {
+                    state.overrides[slot] = previous;
+                    tracing::error!(
+                        record = PumpRecord::Overrides.key(),
+                        reason,
+                        "override not stored"
+                    );
+                    return Err(OverrideError::NotPersisted(reason));
+                }
+            }
         }
 
         self.notify.notify_one();
@@ -741,16 +842,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
     }
 
     fn reset_runtime(&self, id: PumpId) {
-        let epoch = self.clock.epoch_seconds();
-
-        {
-            let mut state = self.lock();
-            state.runtime_ms[id.index()] = 0;
-            state.reset_at[id.index()] = epoch;
-            self.persist(PumpRecord::Runtime, &state.runtime());
-        }
-
-        self.notify.notify_one();
+        self.reset_runtime_at(id, Instant::now());
     }
 
     fn start_top_off(&self, duration_s: u32) -> Result<(), StartError> {
@@ -785,7 +877,8 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
             tracing::info!(?kind, "pump operation resumed over the API");
             state.activity = Activity::Running(operation);
             state.fresh_operation = true;
-            self.save_checkpoint(&state, epoch);
+            state.pending.checkpoint = true;
+            self.flush_pending(&mut state);
         }
 
         self.notify.notify_one();
@@ -815,6 +908,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
             };
 
             self.finish(&mut state, &operation, result, epoch);
+            self.flush_pending(&mut state);
         }
 
         self.notify.notify_one();
@@ -902,8 +996,8 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
         self.last_tick = Some(now);
 
-        let started = self.service.fire_due_windows(levels);
-        let observed = self.service.observe(levels, elapsed, now);
+        let started = self.service.fire_due_windows_deferred(levels);
+        let observed = self.service.observe_deferred(levels, elapsed, now);
         let locked_out = self
             .lockout
             .update(levels, now, self.timing.return_restart_delay);
@@ -939,6 +1033,8 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             outputs_changed |= outcome.changed;
             on_changed |= outcome.on_changed;
         }
+
+        self.service.persist_pending();
 
         let last_flush = *self.last_flush.get_or_insert(now);
         if on_changed || now.saturating_duration_since(last_flush) >= self.timing.runtime_flush {
