@@ -221,6 +221,20 @@ mod water_level {
     }
 
     #[test]
+    fn water_level_subscribers_see_only_later_publications() {
+        let store = InMemoryWaterLevelStore::new();
+        let mut receiver = store.subscribe();
+
+        assert!(!receiver.has_changed().expect("sender alive"));
+
+        let wet = snapshot_with_wet(WaterLevelRole::ALL[0]);
+        store.publish(wet.clone());
+
+        assert!(receiver.has_changed().expect("sender alive"));
+        assert_eq!(*receiver.borrow_and_update(), wet);
+    }
+
+    #[test]
     fn serves_an_all_dry_snapshot_before_the_first_sample() {
         let store = InMemoryWaterLevelStore::new();
 

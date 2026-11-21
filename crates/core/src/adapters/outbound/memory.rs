@@ -185,6 +185,10 @@ impl InMemoryWaterLevelStore {
             tx: watch::channel(WaterLevelSnapshot::dry()).0,
         }
     }
+
+    pub fn subscribe(&self) -> watch::Receiver<WaterLevelSnapshot> {
+        self.tx.subscribe()
+    }
 }
 
 impl Default for InMemoryWaterLevelStore {
