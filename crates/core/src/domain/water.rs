@@ -1,10 +1,15 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaterLevelState {
     Wet,
     Dry,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
 pub enum WaterLevelRole {
     SumpMechanical,
     SumpBiological,
@@ -66,8 +71,6 @@ impl WaterLevelSnapshot {
         self.sensors.iter().all(|reading| !reading.faulty)
     }
 
-    /// The ATO refills from the sump, so the sump counts as low once the pump
-    /// chamber, the lowest point the pump draws from, runs dry.
     pub fn sump_water_low(&self) -> bool {
         self.get(WaterLevelRole::SumpPump).state == WaterLevelState::Dry
     }

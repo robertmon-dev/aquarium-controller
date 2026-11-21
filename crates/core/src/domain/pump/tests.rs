@@ -5,6 +5,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
     tank_overflow: false,
+    sump_full: false,
 };
 
 fn snapshot(wet: &[WaterLevelRole], faulty: &[WaterLevelRole]) -> WaterLevelSnapshot {
@@ -51,11 +52,11 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
         &[],
     );
     assert_eq!(
-        LevelConditions::from_snapshot(&wet_sump_and_reserve),
+        LevelConditions::from_snapshot(&wet_sump_and_reserve, None),
         HEALTHY
     );
 
-    let all_dry = LevelConditions::from_snapshot(&WaterLevelSnapshot::dry());
+    let all_dry = LevelConditions::from_snapshot(&WaterLevelSnapshot::dry(), None);
     assert!(all_dry.sump_low && all_dry.reservoir_empty && !all_dry.tank_overflow);
 
     let faulty = snapshot(
@@ -67,13 +68,73 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
         ],
     );
     assert_eq!(
-        LevelConditions::from_snapshot(&faulty),
+        LevelConditions::from_snapshot(&faulty, None),
         LevelConditions {
             sump_low: true,
             reservoir_empty: true,
             tank_overflow: true,
+            sump_full: false,
         }
     );
+}
+
+#[test]
+fn the_refill_stop_sensor_reports_a_full_sump() {
+    let wet_biological = snapshot(
+        &[
+            WaterLevelRole::SumpPump,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::SumpBiological,
+        ],
+        &[],
+    );
+
+    assert!(
+        LevelConditions::from_snapshot(&wet_biological, Some(WaterLevelRole::SumpBiological))
+            .sump_full
+    );
+    assert!(
+        !LevelConditions::from_snapshot(&wet_biological, Some(WaterLevelRole::SumpMechanical))
+            .sump_full
+    );
+    assert!(!LevelConditions::from_snapshot(&wet_biological, None).sump_full);
+
+    let faulty_mechanical = snapshot(&[], &[WaterLevelRole::SumpMechanical]);
+    assert!(
+        LevelConditions::from_snapshot(&faulty_mechanical, Some(WaterLevelRole::SumpMechanical))
+            .sump_full
+    );
+}
+
+#[test]
+fn makeup_stops_on_a_full_sump_or_a_return_override() {
+    let refilling = DecisionInput {
+        phase: Some(Phase::Refilling),
+        ..input(Some(HEALTHY))
+    };
+
+    let full = decide(DecisionInput {
+        levels: Some(LevelConditions {
+            sump_full: true,
+            ..HEALTHY
+        }),
+        ..refilling
+    });
+    assert!(!full[2].on);
+    assert_eq!(full[2].blocked_by, Some(Blocker::SumpFull));
+
+    let return_off = decide(DecisionInput {
+        return_forced_off: true,
+        ..refilling
+    });
+    assert!(!return_off[2].on);
+    assert_eq!(return_off[2].blocked_by, Some(Blocker::ReturnOff));
+
+    let locked_out = decide(DecisionInput {
+        return_locked_out: true,
+        ..refilling
+    });
+    assert!(locked_out[2].on);
 }
 
 #[test]
@@ -265,6 +326,94 @@ fn settings_validation_covers_every_field() {
 }
 
 #[test]
+fn the_refill_stop_sensor_must_sit_in_the_sump() {
+    assert_eq!(defaults().refill_stop_sensor, None);
+
+    for role in [
+        WaterLevelRole::SumpMechanical,
+        WaterLevelRole::SumpBiological,
+    ] {
+        let mut settings = defaults();
+        settings.refill_stop_sensor = Some(role);
+        assert_eq!(settings.validate(), Ok(()), "{role:?}");
+    }
+
+    for role in [
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::MainTank,
+        WaterLevelRole::SumpReserve,
+    ] {
+        let mut settings = defaults();
+        settings.refill_stop_sensor = Some(role);
+        assert_eq!(
+            settings.validate(),
+            Err("refill_stop_sensor must be sump_mechanical or sump_biological"),
+            "{role:?}"
+        );
+    }
+}
+
+#[test]
+fn the_water_change_gap_is_bounded() {
+    assert_eq!(
+        defaults().min_water_change_gap_h,
+        DEFAULT_WATER_CHANGE_GAP_H
+    );
+
+    for hours in [0, MAX_WATER_CHANGE_GAP_H] {
+        let mut settings = defaults();
+        settings.min_water_change_gap_h = hours;
+        assert_eq!(settings.validate(), Ok(()));
+    }
+
+    let mut too_long = defaults();
+    too_long.min_water_change_gap_h = MAX_WATER_CHANGE_GAP_H + 1;
+    assert_eq!(
+        too_long.validate(),
+        Err("min_water_change_gap_h must not exceed 168")
+    );
+}
+
+#[test]
+fn a_patch_sets_keeps_or_clears_the_refill_stop_sensor() {
+    let mut base = defaults();
+    base.refill_stop_sensor = Some(WaterLevelRole::SumpMechanical);
+
+    let set: PumpSettingsPatch =
+        serde_json::from_str(r#"{"refill_stop_sensor":"sump_biological"}"#).expect("patch");
+    assert_eq!(
+        set.merge_onto(&base).refill_stop_sensor,
+        Some(WaterLevelRole::SumpBiological)
+    );
+
+    let kept: PumpSettingsPatch = serde_json::from_str("{}").expect("patch");
+    assert_eq!(
+        kept.merge_onto(&base).refill_stop_sensor,
+        Some(WaterLevelRole::SumpMechanical)
+    );
+
+    let cleared: PumpSettingsPatch =
+        serde_json::from_str(r#"{"refill_stop_sensor":null}"#).expect("patch");
+    assert_eq!(cleared.merge_onto(&base).refill_stop_sensor, None);
+
+    let gap: PumpSettingsPatch =
+        serde_json::from_str(r#"{"min_water_change_gap_h":24}"#).expect("patch");
+    assert_eq!(gap.merge_onto(&base).min_water_change_gap_h, 24);
+}
+
+#[test]
+fn settings_stored_before_the_refill_safeguards_still_load() {
+    let stored: PumpSettings = serde_json::from_str(
+        r#"{"top_off":[],"water_change":[],"flow_lph":{"makeup":null,"drain":null},"resume_window_s":120}"#,
+    )
+    .expect("old settings");
+
+    assert_eq!(stored.resume_window_s, 120);
+    assert_eq!(stored.refill_stop_sensor, None);
+    assert_eq!(stored.min_water_change_gap_h, DEFAULT_WATER_CHANGE_GAP_H);
+}
+
+#[test]
 fn a_patch_replaces_only_the_fields_it_carries() {
     let base = defaults();
     let patch = PumpSettingsPatch {
@@ -409,6 +558,23 @@ fn a_top_off_stops_on_overflow_or_an_empty_reservoir() {
         ),
         Step::Finished(OperationResult::ReservoirEmpty)
     );
+}
+
+#[test]
+fn a_full_sump_ends_the_refill_but_not_the_drain() {
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+
+    let mut top_off = Operation::start(OperationPlan::top_off(60), None);
+    assert_eq!(
+        top_off.advance(SECOND, Some(full)),
+        Step::Finished(OperationResult::SumpFull)
+    );
+
+    let mut draining = Operation::start(plan(60, 0, 60), None);
+    assert_eq!(draining.advance(SECOND, Some(full)), Step::Continue);
 }
 
 #[test]

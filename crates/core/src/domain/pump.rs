@@ -20,6 +20,9 @@ pub const MAX_CRON_LEN: usize = 64;
 pub const MAX_FLOW_LPH: u32 = 10_000;
 pub const MAX_RESUME_WINDOW_S: u32 = 3600;
 pub const DEFAULT_RESUME_WINDOW_S: u32 = 600;
+pub const MAX_WATER_CHANGE_GAP_H: u32 = 168;
+pub const DEFAULT_WATER_CHANGE_GAP_H: u32 = 12;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -81,10 +84,14 @@ pub struct LevelConditions {
     pub sump_low: bool,
     pub reservoir_empty: bool,
     pub tank_overflow: bool,
+    pub sump_full: bool,
 }
 
 impl LevelConditions {
-    pub fn from_snapshot(snapshot: &WaterLevelSnapshot) -> Self {
+    pub fn from_snapshot(
+        snapshot: &WaterLevelSnapshot,
+        refill_stop: Option<WaterLevelRole>,
+    ) -> Self {
         let dangerous = |role: WaterLevelRole, danger: WaterLevelState| {
             let reading = snapshot.get(role);
             reading.faulty || reading.state == danger
@@ -94,6 +101,7 @@ impl LevelConditions {
             sump_low: dangerous(WaterLevelRole::SumpPump, WaterLevelState::Dry),
             reservoir_empty: dangerous(WaterLevelRole::SumpReserve, WaterLevelState::Dry),
             tank_overflow: dangerous(WaterLevelRole::MainTank, WaterLevelState::Wet),
+            sump_full: refill_stop.is_some_and(|role| dangerous(role, WaterLevelState::Wet)),
         }
     }
 }
@@ -108,6 +116,8 @@ pub enum Blocker {
     TankOverflow,
     LevelsUnavailable,
     ReturnOff,
+    SumpFull,
+    RecentWaterChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +186,8 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
         None => ChannelDecision::blocked(Blocker::LevelsUnavailable),
         Some(levels) if levels.reservoir_empty => ChannelDecision::blocked(Blocker::ReservoirEmpty),
         Some(levels) if levels.tank_overflow => ChannelDecision::blocked(Blocker::TankOverflow),
+        Some(levels) if levels.sump_full => ChannelDecision::blocked(Blocker::SumpFull),
+        Some(_) if input.return_forced_off => ChannelDecision::blocked(Blocker::ReturnOff),
         Some(_) => ChannelDecision::running(input.phase == Some(Phase::Refilling)),
     };
 
@@ -189,6 +201,18 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
 
 const fn default_settle_s() -> u32 {
     DEFAULT_SETTLE_S
+}
+
+const fn default_water_change_gap_h() -> u32 {
+    DEFAULT_WATER_CHANGE_GAP_H
+}
+
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,6 +303,12 @@ pub struct PumpSettings {
     pub water_change: Vec<WaterChangeWindow>,
     pub flow_lph: FlowRates,
     pub resume_window_s: u32,
+
+    #[serde(default)]
+    pub refill_stop_sensor: Option<WaterLevelRole>,
+
+    #[serde(default = "default_water_change_gap_h")]
+    pub min_water_change_gap_h: u32,
 }
 
 impl PumpSettings {
@@ -290,6 +320,8 @@ impl PumpSettings {
             drain: None,
         },
         resume_window_s: DEFAULT_RESUME_WINDOW_S,
+        refill_stop_sensor: None,
+        min_water_change_gap_h: DEFAULT_WATER_CHANGE_GAP_H,
     };
 
     pub fn validate(&self) -> Result<(), &'static str> {
@@ -331,6 +363,17 @@ impl PumpSettings {
             return Err("resume_window_s must not exceed 3600");
         }
 
+        if !matches!(
+            self.refill_stop_sensor,
+            None | Some(WaterLevelRole::SumpMechanical | WaterLevelRole::SumpBiological)
+        ) {
+            return Err("refill_stop_sensor must be sump_mechanical or sump_biological");
+        }
+
+        if self.min_water_change_gap_h > MAX_WATER_CHANGE_GAP_H {
+            return Err("min_water_change_gap_h must not exceed 168");
+        }
+
         Ok(())
     }
 }
@@ -350,6 +393,13 @@ pub struct PumpSettingsPatch {
 
     #[serde(default)]
     pub resume_window_s: Option<u32>,
+
+    #[serde(default, deserialize_with = "nullable")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub refill_stop_sensor: Option<Option<WaterLevelRole>>,
+
+    #[serde(default)]
+    pub min_water_change_gap_h: Option<u32>,
 }
 
 impl PumpSettingsPatch {
@@ -361,6 +411,10 @@ impl PumpSettingsPatch {
                 .unwrap_or_else(|| base.water_change.clone()),
             flow_lph: self.flow_lph.unwrap_or(base.flow_lph),
             resume_window_s: self.resume_window_s.unwrap_or(base.resume_window_s),
+            refill_stop_sensor: self.refill_stop_sensor.unwrap_or(base.refill_stop_sensor),
+            min_water_change_gap_h: self
+                .min_water_change_gap_h
+                .unwrap_or(base.min_water_change_gap_h),
         }
     }
 }
@@ -455,6 +509,7 @@ impl OperationPlan {
 pub enum OperationResult {
     Completed,
     Overflow,
+    SumpFull,
     ReservoirEmpty,
     Aborted,
     InterruptedByReboot,
@@ -536,6 +591,7 @@ impl Operation {
                 Step::Finished(OperationResult::ReservoirEmpty)
             }
             Phase::Refilling if levels.tank_overflow => Step::Finished(OperationResult::Overflow),
+            Phase::Refilling if levels.sump_full => Step::Finished(OperationResult::SumpFull),
             Phase::Refilling if done => Step::Finished(OperationResult::Completed),
             _ => Step::Continue,
         }
