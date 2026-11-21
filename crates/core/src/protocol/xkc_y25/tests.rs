@@ -164,3 +164,63 @@ fn transitions_at_the_threshold_are_not_a_fault() {
         "the threshold is the highest acceptable count, not the first rejected one"
     );
 }
+
+#[test]
+fn a_filter_built_with_a_known_level_is_settled() {
+    let filter = LevelFilter::new(WaterLevelState::Dry, debounce_only(3));
+
+    assert!(filter.is_settled());
+}
+
+#[test]
+fn an_unsettled_filter_settles_on_debounce_agreeing_samples_of_either_level() {
+    for level in [WaterLevelState::Dry, WaterLevelState::Wet] {
+        let mut filter = LevelFilter::unsettled(debounce_only(3));
+        assert!(!filter.is_settled());
+
+        push_n(&mut filter, level, 2);
+        assert!(!filter.is_settled(), "{level:?}");
+
+        filter.push(level);
+        assert!(filter.is_settled(), "{level:?}");
+        assert_eq!(filter.state(), level);
+    }
+}
+
+#[test]
+fn a_broken_streak_delays_settling() {
+    let mut filter = LevelFilter::unsettled(debounce_only(3));
+
+    filter.push(WaterLevelState::Wet);
+    filter.push(WaterLevelState::Dry);
+    push_n(&mut filter, WaterLevelState::Wet, 2);
+    assert!(!filter.is_settled());
+
+    filter.push(WaterLevelState::Wet);
+    assert!(filter.is_settled());
+    assert_eq!(filter.state(), WaterLevelState::Wet);
+}
+
+#[test]
+fn a_chattering_filter_settles_by_the_end_of_the_flap_window() {
+    let mut filter = LevelFilter::unsettled(flap_detection(10, 3));
+
+    push_alternating(&mut filter, 9);
+    assert!(!filter.is_settled());
+
+    push_alternating(&mut filter, 1);
+    assert!(filter.is_settled());
+    assert!(filter.is_faulty());
+}
+
+#[test]
+fn a_settled_filter_debounces_as_before() {
+    let mut filter = LevelFilter::unsettled(debounce_only(3));
+    push_n(&mut filter, WaterLevelState::Dry, 3);
+
+    push_n(&mut filter, WaterLevelState::Wet, 2);
+    assert_eq!(filter.state(), WaterLevelState::Dry);
+
+    assert!(filter.push(WaterLevelState::Wet));
+    assert_eq!(filter.state(), WaterLevelState::Wet);
+}

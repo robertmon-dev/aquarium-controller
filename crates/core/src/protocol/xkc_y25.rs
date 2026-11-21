@@ -34,6 +34,9 @@ pub struct LevelFilter {
     transitions: u8,
     elapsed: u16,
     faulty: bool,
+    settled: bool,
+    run: u16,
+    seen: u16,
 }
 
 impl LevelFilter {
@@ -46,10 +49,24 @@ impl LevelFilter {
             transitions: 0,
             elapsed: 0,
             faulty: false,
+            settled: true,
+            run: 0,
+            seen: 0,
+        }
+    }
+
+    pub fn unsettled(config: FilterConfig) -> Self {
+        Self {
+            settled: false,
+            ..Self::new(WaterLevelState::Dry, config)
         }
     }
 
     pub fn push(&mut self, raw: WaterLevelState) -> bool {
+        if !self.settled {
+            return self.settle(raw);
+        }
+
         self.track_chatter(raw);
 
         if raw == self.stable {
@@ -73,6 +90,33 @@ impl LevelFilter {
 
     pub fn is_faulty(&self) -> bool {
         self.faulty
+    }
+
+    pub fn is_settled(&self) -> bool {
+        self.settled
+    }
+
+    fn settle(&mut self, raw: WaterLevelState) -> bool {
+        self.run = if raw == self.last_raw {
+            self.run.saturating_add(1)
+        } else {
+            1
+        };
+        self.track_chatter(raw);
+        self.seen = self.seen.saturating_add(1);
+
+        let agreed = self.run >= self.config.debounce_samples;
+        if !agreed && self.seen < self.config.flap_window_samples {
+            return false;
+        }
+
+        self.settled = true;
+        if !agreed || raw == self.stable {
+            return false;
+        }
+
+        self.stable = raw;
+        true
     }
 
     fn track_chatter(&mut self, raw: WaterLevelState) {
