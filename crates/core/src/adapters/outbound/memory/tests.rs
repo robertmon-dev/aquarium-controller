@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use super::InMemoryTelemetryStore;
+use super::{InMemoryTelemetryStore, VolatilePumpStore};
 use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
 use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
-use crate::ports::outbound::{ProbeVoltageSink, TelemetrySink};
+use crate::ports::outbound::{ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink};
 
 fn snapshot_with_uptime(uptime: u64) -> TankTelemetryDto {
     let mut s = TankTelemetryDto::empty();
@@ -340,4 +340,21 @@ fn voltages_published_through_an_arc_reach_the_store() {
     ProbeVoltageSink::publish_volts(&store, Some(1.49), Some(0.80), 7);
 
     assert_eq!(store.probe_voltages().ph, Some(1.49));
+}
+
+#[test]
+fn the_volatile_pump_store_keeps_records_apart() {
+    let store = VolatilePumpStore::default();
+
+    assert_eq!(store.load(PumpRecord::Settings), None);
+
+    store.store(PumpRecord::Settings, b"{}").expect("store");
+    store.put(PumpRecord::Checkpoint, b"[1]".to_vec());
+
+    assert_eq!(store.load(PumpRecord::Settings), Some(b"{}".to_vec()));
+    assert_eq!(store.get(PumpRecord::Checkpoint), Some(b"[1]".to_vec()));
+    assert_eq!(store.load(PumpRecord::Runtime), None);
+
+    store.erase(PumpRecord::Settings).expect("erase");
+    assert_eq!(store.load(PumpRecord::Settings), None);
 }

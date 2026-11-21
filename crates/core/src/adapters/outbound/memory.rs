@@ -11,7 +11,7 @@ use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
     CalibrationPersistence, HeaterPersistence, LightingOverrideSource, ProbeVoltageSink,
-    TelemetrySink, WaterLevelSink, WaterLevelSource,
+    PumpRecord, PumpStore, TelemetrySink, WaterLevelSink, WaterLevelSource,
 };
 
 pub struct InMemoryTelemetryStore {
@@ -241,6 +241,37 @@ impl HeaterPersistence for VolatileHeaterStore {
     }
 
     fn store(&self, _value: &HeaterSettings) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct VolatilePumpStore {
+    records: Mutex<[Option<Vec<u8>>; PumpRecord::COUNT]>,
+}
+
+impl VolatilePumpStore {
+    pub fn get(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.records.lock().expect("pump store mutex poisoned")[record.index()].clone()
+    }
+
+    pub fn put(&self, record: PumpRecord, bytes: Vec<u8>) {
+        self.records.lock().expect("pump store mutex poisoned")[record.index()] = Some(bytes);
+    }
+}
+
+impl PumpStore for VolatilePumpStore {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.get(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        self.put(record, bytes.to_vec());
+        Ok(())
+    }
+
+    fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        self.records.lock().expect("pump store mutex poisoned")[record.index()] = None;
         Ok(())
     }
 }
