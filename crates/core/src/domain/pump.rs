@@ -175,6 +175,9 @@ pub struct DecisionInput {
 
 pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
     let return_pump = match input.levels {
+        Some(_) if matches!(input.phase, Some(Phase::Draining | Phase::Settling)) => {
+            ChannelDecision::blocked(Blocker::WaterChange)
+        }
         Some(levels) if levels.sump_low => ChannelDecision::blocked(Blocker::SumpLow),
         Some(_) if input.return_locked_out => ChannelDecision::blocked(Blocker::SumpLow),
         _ => ChannelDecision::running(!input.return_forced_off),
@@ -593,7 +596,7 @@ impl Operation {
         let done = self.ran_ms[slot] >= u64::from(self.plan.target_s(self.phase)) * 1000;
 
         match self.phase {
-            Phase::Draining if levels.sump_low || done => {
+            Phase::Draining if done => {
                 self.phase = Phase::Settling;
                 Step::PhaseChanged
             }
@@ -605,7 +608,12 @@ impl Operation {
                 Step::Finished(OperationResult::ReservoirEmpty)
             }
             Phase::Refilling if levels.tank_overflow => Step::Finished(OperationResult::Overflow),
-            Phase::Refilling if levels.sump_full => Step::Finished(OperationResult::SumpFull),
+            Phase::Refilling
+                if levels.sump_full
+                    && (self.plan.kind == OperationKind::TopOff || self.ran_ms[slot] > 0) =>
+            {
+                Step::Finished(OperationResult::SumpFull)
+            }
             Phase::Refilling if done => Step::Finished(OperationResult::Completed),
             _ => Step::Continue,
         }
