@@ -856,8 +856,6 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
     }
 
     fn resume(&self, kind: OperationKind) -> Result<(), StartError> {
-        let epoch = self.clock.epoch_seconds();
-
         {
             let mut state = self.lock();
             let mut operation = match std::mem::replace(&mut state.activity, Activity::Idle) {
