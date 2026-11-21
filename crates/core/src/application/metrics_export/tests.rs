@@ -186,9 +186,9 @@ async fn operation_events_share_the_buffer_with_snapshots() {
         record: OperationRecord {
             kind: OperationKind::TopOff,
             started_at: None,
-            drain_s: 0,
-            settle_s: 0,
-            refill_s: 60,
+            drain_ran_s: 0,
+            settle_ran_s: 0,
+            refill_ran_s: 60,
             result: OperationResult::Completed,
             resumed: false,
         },
