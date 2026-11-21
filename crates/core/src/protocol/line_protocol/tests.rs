@@ -407,13 +407,14 @@ fn the_pump_state_is_its_own_measurement() {
         drain: true,
         operation_kind: Some(OperationKind::WaterChange),
         operation_state: OperationState::Draining,
+        circulation_starved: false,
     };
 
     let encoded = encode(&dto).expect("encodes");
 
     assert!(
         encoded.contains(
-            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false 1750000000"
+            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false,circulation_starved=false 1750000000"
         ),
         "got: {encoded}"
     );
@@ -507,4 +508,22 @@ fn a_refill_timeout_is_tagged() {
 
     let encoded = encode_operation(&event).expect("encodes");
     assert!(encoded.contains(",result=refill_timeout "), "{encoded}");
+}
+
+#[test]
+fn starved_circulation_is_a_pump_field() {
+    let mut dto = populated();
+    dto.pumps.circulation_starved = true;
+
+    let encoded = encode(&dto).expect("encodes");
+    assert!(encoded.contains(",circulation_starved=true "), "{encoded}");
+}
+
+#[test]
+fn an_incomplete_refill_is_tagged() {
+    let mut event = finished_water_change();
+    event.record.result = OperationResult::Incomplete;
+
+    let encoded = encode_operation(&event).expect("encodes");
+    assert!(encoded.contains(",result=incomplete "), "{encoded}");
 }

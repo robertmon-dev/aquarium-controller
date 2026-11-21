@@ -174,6 +174,7 @@ fn pumps(snapshot: &TankTelemetryDto) -> Fields {
     fields.boolean("pump_drain", pumps.drain);
     fields.integer("water_change_phase", water_change_phase(pumps));
     fields.boolean("top_off", topping_off);
+    fields.boolean("circulation_starved", pumps.circulation_starved);
     fields
 }
 
@@ -193,6 +194,7 @@ fn result_name(result: OperationResult) -> &'static str {
         OperationResult::Aborted => "aborted",
         OperationResult::InterruptedByReboot => "interrupted_by_reboot",
         OperationResult::RefillTimeout => "refill_timeout",
+        OperationResult::Incomplete => "incomplete",
     }
 }
 
