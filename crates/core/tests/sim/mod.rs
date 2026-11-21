@@ -41,6 +41,7 @@ pub struct Mount {
 pub struct Layout {
     pub tank_weir_l: f64,
     pub tank_max_l: f64,
+    pub weir_skim_l: f64,
     pub drain_intake_l: f64,
     pub chamber_widths_cm: [f64; 5],
     pub chamber_depth_cm: f64,
@@ -67,6 +68,7 @@ impl Layout {
     pub const REAL: Self = Self {
         tank_weir_l: 700.0,
         tank_max_l: 720.0,
+        weir_skim_l: 3.0,
         drain_intake_l: 560.0,
         chamber_widths_cm: [27.0, 27.0, 27.0, 27.0, 12.0],
         chamber_depth_cm: 43.0,
@@ -154,6 +156,14 @@ impl Layout {
         self.headroom_to_baffle_l() + (height_cm - self.baffle_cm) * self.total_area_l_per_cm()
     }
 
+    pub fn return_level_with_l(&self, extra_l: f64) -> f64 {
+        if extra_l <= self.headroom_to_baffle_l() {
+            self.return_operating_cm + extra_l / self.return_area_l_per_cm()
+        } else {
+            self.baffle_cm + (extra_l - self.headroom_to_baffle_l()) / self.total_area_l_per_cm()
+        }
+    }
+
     pub fn headroom_to_rim_l(&self) -> f64 {
         self.headroom_to_level_l(self.sump_height_cm)
     }
@@ -201,6 +211,7 @@ pub struct Aquarium {
     pub tank_spilled_l: f64,
     pub return_dry_s: f64,
     pub makeup_dry_s: f64,
+    pub drain_dry_s: f64,
     pub t_s: f64,
     pub log: Vec<(f64, Event)>,
     wet: [Option<bool>; WaterLevelRole::COUNT],
@@ -226,6 +237,7 @@ impl Aquarium {
             tank_spilled_l: 0.0,
             return_dry_s: 0.0,
             makeup_dry_s: 0.0,
+            drain_dry_s: 0.0,
             t_s: 0.0,
             log: Vec::new(),
             wet: [None; WaterLevelRole::COUNT],
@@ -292,6 +304,17 @@ impl Aquarium {
         if self.pumps[id.index()] != on {
             self.pumps[id.index()] = on;
             self.log.push((self.t_s, Event::Pump(id, on)));
+
+            if id == PumpId::Return
+                && !on
+                && !self.weir_blocked
+                && self.tank_l >= self.layout.tank_weir_l
+            {
+                self.tank_l -= self.layout.weir_skim_l;
+                self.return_l += self.layout.weir_skim_l;
+                self.settle_sump();
+                self.track_sensors();
+            }
         }
     }
 
@@ -306,6 +329,13 @@ impl Aquarium {
             .iter()
             .find(|(at, logged)| *logged == event && *at >= after_s)
             .map(|(at, _)| *at)
+    }
+
+    pub fn count_after(&self, event: Event, after_s: f64) -> usize {
+        self.log
+            .iter()
+            .filter(|(at, logged)| *logged == event && *at >= after_s)
+            .count()
     }
 
     pub fn count(&self, event: Event) -> usize {
@@ -342,6 +372,7 @@ impl Aquarium {
             let moved = capacity.min((self.tank_l - layout.drain_intake_l).max(0.0));
             self.tank_l -= moved;
             self.drained_l += moved;
+            self.drain_dry_s += dt * (1.0 - moved / capacity);
         }
 
         if self.weir_blocked {
@@ -357,6 +388,12 @@ impl Aquarium {
             self.return_l += excess - into_baffled;
         }
 
+        self.settle_sump();
+        self.track_sensors();
+    }
+
+    fn settle_sump(&mut self) {
+        let layout = self.layout;
         let below_baffle = layout.return_area_l_per_cm() * layout.baffle_cm;
         if self.return_l > below_baffle && self.baffled_l < layout.baffled_capacity_l() {
             let back =
@@ -371,8 +408,6 @@ impl Aquarium {
             self.return_l -= excess;
             self.spilled_l += excess;
         }
-
-        self.track_sensors();
     }
 
     fn truth(&self, role: WaterLevelRole) -> bool {
@@ -435,7 +470,7 @@ impl Aquarium {
         format!(
             "t={:.1}s tank={:.2}L return={:.2}cm baffled={:.2}cm reservoir={:.2}L pumps={:?} \
              drained={:.2}L added={:.2}L spilled={:.2}L tank_spilled={:.2}L \
-             return_dry={:.1}s makeup_dry={:.1}s",
+             return_dry={:.1}s makeup_dry={:.1}s drain_dry={:.1}s",
             self.t_s,
             self.tank_l,
             self.return_level_cm(),
@@ -448,6 +483,7 @@ impl Aquarium {
             self.tank_spilled_l,
             self.return_dry_s,
             self.makeup_dry_s,
+            self.drain_dry_s,
         )
     }
 }
