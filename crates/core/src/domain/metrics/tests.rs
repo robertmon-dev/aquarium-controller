@@ -50,6 +50,9 @@ mod water_level {
             dto.water_level.sump_pump,
             dto.water_level.main_tank,
             dto.water_level.sump_reserve,
+            dto.water_level.sump_return_level,
+            dto.water_level.reservoir_ready,
+            dto.water_level.reservoir_full,
         ] {
             assert_eq!(
                 entry,
@@ -71,14 +74,28 @@ mod water_level {
         snapshot.sensors[WaterLevelRole::SumpPump.index()].state = WaterLevelState::Wet;
         snapshot.sensors[WaterLevelRole::MainTank.index()].state = WaterLevelState::Wet;
         snapshot.sensors[WaterLevelRole::SumpReserve.index()].state = WaterLevelState::Wet;
+        snapshot.sensors[WaterLevelRole::SumpReturnLevel.index()].state = WaterLevelState::Wet;
+        snapshot.sensors[WaterLevelRole::ReservoirFull.index()].faulty = true;
 
         let dto = WaterLevelMetricsDto::from(&snapshot);
 
         assert!(dto.sump_pump.wet);
         assert!(dto.main_tank.wet);
         assert!(dto.sump_reserve.wet);
+        assert!(dto.sump_return_level.wet);
         assert!(!dto.sump_mechanical.wet);
         assert!(!dto.sump_biological.wet);
+        assert!(!dto.reservoir_ready.wet);
+        assert!(dto.reservoir_full.faulty);
+        assert!(!dto.reservoir_ready.faulty);
+    }
+
+    #[test]
+    fn every_role_has_its_own_slot() {
+        assert_eq!(WaterLevelRole::COUNT, 8);
+        for (slot, role) in WaterLevelRole::ALL.into_iter().enumerate() {
+            assert_eq!(role.index(), slot, "{role:?}");
+        }
     }
 
     #[test]

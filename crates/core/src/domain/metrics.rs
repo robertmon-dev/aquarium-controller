@@ -209,6 +209,9 @@ impl TankTelemetryDto {
                 sump_pump: WaterLevelEntryDto::UNKNOWN,
                 main_tank: WaterLevelEntryDto::UNKNOWN,
                 sump_reserve: WaterLevelEntryDto::UNKNOWN,
+                sump_return_level: WaterLevelEntryDto::UNKNOWN,
+                reservoir_ready: WaterLevelEntryDto::UNKNOWN,
+                reservoir_full: WaterLevelEntryDto::UNKNOWN,
                 sensors_healthy: false,
             },
             heaters: HeatersStatus::UNAVAILABLE,
@@ -317,6 +320,9 @@ pub struct WaterLevelMetricsDto {
     pub sump_pump: WaterLevelEntryDto,
     pub main_tank: WaterLevelEntryDto,
     pub sump_reserve: WaterLevelEntryDto,
+    pub sump_return_level: WaterLevelEntryDto,
+    pub reservoir_ready: WaterLevelEntryDto,
+    pub reservoir_full: WaterLevelEntryDto,
     pub sensors_healthy: bool,
 }
 
@@ -346,6 +352,9 @@ impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
             sump_pump: entry(WaterLevelRole::SumpPump),
             main_tank: entry(WaterLevelRole::MainTank),
             sump_reserve: entry(WaterLevelRole::SumpReserve),
+            sump_return_level: entry(WaterLevelRole::SumpReturnLevel),
+            reservoir_ready: entry(WaterLevelRole::ReservoirReady),
+            reservoir_full: entry(WaterLevelRole::ReservoirFull),
             sensors_healthy: snapshot.all_healthy(),
         }
     }
