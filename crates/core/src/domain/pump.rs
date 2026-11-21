@@ -369,6 +369,7 @@ impl PumpSettingsPatch {
 pub enum OverrideError {
     NotOverridable,
     Invalid(&'static str),
+    NotPersisted(&'static str),
 }
 
 pub fn validate_override(id: PumpId, duration_s: Option<u32>) -> Result<(), OverrideError> {
@@ -612,7 +613,7 @@ pub fn resume_verdict(
         };
     };
 
-    if now.saturating_sub(saved) >= window {
+    if now < saved || now - saved >= window {
         return ResumeVerdict::Suspend;
     }
 

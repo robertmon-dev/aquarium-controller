@@ -529,6 +529,10 @@ fn resume_verdicts() {
         resume_verdict(Some(1000), Some(1600), 20, 600, true),
         Suspend
     );
+    assert_eq!(
+        resume_verdict(Some(2000), Some(1100), 20, 600, true),
+        Suspend
+    );
     assert_eq!(resume_verdict(None, Some(1100), 20, 600, true), Suspend);
     assert_eq!(resume_verdict(Some(1000), Some(1100), 20, 0, true), Suspend);
     assert_eq!(resume_verdict(Some(1000), None, 20, 600, true), Wait);
