@@ -1,4 +1,8 @@
 use std::sync::Mutex;
+use std::time::Duration;
+
+use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 use super::*;
 
@@ -38,8 +42,77 @@ fn dated(epoch_s: u64) -> TankTelemetryDto {
     dto
 }
 
+const BACKOFF: Duration = Duration::from_secs(30);
+
 fn exporter(writer: &FakeWriter, capacity: usize, batch: usize) -> MetricsExporter<&FakeWriter> {
-    MetricsExporter::new(writer, capacity, batch)
+    MetricsExporter::new(writer, capacity, batch, BACKOFF)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_transient_error_defers_the_next_attempt_until_the_backoff_ends() {
+    let writer = FakeWriter::failing_with(ExportError::Unavailable(503), 1);
+    let mut subject = exporter(&writer, 100, 100);
+    let start = Instant::now();
+
+    subject.enqueue(&dated(1_750_000_000));
+    assert!(subject.ready(start));
+    assert!(subject.flush().await.is_err());
+    assert_eq!(subject.next_attempt_at(), Some(start + BACKOFF));
+
+    for second in (2..30).step_by(2) {
+        tokio::time::sleep_until(start + Duration::from_secs(second)).await;
+        subject.enqueue(&dated(1_750_000_000 + second));
+        assert!(!subject.ready(Instant::now()));
+        subject.flush_ready().await;
+    }
+    assert_eq!(writer.bodies().len(), 1);
+    assert_eq!(subject.pending(), 15);
+
+    tokio::time::sleep_until(start + BACKOFF).await;
+    assert!(subject.ready(Instant::now()));
+    subject.flush_ready().await;
+    assert_eq!(writer.bodies().len(), 2);
+    assert_eq!(subject.pending(), 0);
+    assert_eq!(subject.next_attempt_at(), None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_export_loop_retries_a_503_once_per_backoff_while_samples_keep_coming() {
+    let writer = FakeWriter::failing_with(ExportError::Unavailable(503), 1);
+    let (snapshots, rx) = watch::channel(TankTelemetryDto::empty());
+    let (_events, events_rx) = mpsc::unbounded_channel();
+    let start = Instant::now();
+
+    let producer = async {
+        let mut after_retry = 0;
+        for second in (0..=40u64).step_by(2) {
+            tokio::time::sleep_until(start + Duration::from_secs(second)).await;
+            snapshots.send_replace(dated(1_750_000_000 + second));
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let attempts = writer.bodies().len();
+            match second {
+                0..30 => assert_eq!(attempts, 1, "at {second} s"),
+                30 => {
+                    assert!((2..=3).contains(&attempts), "at {second} s: {attempts}");
+                    after_retry = attempts;
+                }
+                _ => assert_eq!(
+                    attempts,
+                    after_retry + (second as usize - 30) / 2,
+                    "at {second} s"
+                ),
+            }
+        }
+    };
+
+    tokio::select! {
+        () = export_loop(exporter(&writer, 100, 100), rx, events_rx) => panic!("the loop ended"),
+        () = producer => {}
+    }
+
+    let retry = &writer.bodies()[1];
+    assert!(retry.contains("1750000000"), "{retry}");
+    assert!(retry.contains("1750000028"), "{retry}");
 }
 
 #[tokio::test]
@@ -191,6 +264,7 @@ async fn operation_events_share_the_buffer_with_snapshots() {
             refill_ran_s: 60,
             result: OperationResult::Completed,
             resumed: false,
+            finished_at: Some(1_750_000_060),
         },
         finished_at: Some(1_750_000_060),
         drained_l: None,
