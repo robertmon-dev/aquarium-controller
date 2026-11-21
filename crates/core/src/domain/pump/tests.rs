@@ -239,6 +239,13 @@ fn settings_validation_covers_every_field() {
     }];
     assert!(long_drain.validate().is_err());
 
+    let mut long_cron = defaults();
+    long_cron.top_off = vec![top_off(&"0 ".repeat(33), 60)];
+    assert_eq!(
+        long_cron.validate(),
+        Err("cron must be at most 64 characters")
+    );
+
     let mut zero_flow = defaults();
     zero_flow.flow_lph.makeup = Some(0);
     assert!(zero_flow.validate().is_err());
@@ -568,4 +575,12 @@ fn operation_states_follow_phases() {
         OperationState::from(Phase::Refilling),
         OperationState::Refilling
     );
+}
+
+#[test]
+fn only_the_normally_closed_circulation_channels_fail_safe_on() {
+    assert!(PumpId::Return.fail_safe_on());
+    assert!(PumpId::Uv.fail_safe_on());
+    assert!(!PumpId::Makeup.fail_safe_on());
+    assert!(!PumpId::Drain.fail_safe_on());
 }

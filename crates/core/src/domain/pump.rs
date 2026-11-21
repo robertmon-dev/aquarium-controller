@@ -16,6 +16,7 @@ pub const MAX_SETTLE_S: u32 = 300;
 pub const DEFAULT_SETTLE_S: u32 = 30;
 pub const MAX_REFILL_S: u32 = 900;
 pub const MAX_WINDOWS: usize = 4;
+pub const MAX_CRON_LEN: usize = 64;
 pub const MAX_FLOW_LPH: u32 = 10_000;
 pub const MAX_RESUME_WINDOW_S: u32 = 3600;
 pub const DEFAULT_RESUME_WINDOW_S: u32 = 600;
@@ -49,6 +50,10 @@ impl PumpId {
             Self::Makeup => "makeup",
             Self::Drain => "drain",
         }
+    }
+
+    pub const fn fail_safe_on(self) -> bool {
+        matches!(self, Self::Return | Self::Uv)
     }
 
     pub const fn override_slot(self) -> Option<usize> {
@@ -290,6 +295,17 @@ impl PumpSettings {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.top_off.len() > MAX_WINDOWS || self.water_change.len() > MAX_WINDOWS {
             return Err("at most 4 top-off and 4 water-change windows");
+        }
+
+        for cron in self
+            .top_off
+            .iter()
+            .map(|window| &window.cron)
+            .chain(self.water_change.iter().map(|window| &window.cron))
+        {
+            if cron.len() > MAX_CRON_LEN {
+                return Err("cron must be at most 64 characters");
+            }
         }
 
         for window in &self.top_off {
