@@ -37,6 +37,7 @@ export const en = {
       filtrationState: "filtration state",
       atoState: "top-off state",
       pumpsState: "pumps",
+      waterChangePhase: "water change phase",
       systemState: "system state",
       waterLevel: "water level sensors",
     },
@@ -69,6 +70,7 @@ export const en = {
       pump_makeup: "makeup",
       pump_drain: "drain",
       top_off: "top-off",
+      water_change_phase: "phase",
     },
     ranges: {
       h1: "1h",

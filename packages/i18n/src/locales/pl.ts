@@ -40,6 +40,7 @@ export const pl: DeepString<typeof en> = {
       filtrationState: "stan filtracji",
       atoState: "stan dolewki",
       pumpsState: "pompy",
+      waterChangePhase: "faza podmiany",
       systemState: "stan systemu",
       waterLevel: "czujniki poziomu",
     },
@@ -72,6 +73,7 @@ export const pl: DeepString<typeof en> = {
       pump_makeup: "pompa podmian",
       pump_drain: "zrzut",
       top_off: "dolewka",
+      water_change_phase: "faza",
     },
     ranges: {
       h1: "1 godz.",
