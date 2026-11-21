@@ -170,7 +170,12 @@ test: ## Run host tests for aquarium-core
 .PHONY: test-e2e
 test-e2e: ## Run the simulated-aquarium end-to-end pump tests
 	@$(MSG) "E2E (simulated aquarium)"
-	@cargo test -p $(CORE_CRATE) --test e2e_water_change
+	@cargo test -p $(CORE_CRATE) --test 'e2e_*'
+
+.PHONY: test-soak
+test-soak: ## Run the month-long simulated-aquarium soak (ignored in make test)
+	@$(MSG) "Soak (simulated aquarium, one month)"
+	@cargo test -p $(CORE_CRATE) --test e2e_soak -- --ignored --nocapture
 
 .PHONY: test-watch
 test-watch: ## Re-run host tests on file changes (needs cargo-watch)
