@@ -274,13 +274,60 @@ fn drain_runs_only_while_draining() {
         phase: Some(Phase::Draining),
         ..input(Some(HEALTHY))
     });
-    assert_eq!(state(draining), [true, true, false, true]);
+    assert_eq!(state(draining), [false, false, false, true]);
 
     let settling = decide(DecisionInput {
         phase: Some(Phase::Settling),
         ..input(Some(HEALTHY))
     });
-    assert_eq!(state(settling), [true, true, false, false]);
+    assert_eq!(state(settling), [false, false, false, false]);
+}
+
+#[test]
+fn a_water_change_keeps_the_return_pump_off_until_refilling() {
+    for phase in [Phase::Draining, Phase::Settling] {
+        let decisions = decide(DecisionInput {
+            phase: Some(phase),
+            ..input(Some(HEALTHY))
+        });
+        assert_eq!(decisions[0].blocked_by, Some(Blocker::WaterChange));
+        assert!(!decisions[0].on);
+        assert_eq!(decisions[1].blocked_by, Some(Blocker::ReturnOff));
+        assert!(!decisions[1].on);
+    }
+
+    let refilling = DecisionInput {
+        phase: Some(Phase::Refilling),
+        ..input(Some(HEALTHY))
+    };
+    assert_eq!(state(decide(refilling)), [true, true, true, false]);
+
+    let low = decide(DecisionInput {
+        levels: Some(LevelConditions {
+            sump_low: true,
+            ..HEALTHY
+        }),
+        ..refilling
+    });
+    assert_eq!(low[0].blocked_by, Some(Blocker::SumpLow));
+
+    let locked_out = decide(DecisionInput {
+        return_locked_out: true,
+        ..refilling
+    });
+    assert_eq!(locked_out[0].blocked_by, Some(Blocker::SumpLow));
+    assert!(locked_out[2].on);
+}
+
+#[test]
+fn missing_levels_keep_circulation_even_while_draining() {
+    let decisions = decide(DecisionInput {
+        phase: Some(Phase::Draining),
+        ..input(None)
+    });
+
+    assert_eq!(state(decisions), [true, true, false, false]);
+    assert_eq!(decisions[0].blocked_by, None);
 }
 
 fn defaults() -> PumpSettings {
@@ -622,12 +669,35 @@ fn a_full_sump_ends_the_refill_but_not_the_drain() {
 
     let mut top_off = Operation::start(OperationPlan::top_off(60), None);
     assert_eq!(
-        top_off.advance(SECOND, Some(full)),
+        top_off.advance(0, Some(full)),
         Step::Finished(OperationResult::SumpFull)
     );
 
     let mut draining = Operation::start(plan(60, 0, 60), None);
     assert_eq!(draining.advance(SECOND, Some(full)), Step::Continue);
+}
+
+#[test]
+fn a_full_sump_ends_a_water_change_refill_only_after_the_makeup_ran() {
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+    let mut operation = Operation::start(plan(1, 0, 60), None);
+    run(&mut operation, 1, full);
+    run(&mut operation, 1, full);
+    assert_eq!(operation.phase, Phase::Refilling);
+
+    for _ in 0..5 {
+        assert_eq!(operation.advance(0, Some(full)), Step::Continue);
+    }
+    assert_eq!(operation.ran_s(Phase::Refilling), 0);
+
+    assert_eq!(operation.advance(SECOND, Some(HEALTHY)), Step::Continue);
+    assert_eq!(
+        operation.advance(0, Some(full)),
+        Step::Finished(OperationResult::SumpFull)
+    );
 }
 
 #[test]
@@ -654,22 +724,18 @@ fn a_water_change_drains_settles_and_refills() {
 }
 
 #[test]
-fn a_low_sump_ends_draining_early_and_the_change_continues() {
+fn a_low_sump_does_not_end_the_drain() {
+    let low = LevelConditions {
+        sump_low: true,
+        ..HEALTHY
+    };
     let mut operation = Operation::start(plan(60, 30, 60), None);
 
-    run(&mut operation, 5, HEALTHY);
-    assert_eq!(
-        operation.advance(
-            SECOND,
-            Some(LevelConditions {
-                sump_low: true,
-                ..HEALTHY
-            })
-        ),
-        Step::PhaseChanged
-    );
+    assert_eq!(run(&mut operation, 59, low), Step::Continue);
+    assert_eq!(operation.phase, Phase::Draining);
+    assert_eq!(operation.advance(SECOND, Some(low)), Step::PhaseChanged);
     assert_eq!(operation.phase, Phase::Settling);
-    assert_eq!(operation.ran_s(Phase::Draining), 6);
+    assert_eq!(operation.ran_s(Phase::Draining), 60);
 }
 
 #[test]
