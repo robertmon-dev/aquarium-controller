@@ -1,6 +1,4 @@
-use crate::domain::water::{
-    WaterLevelReading, WaterLevelRole, WaterLevelSnapshot, WaterLevelState,
-};
+use crate::domain::water::{WaterLevelReading, WaterLevelRole, WaterLevelSnapshot};
 use crate::ports::outbound::water_level::{WaterLevelPins, WaterLevelSink};
 use crate::protocol::xkc_y25::{interpret, FilterConfig, LevelFilter, Polarity};
 
@@ -21,7 +19,7 @@ where
             pins,
             sink,
             polarity,
-            filters: WaterLevelRole::ALL.map(|_| LevelFilter::new(WaterLevelState::Dry, config)),
+            filters: WaterLevelRole::ALL.map(|_| LevelFilter::unsettled(config)),
         }
     }
 
@@ -39,7 +37,9 @@ where
             };
         }
 
-        self.sink.publish(snapshot);
+        if self.filters.iter().all(LevelFilter::is_settled) {
+            self.sink.publish(snapshot);
+        }
     }
 }
 

@@ -137,6 +137,10 @@ fn the_published_level_is_filtered_not_raw() {
     let mut sampler =
         WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, DEBOUNCE_THREE);
 
+    for _ in 0..3 {
+        sampler.tick();
+    }
+
     harness.set(WaterLevelRole::SumpPump, true);
     sampler.tick();
 
@@ -174,4 +178,65 @@ fn polarity_is_applied_to_every_pin() {
             "a low pin reads as wet under active-low wiring"
         );
     }
+}
+
+#[test]
+fn nothing_is_published_until_every_sensor_has_settled() {
+    let harness = Harness::new();
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, DEBOUNCE_THREE);
+
+    sampler.tick();
+    sampler.tick();
+    assert!(
+        sink.published.borrow().is_empty(),
+        "a boot must not publish the filters' placeholder level"
+    );
+
+    sampler.tick();
+    assert_eq!(sink.published.borrow().len(), 1);
+}
+
+#[test]
+fn a_sensor_wet_at_boot_is_published_wet_on_the_first_snapshot() {
+    let harness = Harness::new();
+    harness.set(WaterLevelRole::SumpPump, true);
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, DEBOUNCE_THREE);
+
+    for _ in 0..3 {
+        sampler.tick();
+    }
+
+    let published = sink.published.borrow();
+    assert_eq!(published.len(), 1);
+    assert_eq!(
+        published[0].get(WaterLevelRole::SumpPump).state,
+        WaterLevelState::Wet
+    );
+}
+
+#[test]
+fn a_sensor_that_glitches_at_boot_holds_back_the_first_snapshot() {
+    let harness = Harness::new();
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, DEBOUNCE_THREE);
+
+    harness.set(WaterLevelRole::MainTank, true);
+    sampler.tick();
+    harness.set(WaterLevelRole::MainTank, false);
+    sampler.tick();
+    sampler.tick();
+    assert!(sink.published.borrow().is_empty());
+
+    sampler.tick();
+    let published = sink.published.borrow();
+    assert_eq!(published.len(), 1);
+    assert_eq!(
+        published[0].get(WaterLevelRole::MainTank).state,
+        WaterLevelState::Dry
+    );
 }
