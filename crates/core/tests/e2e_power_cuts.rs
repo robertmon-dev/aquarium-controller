@@ -600,7 +600,10 @@ async fn power_cut_on_the_resume_checkpoint_write_still_resumes_at_most_once() {
                 assert!(sim.water().t_s - first_cut < 2000.0, "no verdict");
             }
 
-            assert_eq!(sim.water().spilled_l, 0.0, "{}", sim.water().describe());
+            {
+                let water = sim.water();
+                assert_eq!(water.spilled_l, 0.0, "{}", water.describe());
+            }
             assert!(
                 auto_resumes <= 1,
                 "{auto_resumes} automatic resumes of one operation over {:.0} s of power cuts \
@@ -638,7 +641,10 @@ async fn power_cut_late_in_a_refill_still_refills_the_system_to_full() {
             .await;
 
             sim.power_cut(SHORT_OUTAGE, true).await;
-            assert!(sim.water().return_level_cm() > sim.water().layout.sump_return_level.height_cm);
+            {
+                let water = sim.water();
+                assert!(water.return_level_cm() > water.layout.sump_return_level.height_cm);
+            }
             sim.run_until(
                 Duration::from_secs(900),
                 "the refill to end",
