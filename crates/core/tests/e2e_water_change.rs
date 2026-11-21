@@ -1093,3 +1093,148 @@ async fn return_level_scheduled_water_change_is_skipped_until_the_reservoir_is_r
         })
         .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn return_level_stuck_wet_stop_sensor_times_out_the_refill() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL.with_reservoir(150.0);
+            let sim = Sim::start(layout).await;
+            sim.water().faults[WaterLevelRole::SumpReturnLevel.index()] = Some(Fault::StuckWet);
+            configure(&sim, Some("sump_return_level")).await;
+            start_water_change(&sim, 10, 30, 60).await;
+
+            let refill_at = sim
+                .run_until(LONG, "refill", in_state(OperationState::Refilling))
+                .await;
+            sim.run_for(secs(120)).await;
+            let stalled = sim.status().await;
+            assert_eq!(stalled.operation.state, OperationState::Refilling);
+            assert_eq!(stalled.operation.refill_ran_s, 0);
+            assert_eq!(stalled.channels.makeup.blocked_by, Some(Blocker::SumpFull));
+
+            let ended_at = sim
+                .run_until(LONG, "the refill to time out", |status, _| finished(status))
+                .await;
+            let budget_s = 360.0;
+            assert!(
+                (budget_s..=budget_s + SECONDS_TOL).contains(&(ended_at - refill_at)),
+                "refill timed out {:.1} s after it began",
+                ended_at - refill_at
+            );
+
+            let status = sim.status().await;
+            let record = status.last_water_change.expect("a finished water change");
+            assert_eq!(record.result, OperationResult::RefillTimeout);
+            assert_eq!(record.refill_ran_s, 0);
+            assert_eq!(record.drain_ran_s, 10);
+            assert_eq!(status.operation.state, OperationState::Idle);
+            assert_balanced(&sim);
+
+            sim.run_for(secs(120)).await;
+            let after = sim.status().await;
+            assert_eq!(after.channels.return_pump.blocked_by, None);
+            assert_eq!(after.channels.makeup.blocked_by, Some(Blocker::SumpFull));
+            let (code, response) = sim.send("POST", TOP_OFF, r#"{"duration_s":60}"#).await;
+            assert_eq!(code, 423, "got: {response}");
+
+            let water = sim.water();
+            assert_eq!(water.count(Event::Pump(PumpId::Makeup, true)), 0);
+            assert_eq!(water.added_l, 0.0);
+            assert_near(
+                water.drained_l,
+                10.0 * layout.drain_l_per_s(),
+                LITRES_TOL,
+                "drained",
+            );
+            assert!(water.pump_on(PumpId::Return) && water.pump_on(PumpId::Uv));
+            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
+            assert_eq!(water.return_dry_s, 0.0);
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
+            assert_eq!(water.spilled_l, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn return_level_drain_beyond_the_ready_reservoir_is_refused() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL.with_reservoir(150.0);
+            let sim = Sim::start(layout).await;
+            configure(&sim, Some("sump_return_level")).await;
+            let ready_l = layout.reservoir_ready_l - layout.reserve_wet_l;
+            let (code, response) = sim
+                .send(
+                    "PATCH",
+                    SETTINGS,
+                    &format!(r#"{{"reservoir_ready_l":{ready_l}}}"#),
+                )
+                .await;
+            assert_eq!(code, 200, "got: {response}");
+            sim.run_for(secs(1)).await;
+
+            let longest_s = (ready_l * 3600.0 / layout.drain_lph).floor();
+            assert_eq!(longest_s, 112.0);
+
+            let (code, response) = sim
+                .send(
+                    "POST",
+                    WATER_CHANGE,
+                    r#"{"drain_s":300,"settle_s":30,"refill_s":750}"#,
+                )
+                .await;
+            assert_eq!(code, 400, "got: {response}");
+            assert!(
+                response.contains("the planned drain exceeds the water the reservoir holds"),
+                "got: {response}"
+            );
+
+            let window = |drain_s: f64| {
+                format!(
+                    r#"{{"water_change":[{{"cron":"0 10 * * sun","drain_s":{drain_s},"settle_s":30,"refill_s":750}}]}}"#
+                )
+            };
+            let (code, response) = sim.send("PATCH", SETTINGS, &window(300.0)).await;
+            assert_eq!(code, 400, "got: {response}");
+            assert!(
+                response.contains("a water-change window drains more than reservoir_ready_l holds"),
+                "got: {response}"
+            );
+            let (code, response) = sim.send("PATCH", SETTINGS, &window(longest_s)).await;
+            assert_eq!(code, 200, "got: {response}");
+
+            let faster_drain = format!(
+                r#"{{"flow_lph":{{"makeup":{},"drain":{}}}}}"#,
+                layout.makeup_lph,
+                layout.drain_lph + 100.0
+            );
+            let (code, response) = sim.send("PATCH", SETTINGS, &faster_drain).await;
+            assert_eq!(code, 400, "got: {response}");
+            let (code, response) = sim
+                .send(
+                    "PATCH",
+                    SETTINGS,
+                    &format!(r#"{{"reservoir_ready_l":{}}}"#, ready_l - 1.0),
+                )
+                .await;
+            assert_eq!(code, 400, "got: {response}");
+
+            let settings: PumpSettings = sim.fetch(SETTINGS).await;
+            assert_eq!(settings.reservoir_ready_l, Some(47));
+            assert_eq!(settings.flow_lph.drain, Some(1500));
+            assert_eq!(settings.water_change.len(), 1);
+            assert_eq!(settings.water_change[0].drain_s, 112);
+
+            sim.run_for(secs(5)).await;
+            let status = sim.status().await;
+            assert_eq!(status.operation.state, OperationState::Idle);
+            assert_eq!(status.last_water_change, None);
+            let water = sim.water();
+            assert_eq!(water.drained_l, 0.0);
+            assert_eq!(water.added_l, 0.0);
+            assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 0);
+            assert!(water.pump_on(PumpId::Return));
+        })
+        .await;
+}
