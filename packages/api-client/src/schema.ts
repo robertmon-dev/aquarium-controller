@@ -24,6 +24,7 @@ const pumpsGuard = z.object({
     "resuming",
     "suspended",
   ]),
+  circulation_starved: z.boolean(),
 });
 
 const telemetryGuard = z.object({

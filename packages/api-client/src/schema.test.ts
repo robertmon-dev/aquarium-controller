@@ -33,6 +33,7 @@ const valid = {
     drain: false,
     operation_kind: null,
     operation_state: "idle",
+    circulation_starved: false,
   },
   lighting: {
     profile: "daylight",
@@ -85,6 +86,15 @@ describe("assertTelemetry", () => {
         pumps: { ...valid.pumps, operation_state: "flooding" },
       }),
     ).toThrow(/pumps\.operation_state/);
+  });
+
+  it("rejects pumps without the starved-circulation flag", () => {
+    const { circulation_starved, ...pumps } = valid.pumps;
+    void circulation_starved;
+
+    expect(() => assertTelemetry({ ...valid, pumps })).toThrow(
+      /pumps\.circulation_starved/,
+    );
   });
 
   it("rejects an unknown heater mode", () => {
