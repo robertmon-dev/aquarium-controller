@@ -1,0 +1,32 @@
+name: Soak
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  WIFI_SSID: ci-placeholder
+  WIFI_PASS: ci-placeholder
+  API_TOKEN: ci-placeholder
+
+jobs:
+  soak:
+    name: Simulated aquarium soak (one month)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: esp-rs/xtensa-toolchain@v1.6
+        with:
+          default: true
+          buildtargets: esp32s3
+          ldproxy: true
+      - name: Enable caching
+        uses: Swatinem/rust-cache@v2
+
+      - name: Soak
+        run: make test-soak
