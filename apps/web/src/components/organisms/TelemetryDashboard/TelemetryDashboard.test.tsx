@@ -67,6 +67,14 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
         target_celsius: 26,
       },
     },
+    pumps: {
+      return: true,
+      uv: true,
+      makeup: false,
+      drain: false,
+      operation_kind: null,
+      operation_state: "idle",
+    },
     leak_detected: false,
     ...overrides,
   };
