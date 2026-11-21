@@ -60,13 +60,8 @@ impl<Q, L, C, H, P> FromRef<AppState<Q, L, C, H, P>> for CalibrationState<C> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn router<Q, L, C, H, P>(
-    telemetry: Arc<Q>,
-    lighting: Arc<L>,
-    calibration: Arc<C>,
-    heaters: Arc<H>,
-    pumps: Arc<P>,
+    state: AppState<Q, L, C, H, P>,
     token: &'static str,
     sse_keepalive: Duration,
     cors_origin: &'static str,
@@ -151,11 +146,5 @@ where
             post(handlers::pumps::resume_water_change::<P>),
         )
         .layer(ApiLayer::new(token, cors_origin))
-        .with_state(AppState {
-            telemetry,
-            lighting,
-            calibration,
-            heaters,
-            pumps,
-        })
+        .with_state(state)
 }

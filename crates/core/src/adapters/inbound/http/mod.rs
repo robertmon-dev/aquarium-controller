@@ -44,11 +44,13 @@ where
     P: PumpControl + 'static,
 {
     let router: &'static _ = Box::leak(Box::new(routes::router(
-        telemetry,
-        lighting,
-        calibration,
-        heaters,
-        pumps,
+        routes::AppState {
+            telemetry,
+            lighting,
+            calibration,
+            heaters,
+            pumps,
+        },
         config.token,
         config.sse_keepalive,
         config.cors_origin,
