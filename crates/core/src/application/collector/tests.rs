@@ -8,11 +8,12 @@ use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{
     LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
+use crate::domain::pump::{OperationKind, OperationState, PumpsTelemetry};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureError,
-    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
+    TemperatureError, TemperatureReader, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
 use crate::protocol::tds::{self, TdsError};
@@ -219,6 +220,14 @@ impl CalibrationSource for FakeCalibration {
     }
 }
 
+struct FakePumps(PumpsTelemetry);
+
+impl PumpStatusSource for FakePumps {
+    fn pump_telemetry(&self) -> PumpsTelemetry {
+        self.0
+    }
+}
+
 struct FakeHeaters(HeatersStatus);
 
 impl HeaterStatusSource for FakeHeaters {
@@ -313,6 +322,7 @@ type Subject<'a> = TelemetryCollector<
     FakeAnalog,
     FakeCalibration,
     FakeHeaters,
+    FakePumps,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -381,6 +391,7 @@ fn with_analog(
             analog,
             calibration,
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
         },
         sink,
         config(),
@@ -1122,6 +1133,7 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(heaters),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1130,4 +1142,37 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
     .await;
 
     assert_eq!(sink.last().heaters, heaters);
+}
+
+#[tokio::test]
+async fn the_pump_state_is_copied_into_the_snapshot() {
+    let sink = RecordingSink::default();
+    let pumps = PumpsTelemetry {
+        return_pump: true,
+        uv: false,
+        makeup: true,
+        drain: false,
+        operation_kind: Some(OperationKind::TopOff),
+        operation_state: OperationState::Refilling,
+    };
+
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(pumps),
+        },
+        &sink,
+        config(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.last().pumps, pumps);
 }

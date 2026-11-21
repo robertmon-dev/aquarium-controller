@@ -5,12 +5,12 @@ use crate::domain::metrics::{
 };
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, SystemHealthProvider, TdsReader, TelemetrySink, TemperatureReader,
-    TemperatureSensorRole, WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
+    TemperatureReader, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
-pub struct TelemetrySources<R, C, H, O, W, A, K, T> {
+pub struct TelemetrySources<R, C, H, O, W, A, K, T, P> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
@@ -19,6 +19,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K, T> {
     pub analog: A,
     pub calibration: K,
     pub heaters: T,
+    pub pumps: P,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,15 +36,15 @@ struct Readings {
     tds_volts: Option<f32>,
 }
 
-pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T> {
-    sources: TelemetrySources<R, C, H, O, W, A, K, T>,
+pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P> {
+    sources: TelemetrySources<R, C, H, O, W, A, K, T, P>,
     sink: S,
     lighting: LightingSchedule,
     config: TelemetryConfig,
     last: Readings,
 }
 
-impl<R, C, H, S, O, W, A, K, T> TelemetryCollector<R, C, H, S, O, W, A, K, T>
+impl<R, C, H, S, O, W, A, K, T, P> TelemetryCollector<R, C, H, S, O, W, A, K, T, P>
 where
     R: TemperatureReader,
     C: Clock,
@@ -54,9 +55,10 @@ where
     A: PhReader + TdsReader,
     K: CalibrationSource,
     T: HeaterStatusSource,
+    P: PumpStatusSource,
 {
     pub fn new(
-        sources: TelemetrySources<R, C, H, O, W, A, K, T>,
+        sources: TelemetrySources<R, C, H, O, W, A, K, T, P>,
         sink: S,
         config: TelemetryConfig,
     ) -> Self {
@@ -160,6 +162,7 @@ where
         dto.water_level = WaterLevelMetricsDto::from(&levels);
         dto.ato.sump_water_low = levels.sump_water_low();
         dto.heaters = self.sources.heaters.heater_status();
+        dto.pumps = self.sources.pumps.pump_telemetry();
 
         dto
     }
