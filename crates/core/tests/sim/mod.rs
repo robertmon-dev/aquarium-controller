@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -31,13 +31,7 @@ pub const STEP: Duration = Duration::from_millis(100);
 pub const COARSE_STEP: Duration = Duration::from_secs(1);
 pub const BASE_EPOCH: u64 = 1_795_341_480;
 
-pub const TIMING: PumpTiming = PumpTiming {
-    return_restart_delay: Duration::from_secs(30),
-    level_stale: Duration::from_secs(1),
-    tick: Duration::from_secs(1),
-    checkpoint_interval: Duration::from_secs(10),
-    runtime_flush: Duration::from_secs(600),
-};
+pub const TIMING: PumpTiming = PumpTiming::DEFAULT;
 
 pub const COARSE_TIMING: PumpTiming = PumpTiming {
     level_stale: Duration::from_secs(3),
@@ -260,6 +254,7 @@ pub struct Aquarium {
     pub return_l: f64,
     pub reservoir_l: f64,
     pub pumps: [bool; 4],
+    pub dead: [bool; 4],
     pub weir_blocked: bool,
     pub faults: [Option<Fault>; WaterLevelRole::COUNT],
     pub outage: bool,
@@ -293,6 +288,7 @@ impl Aquarium {
             return_l: layout.return_operating_cm * layout.return_area_l_per_cm(),
             reservoir_l: layout.reservoir_l,
             pumps: PumpId::ALL.map(PumpId::fail_safe_on),
+            dead: [false; 4],
             weir_blocked: false,
             faults: [None; WaterLevelRole::COUNT],
             outage: false,
@@ -408,6 +404,10 @@ impl Aquarium {
         self.pumps[id.index()]
     }
 
+    pub fn flowing(&self, id: PumpId) -> bool {
+        self.pump_on(id) && !self.dead[id.index()]
+    }
+
     pub fn set_pump(&mut self, id: PumpId, on: bool) {
         if self.pumps[id.index()] != on {
             self.pumps[id.index()] = on;
@@ -415,6 +415,7 @@ impl Aquarium {
 
             if id == PumpId::Return
                 && !on
+                && !self.dead[id.index()]
                 && !self.weir_blocked
                 && self.tank_l >= self.layout.tank_weir_l
             {
@@ -484,7 +485,7 @@ impl Aquarium {
         let layout = self.layout;
         self.t_s += dt;
 
-        if self.pump_on(PumpId::Makeup) {
+        if self.flowing(PumpId::Makeup) {
             let capacity = layout.makeup_l_per_s() * dt;
             let moved = capacity.min(self.reservoir_l.max(0.0));
             self.reservoir_l -= moved;
@@ -494,7 +495,7 @@ impl Aquarium {
             self.makeup_dry_s += dt * (1.0 - moved / capacity);
         }
 
-        if self.pump_on(PumpId::Return) {
+        if self.flowing(PumpId::Return) {
             let capacity = layout.return_l_per_s() * dt;
             let intake_l = layout.return_intake_cm * layout.return_area_l_per_cm();
             let moved = capacity.min((self.return_l - intake_l).max(0.0));
@@ -503,7 +504,7 @@ impl Aquarium {
             self.return_dry_s += dt * (1.0 - moved / capacity);
         }
 
-        if self.pump_on(PumpId::Drain) {
+        if self.flowing(PumpId::Drain) {
             let capacity = layout.drain_l_per_s() * dt;
             let moved = capacity.min((self.tank_l - layout.drain_intake_l).max(0.0));
             self.solute_mg -= moved * self.concentration_mg_l();
@@ -780,6 +781,7 @@ pub struct SimClock {
     zone: Zone,
     boot: Mutex<Instant>,
     synced: AtomicBool,
+    shift_s: AtomicI64,
 }
 
 impl SimClock {
@@ -795,6 +797,7 @@ impl SimClock {
             zone,
             boot: Mutex::new(now),
             synced: AtomicBool::new(true),
+            shift_s: AtomicI64::new(0),
         }
     }
 
@@ -809,6 +812,15 @@ impl SimClock {
 
     pub fn lose_sync(&self) {
         self.synced.store(false, Ordering::Relaxed);
+    }
+
+    pub fn step_clock(&self, seconds: i64) {
+        self.shift_s.fetch_add(seconds, Ordering::Relaxed);
+    }
+
+    pub fn shifted_epoch(&self) -> u64 {
+        self.true_epoch()
+            .saturating_add_signed(self.shift_s.load(Ordering::Relaxed))
     }
 
     pub fn is_synced(&self) -> bool {
@@ -826,7 +838,7 @@ impl SimClock {
 
 impl Clock for SimClock {
     fn epoch_seconds(&self) -> Option<u64> {
-        self.is_synced().then(|| self.true_epoch())
+        self.is_synced().then(|| self.shifted_epoch())
     }
 
     fn uptime_seconds(&self) -> u64 {
@@ -872,6 +884,10 @@ pub struct SimStore {
 }
 
 impl SimStore {
+    pub fn seed(&self, record: PumpRecord, bytes: &[u8]) {
+        self.inner.put(record, bytes.to_vec());
+    }
+
     pub fn fail_after(&self, ops: usize) {
         *self.budget.lock().expect("store poisoned") = Some(ops);
     }
@@ -1157,10 +1173,13 @@ impl Sim {
     }
 
     pub async fn start_on(aquarium: Aquarium, options: Options) -> Self {
+        Self::start_seeded(aquarium, options, Arc::new(SimStore::default())).await
+    }
+
+    pub async fn start_seeded(aquarium: Aquarium, options: Options, store: Arc<SimStore>) -> Self {
         let water = Arc::new(Mutex::new(aquarium));
         let levels = Arc::new(InMemoryWaterLevelStore::new());
         let clock = Arc::new(SimClock::starting(options.epoch, options.zone));
-        let store = Arc::new(SimStore::default());
 
         let mut publisher = Publisher {
             water: Arc::clone(&water),
