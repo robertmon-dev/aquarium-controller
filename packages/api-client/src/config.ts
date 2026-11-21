@@ -1,4 +1,4 @@
-import type { HeaterId } from "./generated";
+import type { HeaterId, PumpId } from "./generated";
 
 export interface DeviceConfig {
   host: string;
@@ -12,6 +12,14 @@ export type ApiPath =
   | "/api/probe"
   | "/api/calibration"
   | "/api/heaters"
+  | "/api/pumps"
+  | "/api/pumps/settings"
+  | `/api/pumps/${PumpId}/override`
+  | `/api/pumps/${PumpId}/runtime/reset`
+  | "/api/pumps/top-off"
+  | "/api/pumps/top-off/resume"
+  | "/api/water-change"
+  | "/api/water-change/resume"
   | "/api/heaters/settings"
   | `/api/heaters/${HeaterId}/override`
   | "/api/lighting/override"
