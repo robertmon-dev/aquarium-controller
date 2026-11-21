@@ -83,6 +83,7 @@ const snapshot: TankTelemetryDto = {
     operation_kind: null,
     operation_state: "idle",
     circulation_starved: false,
+    level_sensors_suspect: false,
   },
   leak_detected: false,
 };
@@ -315,6 +316,30 @@ describe("pumpsCard", () => {
 
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("circulation stopped");
+  });
+
+  it("is degraded while circulation is starved or the level harness is suspect", () => {
+    for (const flag of [
+      { circulation_starved: true },
+      { level_sensors_suspect: true },
+    ]) {
+      const card = pumpsCard(
+        { ...snapshot, pumps: { ...snapshot.pumps, ...flag } },
+        t,
+      );
+
+      expect(card.status).toBe("degraded");
+      expect(card.statusLabel).toBe("circulating");
+    }
+  });
+
+  it("reads missing flags from older firmware as clear", () => {
+    const { circulation_starved, level_sensors_suspect, ...pumps } =
+      snapshot.pumps;
+    void circulation_starved;
+    void level_sensors_suspect;
+
+    expect(pumpsCard({ ...snapshot, pumps }, t).status).toBe("ok");
   });
 
   it("names the water change phase", () => {

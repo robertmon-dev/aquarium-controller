@@ -247,6 +247,8 @@ const OPERATION_LABELS = {
 
 export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
   const pumps = s.pumps;
+  const starved = pumps.circulation_starved ?? false;
+  const suspect = pumps.level_sensors_suspect ?? false;
   const toppingOff =
     pumps.operation_kind === "top_off" && pumps.operation_state === "refilling";
 
@@ -261,7 +263,12 @@ export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
   return {
     title: t("cards.pumps.title"),
     status:
-      pumps.return && pumps.operation_state !== "suspended" ? "ok" : "degraded",
+      pumps.return &&
+      pumps.operation_state !== "suspended" &&
+      !starved &&
+      !suspect
+        ? "ok"
+        : "degraded",
     statusLabel,
     metrics: [
       { label: t("cards.pumps.return"), value: onOff(t, pumps.return) },
