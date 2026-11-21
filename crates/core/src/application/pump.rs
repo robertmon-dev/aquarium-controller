@@ -467,6 +467,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                     operation_elapsed_ms = 0;
                     wall_elapsed_ms = 0;
                     state.pending.checkpoint = true;
+                    self.flush_pending(&mut state);
                     changed = true;
                 }
                 ResumeVerdict::Suspend => {

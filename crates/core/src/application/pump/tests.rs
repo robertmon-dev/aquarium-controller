@@ -2091,3 +2091,31 @@ fn a_settings_change_that_would_overdraw_a_stored_window_is_refused() {
         .expect("no reservoir volume, no check");
     assert_eq!(cleared.reservoir_ready_l, None);
 }
+
+#[test]
+fn an_automatic_resume_records_itself_before_switching_the_relays() {
+    let log = Log::default();
+    let store = LogStore::new(&log);
+    seed_checkpoint(
+        &store.inner,
+        interrupted_drain(EPOCH - 200),
+        Some(EPOCH - 100),
+    );
+    let service = Arc::new(PumpService::new(
+        PumpSettings::DEFAULT,
+        store,
+        TestClock::synced(EPOCH),
+        None,
+    ));
+    let mut controller = PumpController::new(
+        LogOutputs {
+            log: Arc::clone(&log),
+        },
+        Arc::clone(&service),
+        timing(),
+    );
+
+    controller.tick(Some(&healthy()), Instant::now());
+
+    assert!(position(&log, "store pump_op") < position(&log, "set drain on"));
+}
