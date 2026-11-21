@@ -1,7 +1,7 @@
 import { View } from "react-native";
 import { Badge, TextDisplay } from "@/components/atoms";
 import { spacing } from "@aquarium/theme";
-import { EM_DASH } from "@aquarium/view-model";
+import { EM_DASH, PROBE_FRESHNESS_SECONDS } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 import type { LiveProbe } from "./types";
 import type { ReactNode } from "react";
@@ -21,7 +21,7 @@ export const LiveReading = ({
     ? t("calibration.neverSampled")
     : live.volts === null
       ? t("calibration.noProbe")
-      : live.ageSeconds !== null && live.ageSeconds > 10
+      : live.ageSeconds !== null && live.ageSeconds > PROBE_FRESHNESS_SECONDS
         ? t("calibration.staleReading", { seconds: String(live.ageSeconds) })
         : undefined;
 

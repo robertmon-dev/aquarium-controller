@@ -2,7 +2,7 @@ import { View } from "react-native";
 import { Button, Card, TextDisplay } from "@/components/atoms";
 import { FormField } from "@/components/molecules";
 import { spacing } from "@aquarium/theme";
-import { formatPercent } from "@aquarium/view-model";
+import { canCapturePh, formatPercent } from "@aquarium/view-model";
 import { useT } from "@/i18n/use-locale";
 import { LiveReading } from "./LiveReading";
 import type { PhSectionProps } from "./types";
@@ -15,7 +15,7 @@ export const PhSection = ({
   onCapture,
 }: PhSectionProps): ReactNode => {
   const t = useT();
-  const canCapture = live.stability === "stable" && live.volts !== null;
+  const canCapture = canCapturePh(live);
 
   return (
     <Card variant="outlined" padding="sm" width="full">

@@ -1,16 +1,11 @@
 import { useRef, useState } from "react";
-import { appendSample } from "./probe-calibration";
+import {
+  advanceProbeSamples,
+  type ProbeSamples,
+  type ProbeVoltageReading,
+} from "./probe-calibration";
 
-export interface ProbeVoltageReading {
-  ph: number | null;
-  tds: number | null;
-  sampled_at_epoch_s: number;
-}
-
-export interface ProbeSamples {
-  ph: number[];
-  tds: number[];
-}
+export type { ProbeSamples, ProbeVoltageReading } from "./probe-calibration";
 
 export function useProbeSamples(
   reading: ProbeVoltageReading | undefined,
@@ -23,12 +18,12 @@ export function useProbeSamples(
     reading.sampled_at_epoch_s > 0 &&
     reading.sampled_at_epoch_s !== lastStamp.current
   ) {
+    const previousStamp = lastStamp.current;
     lastStamp.current = reading.sampled_at_epoch_s;
 
-    setSamples((previous) => ({
-      ph: appendSample(previous.ph, reading.ph),
-      tds: appendSample(previous.tds, reading.tds),
-    }));
+    setSamples((previous) =>
+      advanceProbeSamples(previous, reading, previousStamp),
+    );
   }
 
   return samples;

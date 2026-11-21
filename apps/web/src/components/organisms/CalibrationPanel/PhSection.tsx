@@ -1,6 +1,6 @@
 import { Button, Input } from "@/components/atoms";
 import { useT } from "@aquarium/i18n/use-locale";
-import { formatPercent } from "@aquarium/view-model";
+import { canCapturePh, formatPercent } from "@aquarium/view-model";
 import { LiveReading } from "./LiveReading";
 import type { PhSectionProps } from "./types";
 
@@ -12,7 +12,7 @@ export function PhSection({
   onCapture,
 }: PhSectionProps) {
   const t = useT();
-  const canCapture = live.stability === "stable" && live.volts !== null;
+  const canCapture = canCapturePh(live);
 
   return (
     <section className="calibration__section">

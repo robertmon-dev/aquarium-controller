@@ -2,8 +2,14 @@ import type { Transport } from "@aquarium/api-client";
 import { memoryAdapter } from "@aquarium/i18n/adapter";
 import { LocaleProvider } from "@aquarium/i18n/use-locale";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CalibrationPanel } from "./CalibrationPanel";
 
 const device = { host: "10.0.0.2", port: 80, token: "tok" };
@@ -53,6 +59,42 @@ function transportWith(probeVolts: number | null): {
   return { transport: { device, fetchImpl }, fetchImpl };
 }
 
+function liveDevice(): { transport: Transport; freeze: () => void } {
+  let frozenAt: number | null = null;
+
+  const fetchImpl = vi.fn((url: string) => {
+    if (url.endsWith("/api/probe")) {
+      const stamp = frozenAt ?? Math.floor(Date.now() / 1000);
+      return Promise.resolve(
+        json({ ph: 1.52, tds: 0.9, sampled_at_epoch_s: stamp }),
+      );
+    }
+
+    return transportWith(1.52).transport.fetchImpl(url);
+  });
+
+  return {
+    transport: { device, fetchImpl },
+    freeze: () => {
+      frozenAt = Math.floor(Date.now() / 1000);
+    },
+  };
+}
+
+async function advance(seconds: number) {
+  for (let i = 0; i < seconds; i++) {
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+  }
+}
+
+function neutralInput(): HTMLInputElement {
+  const input = document.querySelector<HTMLInputElement>(
+    'input[name="neutralVolts"]',
+  );
+  if (!input) throw new Error("no neutral volts input");
+  return input;
+}
+
 function renderPanel(transport: Transport) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -68,6 +110,40 @@ function renderPanel(transport: Transport) {
 }
 
 describe("CalibrationPanel", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("captures a stable reading the device is still refreshing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { transport } = liveDevice();
+
+    renderPanel(transport);
+    fireEvent.click(await screen.findByText("calibrate probes"));
+    await advance(8);
+
+    fireEvent.click(screen.getByText("capture as 7.00"));
+
+    await waitFor(() => expect(neutralInput().value).toBe("1.5200"));
+  });
+
+  it("refuses to capture a stable reading that went stale before the click", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { transport, freeze } = liveDevice();
+
+    renderPanel(transport);
+    fireEvent.click(await screen.findByText("calibrate probes"));
+    await advance(8);
+
+    freeze();
+    await advance(15);
+
+    fireEvent.click(screen.getByText("capture as 7.00"));
+    await advance(1);
+
+    expect(neutralInput().value).not.toBe("1.5200");
+  });
+
   it("does not poll the probe while it is collapsed", async () => {
     const { transport, fetchImpl } = transportWith(1.52);
 

@@ -72,14 +72,21 @@ export type { DeviceProbe } from "./use-device-probe";
 export { useTelemetryStream } from "./use-telemetry-stream";
 
 export {
+  advanceProbeSamples,
   appendSample,
+  canCapturePh,
+  PROBE_FRESHNESS_SECONDS,
   probeAge,
   probeStability,
   STABILITY_SPREAD_VOLTS,
   STABILITY_WINDOW,
   tdsFactorFromReference,
 } from "./probe-calibration";
-export type { ProbeStability, TdsFactorInput } from "./probe-calibration";
+export type {
+  PhCaptureInput,
+  ProbeStability,
+  TdsFactorInput,
+} from "./probe-calibration";
 
 export { useProbeSamples } from "./use-probe-samples";
 export type { ProbeSamples, ProbeVoltageReading } from "./use-probe-samples";

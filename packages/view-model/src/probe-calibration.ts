@@ -2,6 +2,18 @@ export type ProbeStability = "stable" | "settling" | "empty";
 
 export const STABILITY_WINDOW = 5;
 export const STABILITY_SPREAD_VOLTS = 0.002;
+export const PROBE_FRESHNESS_SECONDS = 10;
+
+export interface ProbeVoltageReading {
+  ph: number | null;
+  tds: number | null;
+  sampled_at_epoch_s: number;
+}
+
+export interface ProbeSamples {
+  ph: number[];
+  tds: number[];
+}
 
 export function probeStability(samples: readonly number[]): ProbeStability {
   const usable = samples.filter((value) => Number.isFinite(value));
@@ -57,7 +69,41 @@ export function appendSample(
   value: number | null,
   window: number = STABILITY_WINDOW,
 ): number[] {
-  if (value === null || !Number.isFinite(value)) return [...samples];
+  if (value === null || !Number.isFinite(value)) return [];
 
   return [...samples, value].slice(-window);
+}
+
+export function advanceProbeSamples(
+  previous: ProbeSamples,
+  reading: ProbeVoltageReading,
+  previousStampS: number | null,
+): ProbeSamples {
+  const gapped =
+    previousStampS !== null &&
+    reading.sampled_at_epoch_s - previousStampS > PROBE_FRESHNESS_SECONDS;
+
+  return {
+    ph: appendSample(gapped ? [] : previous.ph, reading.ph),
+    tds: appendSample(gapped ? [] : previous.tds, reading.tds),
+  };
+}
+
+export interface PhCaptureInput {
+  stability: ProbeStability;
+  volts: number | null;
+  ageSeconds: number | null;
+}
+
+export function canCapturePh({
+  stability,
+  volts,
+  ageSeconds,
+}: PhCaptureInput): boolean {
+  return (
+    stability === "stable" &&
+    volts !== null &&
+    ageSeconds !== null &&
+    ageSeconds <= PROBE_FRESHNESS_SECONDS
+  );
 }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  advanceProbeSamples,
   appendSample,
+  canCapturePh,
+  PROBE_FRESHNESS_SECONDS,
   probeAge,
   probeStability,
   STABILITY_WINDOW,
@@ -125,12 +128,19 @@ describe("appendSample", () => {
     expect(appendSample(full, 6)).toHaveLength(STABILITY_WINDOW);
   });
 
-  it("keeps the window unchanged when the probe reports nothing", () => {
-    expect(appendSample([1.5], null)).toEqual([1.5]);
+  it("clears the window when the probe reports nothing", () => {
+    expect(appendSample([1.5], null)).toEqual([]);
   });
 
-  it("keeps the window unchanged for a non-finite reading", () => {
-    expect(appendSample([1.5], Number.NaN)).toEqual([1.5]);
+  it("clears the window for a non-finite reading", () => {
+    expect(appendSample([1.5], Number.NaN)).toEqual([]);
+  });
+
+  it("does not let readings from before a dropout vouch for the one after it", () => {
+    const stable = [1.5, 1.5, 1.5, 1.5, 1.5];
+    const afterGap = appendSample(appendSample(stable, null), 1.5005);
+
+    expect(probeStability(afterGap)).toBe("settling");
   });
 
   it("does not mutate the window it was given", () => {
@@ -139,5 +149,120 @@ describe("appendSample", () => {
     appendSample(original, 1.6);
 
     expect(original).toEqual([1.5]);
+  });
+});
+
+describe("advanceProbeSamples", () => {
+  const stable = { ph: [1.5, 1.5, 1.5, 1.5, 1.5], tds: [0.9, 0.9, 0.9] };
+
+  it("appends each channel's reading", () => {
+    const next = advanceProbeSamples(
+      stable,
+      { ph: 1.5005, tds: 0.91, sampled_at_epoch_s: 1_750_000_002 },
+      1_750_000_000,
+    );
+
+    expect(next.ph).toEqual([1.5, 1.5, 1.5, 1.5, 1.5005]);
+    expect(next.tds).toEqual([0.9, 0.9, 0.9, 0.91]);
+  });
+
+  it("clears only the channel that reported nothing", () => {
+    const next = advanceProbeSamples(
+      stable,
+      { ph: null, tds: 0.91, sampled_at_epoch_s: 1_750_000_002 },
+      1_750_000_000,
+    );
+
+    expect(next.ph).toEqual([]);
+    expect(next.tds).toEqual([0.9, 0.9, 0.9, 0.91]);
+  });
+
+  it("starts both windows over after a gap longer than the freshness threshold", () => {
+    const next = advanceProbeSamples(
+      stable,
+      {
+        ph: 1.5005,
+        tds: 0.91,
+        sampled_at_epoch_s: 1_750_000_000 + PROBE_FRESHNESS_SECONDS + 1,
+      },
+      1_750_000_000,
+    );
+
+    expect(next.ph).toEqual([1.5005]);
+    expect(next.tds).toEqual([0.91]);
+    expect(probeStability(next.ph)).toBe("settling");
+  });
+
+  it("keeps the windows across a gap at the threshold", () => {
+    const next = advanceProbeSamples(
+      stable,
+      {
+        ph: 1.5,
+        tds: 0.9,
+        sampled_at_epoch_s: 1_750_000_000 + PROBE_FRESHNESS_SECONDS,
+      },
+      1_750_000_000,
+    );
+
+    expect(probeStability(next.ph)).toBe("stable");
+  });
+
+  it("appends the first reading when there is no previous stamp", () => {
+    const next = advanceProbeSamples(
+      { ph: [], tds: [] },
+      { ph: 1.5, tds: 0.9, sampled_at_epoch_s: 1_750_000_000 },
+      null,
+    );
+
+    expect(next).toEqual({ ph: [1.5], tds: [0.9] });
+  });
+});
+
+describe("canCapturePh", () => {
+  it("allows a stable, fresh reading", () => {
+    expect(canCapturePh({ stability: "stable", volts: 1.5, ageSeconds: 2 })).toBe(
+      true,
+    );
+  });
+
+  it("refuses a reading older than the freshness threshold", () => {
+    expect(
+      canCapturePh({ stability: "stable", volts: 1.5, ageSeconds: 60 }),
+    ).toBe(false);
+    expect(
+      canCapturePh({
+        stability: "stable",
+        volts: 1.5,
+        ageSeconds: PROBE_FRESHNESS_SECONDS + 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows a reading exactly at the threshold, matching the stale warning", () => {
+    expect(
+      canCapturePh({
+        stability: "stable",
+        volts: 1.5,
+        ageSeconds: PROBE_FRESHNESS_SECONDS,
+      }),
+    ).toBe(true);
+  });
+
+  it("refuses a reading of unknown age", () => {
+    expect(
+      canCapturePh({ stability: "stable", volts: 1.5, ageSeconds: null }),
+    ).toBe(false);
+  });
+
+  it("refuses a settling reading", () => {
+    expect(
+      canCapturePh({ stability: "settling", volts: 1.5, ageSeconds: 2 }),
+    ).toBe(false);
+  });
+
+  it("refuses a missing voltage", () => {
+    expect(
+      canCapturePh({ stability: "stable", volts: null, ageSeconds: 2 }),
+    ).toBe(false);
   });
 });

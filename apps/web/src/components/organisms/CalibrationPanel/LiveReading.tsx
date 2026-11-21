@@ -1,6 +1,6 @@
 import { Badge } from "@/components/atoms";
 import { useT } from "@aquarium/i18n/use-locale";
-import { EM_DASH } from "@aquarium/view-model";
+import { EM_DASH, PROBE_FRESHNESS_SECONDS } from "@aquarium/view-model";
 import type { LiveProbe } from "./types";
 
 export function LiveReading({ live, unit }: { live: LiveProbe; unit: string }) {
@@ -12,7 +12,7 @@ export function LiveReading({ live, unit }: { live: LiveProbe; unit: string }) {
     ? t("calibration.neverSampled")
     : live.volts === null
       ? t("calibration.noProbe")
-      : live.ageSeconds !== null && live.ageSeconds > 10
+      : live.ageSeconds !== null && live.ageSeconds > PROBE_FRESHNESS_SECONDS
         ? t("calibration.staleReading", { seconds: String(live.ageSeconds) })
         : null;
 

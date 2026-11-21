@@ -12,6 +12,7 @@ import {
 } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
 import {
+  canCapturePh,
   describeCalibrationFailure,
   EM_DASH,
   formatPh,
@@ -92,10 +93,17 @@ export function CalibrationPanel({ transport }: { transport: Transport }) {
   };
 
   const onCapture = (field: "neutralVolts" | "acidVolts") => {
-    const volts = probes.data?.ph;
-    if (volts === null || volts === undefined) return;
+    const reading = probes.data;
+    if (!reading || reading.ph === null) return;
 
-    setValue(field, volts.toFixed(4), { shouldValidate: true });
+    const fresh = canCapturePh({
+      stability: probeStability(samples.ph),
+      volts: reading.ph,
+      ageSeconds: probeAge(reading.sampled_at_epoch_s, nowEpochSeconds()),
+    });
+    if (!fresh) return;
+
+    setValue(field, reading.ph.toFixed(4), { shouldValidate: true });
   };
 
   const onReferenceEntered = (referencePpm: string) => {
