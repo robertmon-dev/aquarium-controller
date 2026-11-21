@@ -167,6 +167,11 @@ test: ## Run host tests for aquarium-core
 	@$(MSG) "Host tests ($(CORE_CRATE))"
 	@cargo test -p $(CORE_CRATE)
 
+.PHONY: test-e2e
+test-e2e: ## Run the simulated-aquarium end-to-end pump tests
+	@$(MSG) "E2E (simulated aquarium)"
+	@cargo test -p $(CORE_CRATE) --test e2e_water_change
+
 .PHONY: test-watch
 test-watch: ## Re-run host tests on file changes (needs cargo-watch)
 	@command -v cargo-watch >/dev/null 2>&1 || { $(ERR) "cargo-watch is missing: cargo install cargo-watch"; exit 1; }
