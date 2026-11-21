@@ -135,6 +135,32 @@ Notes:
 * Enable control with `components.pumps` in `crates/firmware/src/settings.rs`.
 * The relay pins are driven low once the firmware initialises the relay module (`components.pumps` not `Off`). Before that, and with `pumps: Off`, they float, which the module reads as released — the same physical fail-safe.
 
+### XKC-Y25 water-level sensors
+
+Eight non-contact sensors read the water through the glass. Each one has its own GPIO; they share only the supply.
+
+```text
+ESP32-S3                               XKC-Y25 (×8)                  Mounted at
+
+5 V    ──────────────────────────────  VCC (brown)
+GND    ──────────────────────────────  GND (blue)
+GPIO11 ──────────────────────────────  OUT (yellow)                  sump mechanical chamber                     sump_mechanical
+GPIO12 ──────────────────────────────  OUT (yellow)                  sump biological chamber                     sump_biological
+GPIO13 ──────────────────────────────  OUT (yellow)                  sump chamber 5 (return pump), low           sump_pump
+GPIO14 ──────────────────────────────  OUT (yellow)                  main tank, overflow level                   main_tank
+GPIO15 ──────────────────────────────  OUT (yellow)                  makeup reservoir, bottom                    sump_reserve
+GPIO21 ──────────────────────────────  OUT (yellow)                  sump chamber 5, at the operating level      sump_return_level
+GPIO10 ──────────────────────────────  OUT (yellow)                  makeup reservoir, mid height                reservoir_ready
+GPIO39 ──────────────────────────────  OUT (yellow)                  makeup reservoir, top                       reservoir_full
+```
+
+Notes:
+* The firmware expects an open-collector output that pulls the line low over water (`level.polarity: ActiveLow` in `crates/firmware/src/settings.rs`). The GPIOs use their internal pull-ups, so no resistors are needed, and the 5 V supply never reaches the pin.
+* `sump_return_level` sits in the return-pump chamber, the only chamber whose level moves with a top-off or a refill. It is the default refill-stop sensor. A sensor in a baffled chamber only gets wet once the whole sump has flooded above the baffles.
+* `reservoir_ready` marks enough water for a water change, and `reservoir_full` a full reservoir. `sump_reserve` marks an empty reservoir and protects the makeup pump.
+* `GPIO39` is the `MTCK` JTAG pad. It is free while debugging goes over the built-in USB-Serial-JTAG (`GPIO19`/`GPIO20`).
+* Enable sampling with `components.water_level` in `crates/firmware/src/settings.rs`.
+
 ### Pin map
 
 | Peripheral | Pin(s) | Mode |
@@ -148,7 +174,10 @@ Notes:
 | XKC-Y25 — sump biological chamber | `GPIO12` | input, internal pull-up, active-low |
 | XKC-Y25 — sump pump chamber | `GPIO13` | input, internal pull-up, active-low |
 | XKC-Y25 — main tank | `GPIO14` | input, internal pull-up, active-low |
-| XKC-Y25 — ATO reservoir | `GPIO15` | input, internal pull-up, active-low |
+| XKC-Y25 — makeup reservoir, bottom (empty) | `GPIO15` | input, internal pull-up, active-low |
+| XKC-Y25 — sump return chamber, operating level | `GPIO21` | input, internal pull-up, active-low |
+| XKC-Y25 — makeup reservoir, mid height (ready for a water change) | `GPIO10` | input, internal pull-up, active-low |
+| XKC-Y25 — makeup reservoir, top (full) | `GPIO39` | input, internal pull-up, active-low |
 | Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
 | Heater SSR — sump | `GPIO18` | push-pull output, low at boot, drives the SSR input directly |
 | Pump relay IN1 — return pump (NC) | `GPIO5` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
@@ -183,7 +212,7 @@ The panel refuses to capture a point while the reading is still moving. That gat
 
 * **Hexagonal, host-testable core:** `aquarium-core` holds the domain, the wire protocols (1-Wire/DS18B20, XKC-Y25 debouncing, ADS1115 registers, pH and TDS conversion, Influx line protocol) and the HTTP adapter behind ports, with no ESP dependency — `make test` runs the whole suite on the host target.
 * **Shared-bus temperature sensing:** ROM search, per-ROM addressing, CRC validation, and rejection of implausible readings (NaN, the 85 °C power-on-reset value, out-of-range values).
-* **Water level with fault detection:** five XKC-Y25 inputs sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
+* **Water level with fault detection:** eight XKC-Y25 inputs sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
 * **pH and TDS on one external ADC:** an ADS1115 over I2C serves both probes; 16 averaged samples per reading at 16-bit resolution. pH goes through a two-point calibration with a nominal Nernst slope and sump-temperature compensation; TDS through DFRobot's polynomial with a hand-entered compensation temperature and a correction factor.
 * **Calibration over the API, persisted in NVS:** buffer points, the top-up tank temperature and the TDS factor are set from the apps and survive a reboot. The write goes to flash before the value takes effect, so a calibration that cannot be stored is refused rather than silently lost at the next power cycle.
 * **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, and pump control.
@@ -331,7 +360,8 @@ Limits: targets 15–32 °C, hysteresis 0.1–2.0 °C, and a cutoff of at most 3
 
 Pump safeguards: a dry `sump_pump` chamber stops the return pump and the UV lamp, which restart once it has been wet for 30 s. Missing water-level data stops the makeup and drain pumps. A wet `main_tank` sensor ends refilling with the result `overflow`, which counts as a success.
 
-* **Refill-stop sensor:** `refill_stop_sensor` (`sump_mechanical`, `sump_biological` or `null`, default `null`) names the sump sensor that marks a full sump. While it is wet, or faulty, the makeup pump is blocked (`sump_full`), a refill ends with the result `sump_full` (a success, like `overflow`), and a top-off does not start (`423`). In a `PATCH`, leaving the field out keeps it and `null` clears it.
+* **Refill-stop sensor:** `refill_stop_sensor` (`sump_return_level`, `sump_mechanical`, `sump_biological` or `null`, default `sump_return_level`) names the sump sensor that marks a full sump. While it is wet, or faulty, the makeup pump is blocked (`sump_full`), a refill ends with the result `sump_full` (a success, like `overflow`), and a top-off does not start (`423`). In a `PATCH`, leaving the field out keeps it and `null` clears it. Settings stored without the field load with the default. A stored `null` stays cleared.
+* **Reservoir ready:** a water change, scheduled or over the API, starts only while `reservoir_ready` is wet and not faulty (`423`, `blocked_by: reservoir_low` on a skipped window). A top-off needs only `sump_reserve`, and resuming an interrupted water change does not check `reservoir_ready`. `reservoir_full` has no control effect and is reported in telemetry only.
 * **Return pump override:** while the return pump has an OFF override, the makeup pump is blocked (`return_off`) and top-offs and water changes do not start (`423`). A running refill pauses until the override ends. The 30 s restart lockout after a dry sump does not block the makeup pump, since only a refill can wet the sump again.
 * **Water-change gap:** `min_water_change_gap_h` (0–168, default 12, 0 disables it) refuses a water change, scheduled or over the API, that would start sooner than this after the previous one started (`423`, `blocked_by: recent_water_change` on a skipped window). Without a synchronised clock or a recorded start time the limit does not apply.
 * **Restarts:** an operation interrupted by a restart resumes if the checkpoint is younger than `resume_window_s`, and is suspended otherwise. It resumes automatically at most once: after a second interruption it stays suspended until resumed over the API.
@@ -339,7 +369,7 @@ Pump safeguards: a dry `sump_pump` chamber stops the return pump and the UV lamp
 
 Cron schedules are evaluated in local time (`Settings.timezone`), and need an SNTP-synchronised clock to fire. SNTP starts only with WiFi (`components.wifi` not `Off`), so without WiFi the schedules never fire.
 
-A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (per-sensor wet/faulty flags) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
+A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (wet/faulty flags for `sump_mechanical`, `sump_biological`, `sump_pump`, `main_tank`, `sump_reserve`, `sump_return_level`, `reservoir_ready` and `reservoir_full`, plus `sensors_healthy`, exported to InfluxDB as `aquarium_water_level,sensor=<name>`) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).
