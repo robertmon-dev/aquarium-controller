@@ -852,10 +852,13 @@ pub struct StoreOp {
     pub tombstone: bool,
 }
 
+pub type DropWhen = fn(PumpRecord, &[u8]) -> bool;
+
 #[derive(Default)]
 pub struct SimStore {
     inner: VolatilePumpStore,
     budget: Mutex<Option<usize>>,
+    drop_when: Mutex<Option<DropWhen>>,
     frozen: AtomicBool,
     ops: Mutex<Vec<StoreOp>>,
 }
@@ -863,6 +866,10 @@ pub struct SimStore {
 impl SimStore {
     pub fn fail_after(&self, ops: usize) {
         *self.budget.lock().expect("store poisoned") = Some(ops);
+    }
+
+    pub fn fail_on(&self, predicate: DropWhen) {
+        *self.drop_when.lock().expect("store poisoned") = Some(predicate);
     }
 
     pub fn frozen(&self) -> bool {
@@ -892,14 +899,20 @@ impl SimStore {
             .is_some_and(|bytes| bytes != b"null")
     }
 
-    fn admit(&self, record: PumpRecord, erase: bool, tombstone: bool) -> bool {
+    fn admit(&self, record: PumpRecord, bytes: &[u8], erase: bool) -> bool {
         let mut ops = self.ops.lock().expect("store poisoned");
         let within = self
             .budget
             .lock()
             .expect("store poisoned")
             .is_none_or(|budget| ops.len() < budget);
-        let applied = within && !self.frozen();
+        let wanted = self
+            .drop_when
+            .lock()
+            .expect("store poisoned")
+            .is_none_or(|predicate| !predicate(record, bytes));
+        let applied = within && wanted && !self.frozen();
+        let tombstone = !erase && bytes == b"null";
 
         if !applied {
             self.frozen.store(true, Ordering::Relaxed);
@@ -921,7 +934,7 @@ impl PumpStore for SimStore {
     }
 
     fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
-        if self.admit(record, false, bytes == b"null") {
+        if self.admit(record, bytes, false) {
             self.inner.store(record, bytes)
         } else {
             Ok(())
@@ -929,7 +942,7 @@ impl PumpStore for SimStore {
     }
 
     fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
-        if self.admit(record, true, false) {
+        if self.admit(record, &[], true) {
             self.inner.erase(record)
         } else {
             Ok(())
