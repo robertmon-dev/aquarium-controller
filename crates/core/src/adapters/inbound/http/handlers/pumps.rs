@@ -200,5 +200,6 @@ const fn blocker_reason(blocker: Blocker) -> &'static str {
         Blocker::SumpFull => "the sump is full",
         Blocker::RecentWaterChange => "the previous water change was too recent",
         Blocker::ReservoirLow => "the makeup reservoir does not hold enough for a water change",
+        Blocker::WaterChange => "a water change is running",
     }
 }
