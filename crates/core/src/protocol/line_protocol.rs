@@ -1,6 +1,9 @@
 use std::fmt::{self, Write};
 
 use crate::domain::metrics::{LightingProfile, SystemMode, TankTelemetryDto, WaterLevelEntryDto};
+use crate::domain::pump::{
+    OperationEvent, OperationKind, OperationResult, OperationState, PumpsTelemetry,
+};
 
 struct Fields(String);
 
@@ -144,6 +147,76 @@ fn co2(snapshot: &TankTelemetryDto) -> Fields {
     fields
 }
 
+fn water_change_phase(pumps: &PumpsTelemetry) -> u8 {
+    if pumps.operation_kind != Some(OperationKind::WaterChange) {
+        return 0;
+    }
+
+    match pumps.operation_state {
+        OperationState::Idle => 0,
+        OperationState::Draining => 1,
+        OperationState::Settling => 2,
+        OperationState::Refilling => 3,
+        OperationState::Resuming => 4,
+        OperationState::Suspended => 5,
+    }
+}
+
+fn pumps(snapshot: &TankTelemetryDto) -> Fields {
+    let pumps = &snapshot.pumps;
+    let topping_off = pumps.operation_kind == Some(OperationKind::TopOff)
+        && pumps.operation_state != OperationState::Idle;
+
+    let mut fields = Fields::new();
+    fields.boolean("pump_return", pumps.return_pump);
+    fields.boolean("uv", pumps.uv);
+    fields.boolean("pump_makeup", pumps.makeup);
+    fields.boolean("pump_drain", pumps.drain);
+    fields.integer("water_change_phase", water_change_phase(pumps));
+    fields.boolean("top_off", topping_off);
+    fields
+}
+
+fn kind_name(kind: OperationKind) -> &'static str {
+    match kind {
+        OperationKind::TopOff => "top_off",
+        OperationKind::WaterChange => "water_change",
+    }
+}
+
+fn result_name(result: OperationResult) -> &'static str {
+    match result {
+        OperationResult::Completed => "completed",
+        OperationResult::Overflow => "overflow",
+        OperationResult::ReservoirEmpty => "reservoir_empty",
+        OperationResult::Aborted => "aborted",
+        OperationResult::InterruptedByReboot => "interrupted_by_reboot",
+    }
+}
+
+pub fn encode_operation(event: &OperationEvent) -> Option<String> {
+    let timestamp_s = event.finished_at?;
+    let record = event.record;
+
+    let mut fields = Fields::new();
+    fields.integer("drain_s", record.drain_s);
+    fields.integer("settle_s", record.settle_s);
+    fields.integer("refill_s", record.refill_s);
+    fields.optional_float("drained_l", event.drained_l);
+    fields.optional_float("refilled_l", event.refilled_l);
+    fields.boolean("resumed", record.resumed);
+
+    line(
+        &format!(
+            "aquarium_pump_operation,kind={},result={}",
+            kind_name(record.kind),
+            result_name(record.result)
+        ),
+        fields,
+        timestamp_s,
+    )
+}
+
 fn water_level(entry: WaterLevelEntryDto) -> Fields {
     let mut fields = Fields::new();
     fields.boolean("wet", entry.wet);
@@ -181,6 +254,7 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
         timestamp_s,
     ));
     lines.extend(line("aquarium_ato", ato(snapshot), timestamp_s));
+    lines.extend(line("aquarium_pumps", pumps(snapshot), timestamp_s));
 
     for (tag, entry) in sensors {
         lines.extend(line(

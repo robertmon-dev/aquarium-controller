@@ -1,6 +1,9 @@
 use super::*;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
+use crate::domain::pump::{
+    OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry,
+};
 
 fn populated() -> TankTelemetryDto {
     let mut dto = TankTelemetryDto::empty();
@@ -381,4 +384,98 @@ fn a_snapshot_without_a_tds_reading_emits_no_tds_measurement() {
     let body = encode(&snapshot).expect("a timestamped snapshot encodes");
 
     assert!(!body.contains("aquarium_tds"), "got: {body}");
+}
+
+#[test]
+fn the_pump_state_is_its_own_measurement() {
+    let mut dto = populated();
+    dto.pumps = PumpsTelemetry {
+        return_pump: true,
+        uv: true,
+        makeup: false,
+        drain: true,
+        operation_kind: Some(OperationKind::WaterChange),
+        operation_state: OperationState::Draining,
+    };
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains(
+            "aquarium_pumps pump_return=true,uv=true,pump_makeup=false,pump_drain=true,water_change_phase=1i,top_off=false 1750000000"
+        ),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn a_top_off_is_flagged_without_a_water_change_phase() {
+    let mut dto = populated();
+    dto.pumps.makeup = true;
+    dto.pumps.operation_kind = Some(OperationKind::TopOff);
+    dto.pumps.operation_state = OperationState::Refilling;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("water_change_phase=0i,top_off=true"),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn every_water_change_state_has_a_phase_number() {
+    for (state, number) in [
+        (OperationState::Idle, 0),
+        (OperationState::Draining, 1),
+        (OperationState::Settling, 2),
+        (OperationState::Refilling, 3),
+        (OperationState::Resuming, 4),
+        (OperationState::Suspended, 5),
+    ] {
+        let mut dto = populated();
+        dto.pumps.operation_kind = Some(OperationKind::WaterChange);
+        dto.pumps.operation_state = state;
+
+        let encoded = encode(&dto).expect("encodes");
+        assert!(
+            encoded.contains(&format!("water_change_phase={number}i")),
+            "{state:?}: {encoded}"
+        );
+    }
+}
+
+fn finished_water_change() -> OperationEvent {
+    OperationEvent {
+        record: OperationRecord {
+            kind: OperationKind::WaterChange,
+            started_at: Some(1_750_000_000),
+            drain_s: 300,
+            settle_s: 30,
+            refill_s: 280,
+            result: OperationResult::Overflow,
+            resumed: true,
+        },
+        finished_at: Some(1_750_000_610),
+        drained_l: Some(50.0),
+        refilled_l: None,
+    }
+}
+
+#[test]
+fn a_finished_operation_becomes_a_tagged_point() {
+    assert_eq!(
+        encode_operation(&finished_water_change()).as_deref(),
+        Some(
+            "aquarium_pump_operation,kind=water_change,result=overflow drain_s=300i,settle_s=30i,refill_s=280i,drained_l=50,resumed=true 1750000610"
+        )
+    );
+}
+
+#[test]
+fn an_operation_without_a_finish_time_is_not_exported() {
+    let mut event = finished_water_change();
+    event.finished_at = None;
+
+    assert_eq!(encode_operation(&event), None);
 }
