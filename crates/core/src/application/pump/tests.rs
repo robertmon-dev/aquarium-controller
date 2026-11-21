@@ -746,6 +746,74 @@ fn an_interrupted_water_change_resumes_after_a_short_outage() {
 }
 
 #[test]
+fn the_resume_gap_is_measured_once_at_the_first_time_sync() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 400), Some(EPOCH - 300));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+
+    rig.tick(None);
+    rig.run(310, None);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Resuming
+    );
+
+    rig.run(1, Some(&healthy()));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Draining
+    );
+}
+
+#[test]
+fn resuming_gives_up_when_levels_stay_unavailable_for_the_whole_window() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 400), Some(EPOCH - 300));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+
+    rig.tick(None);
+    rig.run(599, None);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Resuming
+    );
+
+    rig.run(1, None);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Suspended
+    );
+}
+
+#[test]
+fn a_failed_return_pump_forces_the_uv_off() {
+    let mut rig = Rig::new();
+    *rig.outputs.failing.lock().unwrap() = Some(PumpId::Return);
+
+    rig.tick(Some(&healthy()));
+
+    let channels = rig.service.status().channels;
+    assert!(!rig.pins()[PumpId::Uv.index()]);
+    assert_eq!(channels.uv.blocked_by, Some(Blocker::ReturnOff));
+    assert_eq!(channels.return_pump.fault, Some(ChannelFault::OutputError));
+}
+
+#[test]
+fn uncontrolled_channels_report_their_fail_safe_state() {
+    let (service, _store) = service_and_store();
+    let status = service.status();
+
+    assert!(status.channels.return_pump.on);
+    assert!(status.channels.uv.on);
+    assert!(!status.channels.makeup.on);
+    assert!(!status.channels.drain.on);
+
+    let telemetry = service.pump_telemetry();
+    assert!(telemetry.return_pump && telemetry.uv);
+    assert!(!telemetry.makeup && !telemetry.drain);
+}
+
+#[test]
 fn a_long_outage_suspends_until_resumed_over_the_api() {
     let store = Arc::new(VolatilePumpStore::default());
     seed_checkpoint(&store, interrupted_drain(EPOCH - 4000), Some(EPOCH - 3600));

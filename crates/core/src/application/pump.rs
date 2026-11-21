@@ -8,12 +8,12 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::domain::cron::CronExpr;
 use crate::domain::pump::{
-    decide, litres, resume_verdict, validate_override, validate_top_off, Blocker, ChannelFault,
-    ChannelMode, ChannelStatus, ChannelsStatus, Checkpoint, DecisionInput, LastOperations,
-    LevelConditions, Operation, OperationEvent, OperationKind, OperationPlan, OperationResult,
-    OperationState, OperationStatus, OverrideError, Phase, PumpId, PumpSettings, PumpSettingsPatch,
-    PumpsStatus, PumpsTelemetry, ResumeVerdict, RuntimeCounters, SkipReason, SkippedWindow, Step,
-    StoredOverride, WaterChangePlan,
+    decide, litres, resume_verdict, validate_override, validate_top_off, Blocker, ChannelDecision,
+    ChannelFault, ChannelMode, ChannelStatus, ChannelsStatus, Checkpoint, DecisionInput,
+    LastOperations, LevelConditions, Operation, OperationEvent, OperationKind, OperationPlan,
+    OperationResult, OperationState, OperationStatus, OverrideError, Phase, PumpId, PumpSettings,
+    PumpSettingsPatch, PumpsStatus, PumpsTelemetry, ResumeVerdict, RuntimeCounters, SkipReason,
+    SkippedWindow, Step, StoredOverride, WaterChangePlan,
 };
 use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{PumpControl, PumpSettingsError, StartError};
@@ -116,6 +116,7 @@ struct State {
     last: LastOperations,
     last_skipped: Option<SkippedWindow>,
     last_fired_minute: Option<u64>,
+    resume_sync_epoch: Option<u64>,
 }
 
 impl State {
@@ -160,7 +161,7 @@ impl State {
         let output = self.outputs[id.index()];
 
         ChannelStatus {
-            on: output.is_some_and(|output| output.on),
+            on: output.map_or(id.fail_safe_on(), |output| output.on),
             mode: if in_force {
                 ChannelMode::ManualOff
             } else {
@@ -314,6 +315,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 last,
                 last_skipped: None,
                 last_fired_minute: None,
+                resume_sync_epoch: None,
             }),
             store,
             clock,
@@ -367,11 +369,16 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
 
         if let Activity::Resuming(checkpoint) = &state.activity {
             let checkpoint = checkpoint.clone();
+
+            if state.resume_sync_epoch.is_none() {
+                state.resume_sync_epoch = epoch;
+            }
+
             let ready = checkpoint.operation.ready_to_resume(levels).is_ok();
 
             match resume_verdict(
                 checkpoint.checkpoint_at,
-                epoch,
+                state.resume_sync_epoch,
                 self.clock.uptime_seconds(),
                 state.settings.resume_window_s,
                 ready,
@@ -817,7 +824,8 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
 impl<S: PumpStore, C: Clock> PumpStatusSource for PumpService<S, C> {
     fn pump_telemetry(&self) -> PumpsTelemetry {
         let state = self.lock();
-        let on = |id: PumpId| state.outputs[id.index()].is_some_and(|output| output.on);
+        let on =
+            |id: PumpId| state.outputs[id.index()].map_or(id.fail_safe_on(), |output| output.on);
         let operation = state.operation_status();
 
         PumpsTelemetry {
@@ -910,9 +918,23 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
 
         let mut outputs_changed = false;
         let mut on_changed = false;
-        for id in PumpId::ALL {
-            let decision = decisions[id.index()];
+        let mut return_failed = false;
+        for id in [PumpId::Return, PumpId::Uv, PumpId::Makeup, PumpId::Drain] {
+            let mut decision = decisions[id.index()];
+
+            if id == PumpId::Uv && return_failed {
+                decision = ChannelDecision {
+                    on: false,
+                    blocked_by: Some(Blocker::ReturnOff),
+                };
+            }
+
             let (on, fault) = self.drive(id, decision.on);
+
+            if id == PumpId::Return {
+                return_failed = fault.is_some();
+            }
+
             let outcome = self.service.record(id, on, fault, decision.blocked_by);
             outputs_changed |= outcome.changed;
             on_changed |= outcome.on_changed;
