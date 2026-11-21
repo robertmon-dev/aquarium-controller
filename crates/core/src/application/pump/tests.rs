@@ -627,13 +627,24 @@ fn a_water_change_drains_settles_refills_and_stops_on_overflow() {
         })
         .expect("idle");
     rig.tick(Some(&healthy));
-    assert_eq!(rig.pins(), [true, true, false, true]);
+    assert_eq!(rig.pins(), [false, false, false, true]);
+    let status = rig.service.status();
+    assert_eq!(
+        status.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
+    );
+    assert_eq!(status.channels.uv.blocked_by, Some(Blocker::ReturnOff));
 
     rig.run(2, Some(&healthy));
-    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert_eq!(rig.pins(), [false, false, false, false]);
+    assert_eq!(
+        rig.service.status().channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
+    );
 
     rig.run(2, Some(&healthy));
     assert_eq!(rig.pins(), [true, true, true, false]);
+    assert_eq!(rig.service.status().channels.return_pump.blocked_by, None);
 
     rig.run(1, Some(&overflow));
     assert_eq!(rig.pins(), [true, true, false, false]);
@@ -770,7 +781,7 @@ fn an_interrupted_water_change_resumes_after_a_short_outage() {
     );
 
     rig.tick(Some(&healthy));
-    assert_eq!(rig.pins(), [true, true, false, true]);
+    assert_eq!(rig.pins(), [false, false, false, true]);
     let operation = rig.service.status().operation;
     assert_eq!(operation.state, OperationState::Draining);
     assert_eq!(operation.phase_remaining_s, Some(6));
@@ -874,10 +885,12 @@ fn a_long_outage_suspends_until_resumed_over_the_api() {
         .expect("suspended");
 
     rig.tick(Some(&healthy));
-    assert_eq!(rig.pins(), [true, true, false, true]);
+    assert_eq!(rig.pins(), [false, false, false, true]);
+    let status = rig.service.status();
+    assert_eq!(status.operation.state, OperationState::Draining);
     assert_eq!(
-        rig.service.status().operation.state,
-        OperationState::Draining
+        status.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
     );
 }
 
@@ -1218,27 +1231,40 @@ fn a_window_due_on_the_first_tick_sees_the_current_levels() {
 }
 
 #[test]
-fn a_dry_sump_ends_the_drain_and_the_change_still_completes() {
+fn a_dry_sump_does_not_end_the_drain_and_the_refill_waits_out_the_lockout() {
     let mut rig = Rig::new();
     let healthy = healthy();
-    let low = snapshot(&[WaterLevelRole::SumpReserve]);
+    let low = snapshot(&[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirReady]);
 
     rig.tick(Some(&healthy));
     rig.service.start_water_change(PLAN).expect("idle");
     rig.tick(Some(&healthy));
-    assert_eq!(rig.pins(), [true, true, false, true]);
+    assert_eq!(rig.pins(), [false, false, false, true]);
 
-    rig.run(1, Some(&low));
-    assert_eq!(rig.pins(), [false, false, false, false]);
+    rig.run(3, Some(&low));
+    let status = rig.service.status();
+    assert_eq!(status.operation.state, OperationState::Settling);
+    assert_eq!(status.operation.drain_ran_s, 3);
     assert_eq!(
-        rig.service.status().operation.state,
-        OperationState::Settling
+        status.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
+    );
+
+    rig.run(2, Some(&low));
+    assert_eq!(rig.pins(), [false, false, true, false]);
+    assert_eq!(
+        rig.service.status().channels.return_pump.blocked_by,
+        Some(Blocker::SumpLow)
     );
 
     rig.run(2, Some(&healthy));
     assert_eq!(rig.pins(), [false, false, true, false]);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
 
-    rig.run(4, Some(&healthy));
+    rig.run(2, Some(&healthy));
     assert_eq!(rig.pins(), [false, false, false, false]);
     assert_eq!(
         rig.service
@@ -1246,6 +1272,71 @@ fn a_dry_sump_ends_the_drain_and_the_change_still_completes() {
             .last_water_change
             .map(|record| record.result),
         Some(OperationResult::Completed)
+    );
+}
+
+#[test]
+fn a_water_change_refill_into_a_full_sump_waits_for_the_return_pump() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let full = snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+        WaterLevelRole::SumpReturnLevel,
+    ]);
+
+    rig.tick(Some(&full));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.tick(Some(&full));
+    rig.run(5, Some(&full));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+
+    rig.run(30, Some(&full));
+    let status = rig.service.status();
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert_eq!(status.operation.state, OperationState::Refilling);
+    assert_eq!(status.operation.refill_ran_s, 0);
+    assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpFull));
+
+    rig.run(2, Some(&healthy));
+    assert_eq!(rig.pins(), [true, true, true, false]);
+
+    rig.run(1, Some(&full));
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    let record = rig.service.status().last_water_change.expect("recorded");
+    assert_eq!(record.result, OperationResult::SumpFull);
+    assert_eq!(record.refill_ran_s, 2);
+}
+
+#[test]
+fn a_resumed_settling_pause_keeps_the_return_pump_off() {
+    let mut operation = Operation::start(
+        OperationPlan::water_change(WaterChangePlan {
+            drain_s: 10,
+            settle_s: 30,
+            refill_s: 10,
+        }),
+        Some(EPOCH - 200),
+    );
+    operation.advance(10_000, Some(HEALTHY));
+    operation.advance(5000, Some(HEALTHY));
+    assert_eq!(operation.phase, Phase::Settling);
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, operation, Some(EPOCH - 100));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+
+    rig.tick(Some(&healthy()));
+
+    let status = rig.service.status();
+    assert_eq!(status.operation.state, OperationState::Settling);
+    assert_eq!(rig.pins(), [false, false, false, false]);
+    assert_eq!(
+        status.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
     );
 }
 
