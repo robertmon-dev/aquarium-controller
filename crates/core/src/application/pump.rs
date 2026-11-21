@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use crate::domain::pump::{
     PumpSettingsPatch, PumpsStatus, PumpsTelemetry, ResumeVerdict, RuntimeCounters, SkipReason,
     SkippedWindow, Step, StoredOverride, WaterChangePlan,
 };
-use crate::domain::water::WaterLevelSnapshot;
+use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot};
 use crate::ports::inbound::{PumpControl, PumpSettingsError, StartError};
 use crate::ports::outbound::{Clock, PumpOutputs, PumpRecord, PumpStatusSource, PumpStore};
 
@@ -229,7 +230,12 @@ impl State {
         }
     }
 
-    fn admit(&self, plan: &OperationPlan) -> Result<(), StartError> {
+    fn admit(
+        &mut self,
+        plan: &OperationPlan,
+        now: Instant,
+        epoch: Option<u64>,
+    ) -> Result<(), StartError> {
         match (&self.activity, plan.kind) {
             (Activity::Idle, _) => {}
             (Activity::Running(current), OperationKind::WaterChange)
@@ -249,9 +255,31 @@ impl State {
             if levels.tank_overflow {
                 return Err(StartError::Blocked(Blocker::TankOverflow));
             }
+
+            if levels.sump_full {
+                return Err(StartError::Blocked(Blocker::SumpFull));
+            }
+        }
+
+        if self.forced_off(PumpId::Return, now, epoch) {
+            return Err(StartError::Blocked(Blocker::ReturnOff));
+        }
+
+        if plan.kind == OperationKind::WaterChange && self.water_change_too_recent(epoch) {
+            return Err(StartError::Blocked(Blocker::RecentWaterChange));
         }
 
         Ok(())
+    }
+
+    fn water_change_too_recent(&self, epoch: Option<u64>) -> bool {
+        let gap_s = u64::from(self.settings.min_water_change_gap_h) * 3600;
+        let started_at = self.last.water_change.and_then(|record| record.started_at);
+
+        match (epoch, started_at) {
+            (Some(now), Some(started)) if gap_s > 0 => now < started.saturating_add(gap_s),
+            _ => false,
+        }
     }
 }
 
@@ -335,6 +363,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
     }
 
+    pub fn refill_stop_sensor(&self) -> Option<WaterLevelRole> {
+        self.lock().settings.refill_stop_sensor
+    }
+
     pub fn change_signal(&self) -> Arc<Notify> {
         Arc::clone(&self.notify)
     }
@@ -404,14 +436,19 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             }
 
             let ready = checkpoint.operation.ready_to_resume(levels).is_ok();
+            let verdict = if checkpoint.operation.resumed {
+                ResumeVerdict::Suspend
+            } else {
+                resume_verdict(
+                    checkpoint.checkpoint_at,
+                    state.resume_sync_epoch,
+                    self.clock.uptime_seconds(),
+                    state.settings.resume_window_s,
+                    ready,
+                )
+            };
 
-            match resume_verdict(
-                checkpoint.checkpoint_at,
-                state.resume_sync_epoch,
-                self.clock.uptime_seconds(),
-                state.settings.resume_window_s,
-                ready,
-            ) {
+            match verdict {
                 ResumeVerdict::Wait => {}
                 ResumeVerdict::Resume => {
                     let mut operation = checkpoint.operation;
@@ -477,12 +514,12 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
     }
 
     pub fn fire_due_windows(&self, levels: Option<LevelConditions>) -> bool {
-        let started = self.fire_due_windows_deferred(levels);
+        let started = self.fire_due_windows_deferred(levels, Instant::now());
         self.persist_pending();
         started
     }
 
-    fn fire_due_windows_deferred(&self, levels: Option<LevelConditions>) -> bool {
+    fn fire_due_windows_deferred(&self, levels: Option<LevelConditions>, now: Instant) -> bool {
         let (Some(epoch), Some(civil)) =
             (self.clock.epoch_seconds(), self.clock.local_civil_time())
         else {
@@ -531,7 +568,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let mut started = false;
 
         for (kind, index, plan) in due {
-            match self.begin(&mut state, plan, Some(epoch)) {
+            match self.begin(&mut state, plan, now, Some(epoch)) {
                 Ok(()) => started = true,
                 Err(error) => {
                     let (reason, blocked_by) = match error {
@@ -656,7 +693,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let epoch = self.clock.epoch_seconds();
         {
             let mut state = self.lock();
-            self.begin(&mut state, plan, epoch)?;
+            self.begin(&mut state, plan, Instant::now(), epoch)?;
             self.flush_pending(&mut state);
         }
         self.notify.notify_one();
@@ -667,9 +704,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         &self,
         state: &mut State,
         plan: OperationPlan,
+        now: Instant,
         epoch: Option<u64>,
     ) -> Result<(), StartError> {
-        state.admit(&plan)?;
+        state.admit(&plan, now, epoch)?;
 
         if let Activity::Running(preempted) = std::mem::replace(&mut state.activity, Activity::Idle)
         {
@@ -988,13 +1026,14 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
     }
 
     pub fn tick(&mut self, snapshot: Option<&WaterLevelSnapshot>, now: Instant) -> bool {
-        let levels = snapshot.map(LevelConditions::from_snapshot);
+        let refill_stop = self.service.refill_stop_sensor();
+        let levels = snapshot.map(|snapshot| LevelConditions::from_snapshot(snapshot, refill_stop));
         let elapsed = self
             .last_tick
             .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
         self.last_tick = Some(now);
 
-        let started = self.service.fire_due_windows_deferred(levels);
+        let started = self.service.fire_due_windows_deferred(levels, now);
         let observed = self.service.observe_deferred(levels, elapsed, now);
         let locked_out = self
             .lockout
@@ -1066,6 +1105,7 @@ pub async fn pump_loop<O, S, C>(
     api_changed: Arc<Notify>,
     republish: Arc<Notify>,
     timing: PumpTiming,
+    heartbeat: Arc<AtomicU32>,
 ) where
     O: PumpOutputs,
     S: PumpStore,
@@ -1077,6 +1117,8 @@ pub async fn pump_loop<O, S, C>(
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
+
         let api_wake = tokio::select! {
             received = levels.changed(), if !closed => {
                 match received {

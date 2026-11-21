@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
     tank_overflow: false,
+    sump_full: false,
 };
 
 const PLAN: WaterChangePlan = WaterChangePlan {
@@ -965,12 +967,20 @@ fn a_blocked_window_is_skipped_with_its_blocker() {
 }
 
 fn spawn_loop(levels: &InMemoryWaterLevelStore) -> (Arc<Service>, RecordingOutputs, Arc<Notify>) {
+    let (service, outputs, republish, _heartbeat) = spawn_loop_with_heartbeat(levels);
+    (service, outputs, republish)
+}
+
+fn spawn_loop_with_heartbeat(
+    levels: &InMemoryWaterLevelStore,
+) -> (Arc<Service>, RecordingOutputs, Arc<Notify>, Arc<AtomicU32>) {
     let service = service_on(
         &Arc::new(VolatilePumpStore::default()),
         TestClock::synced(EPOCH),
     );
     let outputs = RecordingOutputs::default();
     let republish = Arc::new(Notify::new());
+    let heartbeat = Arc::new(AtomicU32::new(0));
 
     tokio::task::spawn_local(pump_loop(
         PumpController::new(outputs.clone(), Arc::clone(&service), timing()),
@@ -978,9 +988,10 @@ fn spawn_loop(levels: &InMemoryWaterLevelStore) -> (Arc<Service>, RecordingOutpu
         service.change_signal(),
         Arc::clone(&republish),
         timing(),
+        Arc::clone(&heartbeat),
     ));
 
-    (service, outputs, republish)
+    (service, outputs, republish, heartbeat)
 }
 
 #[tokio::test(start_paused = true)]
@@ -1469,4 +1480,267 @@ fn a_runtime_reset_credits_only_the_time_after_it() {
     let status = rig.service.status().channels;
     assert_eq!(status.uv.runtime_s, 2);
     assert_eq!(status.return_pump.runtime_s, 10);
+}
+
+fn set_refill_stop(service: &Service, role: WaterLevelRole) {
+    service
+        .apply_settings(PumpSettingsPatch {
+            refill_stop_sensor: Some(Some(role)),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+}
+
+#[test]
+fn the_configured_refill_stop_sensor_ends_a_top_off() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let full = snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::SumpBiological,
+    ]);
+    set_refill_stop(&rig.service, WaterLevelRole::SumpBiological);
+
+    rig.tick(Some(&healthy));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&healthy));
+    assert!(rig.pins()[2]);
+
+    rig.run(1, Some(&full));
+    assert!(!rig.pins()[2]);
+
+    let status = rig.service.status();
+    assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::SumpFull));
+    assert_eq!(
+        status.last_top_off.map(|record| record.result),
+        Some(OperationResult::SumpFull)
+    );
+}
+
+#[test]
+fn a_top_off_does_not_start_into_a_full_sump() {
+    let (service, _store) = service_and_store();
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+    observe(&service, Some(full));
+
+    assert_eq!(
+        service.start_top_off(60),
+        Err(StartError::Blocked(Blocker::SumpFull))
+    );
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn refills_do_not_start_while_the_return_pump_is_forced_off() {
+    let (service, _store) = service_and_store();
+    observe(&service, Some(HEALTHY));
+    service
+        .set_override(PumpId::Return, Some(600))
+        .expect("valid");
+
+    assert_eq!(
+        service.start_top_off(60),
+        Err(StartError::Blocked(Blocker::ReturnOff))
+    );
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::ReturnOff))
+    );
+
+    service.clear_override(PumpId::Return).expect("overridable");
+    assert_eq!(service.start_top_off(60), Ok(()));
+}
+
+#[test]
+fn a_running_refill_stalls_while_the_return_pump_is_forced_off() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&healthy));
+    rig.service
+        .set_override(PumpId::Return, Some(600))
+        .expect("valid");
+    rig.run(5, Some(&healthy));
+
+    let status = rig.service.status();
+    assert_eq!(rig.pins(), [false, false, false, false]);
+    assert_eq!(status.channels.makeup.blocked_by, Some(Blocker::ReturnOff));
+    assert_eq!(status.operation.refill_ran_s, 1);
+}
+
+#[test]
+fn a_scheduled_top_off_is_skipped_while_the_return_pump_is_forced_off() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    schedule_top_off(&rig.service);
+
+    rig.tick(Some(&healthy));
+    rig.service
+        .set_override(PumpId::Return, Some(600))
+        .expect("valid");
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+
+    let skipped = rig.service.status().last_skipped.expect("skipped");
+    assert_eq!(skipped.reason, SkipReason::Blocked);
+    assert_eq!(skipped.blocked_by, Some(Blocker::ReturnOff));
+}
+
+#[test]
+fn makeup_refills_a_drained_sump_during_the_return_lockout() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let low = snapshot(&[WaterLevelRole::SumpReserve]);
+
+    rig.tick(Some(&healthy));
+    rig.run(1, Some(&low));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&healthy));
+
+    assert_eq!(rig.pins(), [false, false, true, false]);
+}
+
+const HOUR: u64 = 3600;
+
+fn finish_a_water_change(service: &Service) {
+    observe(service, Some(HEALTHY));
+    service.start_water_change(PLAN).expect("idle");
+    service.cancel(OperationKind::WaterChange);
+}
+
+#[test]
+fn a_water_change_waits_out_the_gap_after_the_previous_one() {
+    let clock = TestClock::synced(EPOCH);
+    let service = service_on(&Arc::new(VolatilePumpStore::default()), Arc::clone(&clock));
+    finish_a_water_change(&service);
+
+    clock.advance(12 * HOUR - 1);
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+    assert_eq!(service.start_top_off(60), Ok(()));
+    service.cancel(OperationKind::TopOff);
+
+    clock.advance(1);
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn a_zero_gap_disables_the_water_change_limit() {
+    let (service, _store) = service_and_store();
+    service
+        .apply_settings(PumpSettingsPatch {
+            min_water_change_gap_h: Some(0),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+    finish_a_water_change(&service);
+
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn the_water_change_gap_needs_both_times() {
+    let clock = TestClock::synced(EPOCH);
+    let service = service_on(&Arc::new(VolatilePumpStore::default()), Arc::clone(&clock));
+    finish_a_water_change(&service);
+
+    clock.set_epoch(None);
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+    service.cancel(OperationKind::WaterChange);
+
+    clock.set_epoch(Some(EPOCH + 60));
+    assert_eq!(service.start_water_change(PLAN), Ok(()));
+}
+
+#[test]
+fn a_water_change_recorded_in_the_future_is_too_recent() {
+    let clock = TestClock::synced(EPOCH);
+    let service = service_on(&Arc::new(VolatilePumpStore::default()), Arc::clone(&clock));
+    finish_a_water_change(&service);
+
+    clock.set_epoch(Some(EPOCH - HOUR));
+    assert_eq!(
+        service.start_water_change(PLAN),
+        Err(StartError::Blocked(Blocker::RecentWaterChange))
+    );
+}
+
+#[test]
+fn a_scheduled_water_change_too_soon_is_skipped() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    rig.service
+        .apply_settings(PumpSettingsPatch {
+            water_change: Some(vec![crate::domain::pump::WaterChangeWindow {
+                cron: "0 10 * * sun".into(),
+                drain_s: 10,
+                settle_s: 0,
+                refill_s: 10,
+            }]),
+            ..PumpSettingsPatch::default()
+        })
+        .expect("valid");
+
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.service.cancel(OperationKind::WaterChange);
+    rig.clock.set_civil(Some(sunday_ten_am()));
+    rig.run(1, Some(&healthy));
+
+    let skipped = rig.service.status().last_skipped.expect("skipped");
+    assert_eq!(skipped.kind, OperationKind::WaterChange);
+    assert_eq!(skipped.reason, SkipReason::Blocked);
+    assert_eq!(skipped.blocked_by, Some(Blocker::RecentWaterChange));
+}
+
+#[test]
+fn an_operation_resumes_automatically_only_once() {
+    let store = Arc::new(VolatilePumpStore::default());
+    let mut operation = interrupted_drain(EPOCH - 200);
+    operation.resume();
+    seed_checkpoint(&store, operation, Some(EPOCH - 100));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Suspended
+    );
+
+    rig.service
+        .resume(OperationKind::WaterChange)
+        .expect("suspended");
+    rig.tick(Some(&healthy));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Draining
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_loop_beats_its_heartbeat_every_tick() {
+    LocalSet::new()
+        .run_until(async {
+            let levels = InMemoryWaterLevelStore::new();
+            let (_service, _outputs, _republish, heartbeat) = spawn_loop_with_heartbeat(&levels);
+
+            tokio::time::sleep(Duration::from_millis(3500)).await;
+
+            assert!(
+                heartbeat.load(Ordering::Relaxed) >= 4,
+                "{}",
+                heartbeat.load(Ordering::Relaxed)
+            );
+        })
+        .await;
 }
