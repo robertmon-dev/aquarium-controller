@@ -13,6 +13,7 @@ use aquarium_core::domain::pump::{
     ChannelFault, ChannelMode, ChannelStatus, LevelConditions, OperationResult, OperationState,
     PumpSettings, PumpsStatus,
 };
+use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::ports::inbound::PumpControl;
 
 use common::{body, get, pumps, raw, start_with_pumps, PUMP_EPOCH, TOKEN};
@@ -26,6 +27,7 @@ const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
     tank_overflow: false,
+    sump_full: false,
 };
 
 fn parse<T: DeserializeOwned>(response: &str) -> T {
@@ -284,6 +286,89 @@ async fn a_runtime_counter_resets_over_the_api() {
             assert_eq!(
                 pumps.status().channels.uv.runtime_reset_at,
                 Some(PUMP_EPOCH)
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn the_refill_stop_sensor_is_set_kept_and_cleared_over_the_api() {
+    LocalSet::new()
+        .run_until(async {
+            let addr = start_with_pumps(pumps()).await;
+            let patch = |payload: &'static str| body("PATCH", SETTINGS, Some(TOKEN), payload);
+
+            let set: PumpSettings = parse(
+                &raw(
+                    addr,
+                    &patch(
+                        r#"{"refill_stop_sensor":"sump_biological","min_water_change_gap_h":24}"#,
+                    ),
+                )
+                .await,
+            );
+            assert_eq!(set.refill_stop_sensor, Some(WaterLevelRole::SumpBiological));
+            assert_eq!(set.min_water_change_gap_h, 24);
+
+            let kept: PumpSettings = parse(&raw(addr, &patch(r#"{"resume_window_s":60}"#)).await);
+            assert_eq!(
+                kept.refill_stop_sensor,
+                Some(WaterLevelRole::SumpBiological)
+            );
+
+            let cleared: PumpSettings =
+                parse(&raw(addr, &patch(r#"{"refill_stop_sensor":null}"#)).await);
+            assert_eq!(cleared.refill_stop_sensor, None);
+
+            let wrong_sensor = raw(addr, &patch(r#"{"refill_stop_sensor":"main_tank"}"#)).await;
+            assert_status(&wrong_sensor, 400);
+
+            let long_gap = raw(addr, &patch(r#"{"min_water_change_gap_h":169}"#)).await;
+            assert_status(&long_gap, 400);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn refill_blockers_explain_themselves() {
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            pumps.observe(
+                Some(LevelConditions {
+                    sump_full: true,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+
+            let full = raw(
+                addr,
+                &body("POST", TOP_OFF, Some(TOKEN), r#"{"duration_s":60}"#),
+            )
+            .await;
+            assert_status(&full, 423);
+            assert!(full.contains("the sump is full"), "got: {full}");
+
+            let water_change = body(
+                "POST",
+                WATER_CHANGE,
+                Some(TOKEN),
+                r#"{"drain_s":10,"refill_s":10}"#,
+            );
+            assert_status(&raw(addr, &water_change).await, 202);
+            assert_status(
+                &raw(addr, &body("DELETE", WATER_CHANGE, Some(TOKEN), "")).await,
+                204,
+            );
+
+            let too_soon = raw(addr, &water_change).await;
+            assert_status(&too_soon, 423);
+            assert!(
+                too_soon.contains("the previous water change was too recent"),
+                "got: {too_soon}"
             );
         })
         .await;
