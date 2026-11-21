@@ -482,8 +482,8 @@ async fn power_cut_during_any_store_write_never_resurrects_a_finished_operation(
                 let mut lagged = 0;
                 let mut resurrected_by_lost_erase = 0;
 
-                for op in reference.start_op..script.len() {
-                    let label = format!("{kind:?} write #{op} {:?}", script[op]);
+                for (op, expected) in script.iter().enumerate().skip(reference.start_op) {
+                    let label = format!("{kind:?} write #{op} {expected:?}");
                     let run = run(kind, Trigger::Freeze { op }).await;
 
                     assert_eq!(run.cuts.len(), 1, "{label}");
@@ -491,7 +491,7 @@ async fn power_cut_during_any_store_write_never_resurrects_a_finished_operation(
                     let dropped = cut.dropped.expect("a dropped write");
                     assert_eq!(
                         (dropped.record, dropped.erase),
-                        (script[op].record, script[op].erase),
+                        (expected.record, expected.erase),
                         "{label}: the replay diverged"
                     );
                     assert_invariants(&run, kind, &label);
