@@ -135,6 +135,18 @@ pub enum Blocker {
     SumpHigh,
     Interlock,
     LevelsUnavailableAfterDrain,
+    SupervisionUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub enum Supervision {
+    Active,
+    Unavailable,
+    #[default]
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -599,6 +611,10 @@ pub struct OperationRecord {
     pub refill_ran_s: u32,
     pub result: OperationResult,
     pub resumed: bool,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional = nullable, as = "Option<f64>"))]
+    pub finished_at: Option<u64>,
 }
 
 impl OperationRecord {
@@ -745,15 +761,14 @@ impl Operation {
     pub fn ready_to_resume(&self, levels: Option<LevelConditions>) -> Result<(), Blocker> {
         let levels = levels.ok_or(Blocker::LevelsUnavailable)?;
 
-        if self.phase == Phase::Refilling {
-            if levels.reservoir_empty {
-                return Err(Blocker::ReservoirEmpty);
-            }
+        if self.phase == Phase::Refilling && levels.reservoir_empty {
+            return Err(Blocker::ReservoirEmpty);
+        }
 
+        if self.phase != Phase::Settling {
             if levels.tank_overflow {
                 return Err(Blocker::TankOverflow);
             }
-
             if levels.sump_high {
                 return Err(Blocker::SumpHigh);
             }
@@ -771,6 +786,7 @@ impl Operation {
             refill_ran_s: self.ran_s(Phase::Refilling),
             result,
             resumed: self.resumed,
+            finished_at: None,
         }
     }
 }
@@ -1019,6 +1035,7 @@ pub struct PumpsStatus {
     pub level_sensors_suspect: bool,
     pub return_held_after_drain: bool,
     pub invalidation_pending: bool,
+    pub supervision: Supervision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1040,6 +1057,18 @@ pub struct PumpsTelemetry {
     #[serde(default)]
     #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
     pub level_sensors_suspect: bool,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
+    pub return_held_after_drain: bool,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<bool>"))]
+    pub invalidation_pending: bool,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<Supervision>"))]
+    pub supervision: Supervision,
 }
 
 impl PumpsTelemetry {
@@ -1052,6 +1081,9 @@ impl PumpsTelemetry {
         operation_state: OperationState::Idle,
         circulation_starved: false,
         level_sensors_suspect: false,
+        return_held_after_drain: false,
+        invalidation_pending: false,
+        supervision: Supervision::Off,
     };
 }
 

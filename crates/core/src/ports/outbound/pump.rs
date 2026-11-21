@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::domain::pump::{PumpId, PumpsTelemetry};
+use crate::domain::pump::{OperationRecord, PumpId, PumpsTelemetry};
 
 pub trait PumpOutputs {
     fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str>;
@@ -61,10 +61,15 @@ impl<S: PumpStore + ?Sized> PumpStore for Arc<S> {
 
 pub trait PumpStatusSource {
     fn pump_telemetry(&self) -> PumpsTelemetry;
+    fn last_top_off(&self) -> Option<OperationRecord>;
 }
 
 impl<T: PumpStatusSource + ?Sized> PumpStatusSource for Arc<T> {
     fn pump_telemetry(&self) -> PumpsTelemetry {
         self.as_ref().pump_telemetry()
+    }
+
+    fn last_top_off(&self) -> Option<OperationRecord> {
+        self.as_ref().last_top_off()
     }
 }

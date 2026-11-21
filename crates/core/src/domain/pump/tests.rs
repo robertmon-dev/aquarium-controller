@@ -1168,6 +1168,7 @@ fn change_record(drain_ran_s: u32, refill_ran_s: u32, result: OperationResult) -
         refill_ran_s,
         result,
         resumed: false,
+        finished_at: None,
     }
 }
 
@@ -1450,7 +1451,7 @@ fn a_high_sump_does_not_end_the_drain() {
 }
 
 #[test]
-fn a_refill_does_not_resume_into_a_high_sump() {
+fn a_water_mover_does_not_resume_into_a_high_sump() {
     let high = Some(LevelConditions {
         sump_high: true,
         ..HEALTHY
@@ -1462,7 +1463,7 @@ fn a_refill_does_not_resume_into_a_high_sump() {
     );
     assert_eq!(
         Operation::start(plan(10, 0, 10), None).ready_to_resume(high),
-        Ok(())
+        Err(Blocker::SumpHigh)
     );
 }
 
