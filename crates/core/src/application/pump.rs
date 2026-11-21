@@ -397,11 +397,12 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         state.levels = levels;
 
         let elapsed_ms = elapsed.as_millis() as u64;
-        let mut operation_elapsed_ms = if std::mem::take(&mut state.fresh_operation) {
+        let mut wall_elapsed_ms = if std::mem::take(&mut state.fresh_operation) {
             0
         } else {
             elapsed_ms
         };
+        let mut operation_elapsed_ms = wall_elapsed_ms;
 
         if let Activity::Running(operation) = &state.activity {
             let channel_ran = |id: PumpId| state.outputs[id.index()].is_some_and(|o| o.on);
@@ -464,6 +465,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                     );
                     state.activity = Activity::Running(operation);
                     operation_elapsed_ms = 0;
+                    wall_elapsed_ms = 0;
                     state.pending.checkpoint = true;
                     changed = true;
                 }
@@ -482,7 +484,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let mut phase_changed = false;
 
         if let Activity::Running(operation) = &mut state.activity {
-            match operation.advance(operation_elapsed_ms, levels) {
+            match operation.advance(operation_elapsed_ms, wall_elapsed_ms, levels) {
                 Step::Continue => {}
                 Step::PhaseChanged => {
                     tracing::info!(phase = ?operation.phase, "pump operation phase");
@@ -697,6 +699,15 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let epoch = self.clock.epoch_seconds();
         {
             let mut state = self.lock();
+
+            if plan.kind == OperationKind::WaterChange
+                && !state.settings.drain_fits_reservoir(plan.drain_s)
+            {
+                return Err(StartError::Invalid(
+                    "the planned drain exceeds the water the reservoir holds",
+                ));
+            }
+
             self.begin(&mut state, plan, Instant::now(), epoch)?;
             self.flush_pending(&mut state);
         }
