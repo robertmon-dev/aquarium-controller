@@ -83,4 +83,32 @@ impl WaterLevelSnapshot {
     pub fn sump_water_low(&self) -> bool {
         self.get(WaterLevelRole::SumpPump).state == WaterLevelState::Dry
     }
+
+    pub fn with_plausibility(mut self) -> Self {
+        let raw = self.sensors;
+
+        for (upper, lower) in STACKED {
+            let contradicts = raw[upper.index()].state == WaterLevelState::Wet
+                && raw[lower.index()].state == WaterLevelState::Dry;
+
+            if contradicts {
+                self.sensors[upper.index()].faulty = true;
+                self.sensors[lower.index()].faulty = true;
+            }
+        }
+
+        self
+    }
 }
+
+const STACKED: [(WaterLevelRole, WaterLevelRole); 3] = [
+    (WaterLevelRole::SumpReturnLevel, WaterLevelRole::SumpPump),
+    (
+        WaterLevelRole::ReservoirFull,
+        WaterLevelRole::ReservoirReady,
+    ),
+    (WaterLevelRole::ReservoirReady, WaterLevelRole::SumpReserve),
+];
+
+#[cfg(test)]
+mod tests;
