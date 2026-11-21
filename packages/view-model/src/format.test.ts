@@ -91,6 +91,10 @@ describe("formatRssi", () => {
   it("renders dBm", () => {
     expect(formatRssi(-54)).toBe("-54 dBm");
   });
+
+  it("renders an unreadable signal as a dash rather than 0 dBm", () => {
+    expect(formatRssi(null)).toBe(EM_DASH);
+  });
 });
 
 describe("formatPpm", () => {

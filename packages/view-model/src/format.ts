@@ -48,6 +48,6 @@ export function formatHeap(kibibytes: number): string {
     : `${(kibibytes / 1024).toFixed(1)} MiB`;
 }
 
-export function formatRssi(dbm: number): string {
-  return `${dbm} dBm`;
+export function formatRssi(dbm: number | null): string {
+  return dbm === null ? EM_DASH : `${dbm} dBm`;
 }

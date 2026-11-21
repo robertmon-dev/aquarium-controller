@@ -168,7 +168,7 @@ impl TankTelemetryDto {
             system_mode: SystemMode::Normal,
             system_health: SystemHealthDto {
                 uptime_seconds: 0,
-                wifi_rssi_dbm: 0,
+                wifi_rssi_dbm: None,
                 free_heap_kb: 0,
             },
             temperature: TemperatureMetricsDto {
@@ -292,7 +292,7 @@ pub struct AtoMetricsDto {
 pub struct SystemHealthDto {
     #[cfg_attr(feature = "ts-export", ts(type = "number"))]
     pub uptime_seconds: u64,
-    pub wifi_rssi_dbm: i8,
+    pub wifi_rssi_dbm: Option<i8>,
     pub free_heap_kb: u32,
 }
 
