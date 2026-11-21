@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::domain::metrics::TankTelemetryDto;
+use crate::domain::pump::OperationEvent;
 use crate::ports::outbound::metrics_export::{ExportError, MetricsWriter};
 use crate::protocol::line_protocol;
 
@@ -25,7 +26,15 @@ where
     }
 
     pub fn enqueue(&mut self, snapshot: &TankTelemetryDto) -> bool {
-        let Some(encoded) = line_protocol::encode(snapshot) else {
+        self.push(line_protocol::encode(snapshot))
+    }
+
+    pub fn enqueue_operation(&mut self, event: &OperationEvent) -> bool {
+        self.push(line_protocol::encode_operation(event))
+    }
+
+    fn push(&mut self, encoded: Option<String>) -> bool {
+        let Some(encoded) = encoded else {
             return false;
         };
 

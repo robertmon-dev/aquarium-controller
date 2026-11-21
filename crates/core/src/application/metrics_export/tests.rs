@@ -175,3 +175,39 @@ async fn batched_snapshots_are_joined_with_newlines() {
         assert!(!line.trim().is_empty(), "blank line in: {body:?}");
     }
 }
+
+#[tokio::test]
+async fn operation_events_share_the_buffer_with_snapshots() {
+    use crate::domain::pump::{OperationEvent, OperationKind, OperationRecord, OperationResult};
+
+    let writer = FakeWriter::default();
+    let mut subject = exporter(&writer, 10, 10);
+    let event = OperationEvent {
+        record: OperationRecord {
+            kind: OperationKind::TopOff,
+            started_at: None,
+            drain_s: 0,
+            settle_s: 0,
+            refill_s: 60,
+            result: OperationResult::Completed,
+            resumed: false,
+        },
+        finished_at: Some(1_750_000_060),
+        drained_l: None,
+        refilled_l: None,
+    };
+
+    assert!(subject.enqueue(&dated(1_750_000_000)));
+    assert!(subject.enqueue_operation(&event));
+    assert!(!subject.enqueue_operation(&OperationEvent {
+        finished_at: None,
+        ..event
+    }));
+    assert_eq!(subject.pending(), 2);
+
+    subject.flush().await.expect("accepted");
+
+    assert!(writer
+        .last_body()
+        .contains("aquarium_pump_operation,kind=top_off,result=completed"));
+}
