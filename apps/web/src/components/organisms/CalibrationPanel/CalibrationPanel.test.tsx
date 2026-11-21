@@ -59,7 +59,7 @@ function transportWith(probeVolts: number | null): {
   return { transport: { device, fetchImpl }, fetchImpl };
 }
 
-function liveDevice(): { transport: Transport; freeze: () => void } {
+function liveDevice() {
   let frozenAt: number | null = null;
 
   const fetchImpl = vi.fn((url: string) => {
@@ -75,8 +75,8 @@ function liveDevice(): { transport: Transport; freeze: () => void } {
 
   return {
     transport: { device, fetchImpl },
-    freeze: () => {
-      frozenAt = Math.floor(Date.now() / 1000);
+    freeze: (offsetSeconds = 0) => {
+      frozenAt = Math.floor(Date.now() / 1000) + offsetSeconds;
     },
   };
 }
@@ -142,6 +142,23 @@ describe("CalibrationPanel", () => {
     await advance(1);
 
     expect(neutralInput().value).not.toBe("1.5200");
+  });
+
+  it("discards a future-dated reading even after the clock catches up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { transport, freeze } = liveDevice();
+    renderPanel(transport);
+    fireEvent.click(await screen.findByText("calibrate probes"));
+    await advance(8);
+
+    freeze(5);
+    await advance(6);
+    fireEvent.click(screen.getByText("capture as 7.00"));
+
+    expect(neutralInput().value).not.toBe("1.5200");
+    expect(screen.getByText("capture as 7.00").closest("button")?.disabled).toBe(
+      true,
+    );
   });
 
   it("does not poll the probe while it is collapsed", async () => {

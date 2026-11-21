@@ -59,9 +59,9 @@ export function probeAge(
     return null;
   }
 
-  if (sampledAtEpochS <= 0) return null;
+  if (sampledAtEpochS <= 0 || sampledAtEpochS > nowEpochS) return null;
 
-  return Math.max(0, Math.round(nowEpochS - sampledAtEpochS));
+  return Math.round(nowEpochS - sampledAtEpochS);
 }
 
 export function appendSample(
@@ -81,7 +81,8 @@ export function advanceProbeSamples(
 ): ProbeSamples {
   const gapped =
     previousStampS !== null &&
-    reading.sampled_at_epoch_s - previousStampS > PROBE_FRESHNESS_SECONDS;
+    (reading.sampled_at_epoch_s < previousStampS ||
+      reading.sampled_at_epoch_s - previousStampS > PROBE_FRESHNESS_SECONDS);
 
   return {
     ph: appendSample(gapped ? [] : previous.ph, reading.ph),

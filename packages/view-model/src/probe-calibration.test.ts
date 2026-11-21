@@ -107,8 +107,12 @@ describe("probeAge", () => {
     expect(probeAge(0, 1_750_000_000)).toBeNull();
   });
 
-  it("clamps a sample stamped in the future to zero rather than showing a negative age", () => {
-    expect(probeAge(1_750_000_010, 1_750_000_000)).toBe(0);
+  it("refuses a sample stamped in the future for capture", () => {
+    const ageSeconds = probeAge(1_750_000_010, 1_750_000_000);
+    expect(ageSeconds).toBeNull();
+    expect(canCapturePh({ stability: "stable", volts: 1.5, ageSeconds })).toBe(
+      false,
+    );
   });
 
   it("reports nothing for non-finite input", () => {
@@ -190,6 +194,16 @@ describe("advanceProbeSamples", () => {
 
     expect(next.ph).toEqual([1.5005]);
     expect(next.tds).toEqual([0.91]);
+    expect(probeStability(next.ph)).toBe("settling");
+  });
+
+  it("restarts both windows when the device clock steps backward", () => {
+    const next = advanceProbeSamples(
+      stable,
+      { ph: 1.5, tds: 0.9, sampled_at_epoch_s: 1000 },
+      4600,
+    );
+    expect(next).toEqual({ ph: [1.5], tds: [0.9] });
     expect(probeStability(next.ph)).toBe("settling");
   });
 

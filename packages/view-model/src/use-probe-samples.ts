@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import {
   advanceProbeSamples,
+  probeAge,
   type ProbeSamples,
   type ProbeVoltageReading,
 } from "./probe-calibration";
@@ -15,15 +16,19 @@ export function useProbeSamples(
 
   if (
     reading !== undefined &&
-    reading.sampled_at_epoch_s > 0 &&
     reading.sampled_at_epoch_s !== lastStamp.current
   ) {
     const previousStamp = lastStamp.current;
     lastStamp.current = reading.sampled_at_epoch_s;
 
-    setSamples((previous) =>
-      advanceProbeSamples(previous, reading, previousStamp),
-    );
+    const now = Math.floor(Date.now() / 1000);
+    if (probeAge(reading.sampled_at_epoch_s, now) === null) {
+      setSamples({ ph: [], tds: [] });
+    } else {
+      setSamples((previous) =>
+        advanceProbeSamples(previous, reading, previousStamp),
+      );
+    }
   }
 
   return samples;
