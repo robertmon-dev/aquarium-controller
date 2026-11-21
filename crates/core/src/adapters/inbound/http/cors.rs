@@ -4,7 +4,7 @@ use picoserve::ResponseSent;
 
 pub const ORIGIN_HEADER: &str = "Access-Control-Allow-Origin";
 
-const ALLOW_METHODS: &str = "GET, PUT, PATCH, DELETE, OPTIONS";
+const ALLOW_METHODS: &str = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 const ALLOW_HEADERS: &str = "authorization, content-type";
 const MAX_AGE_SECONDS: &str = "600";
 

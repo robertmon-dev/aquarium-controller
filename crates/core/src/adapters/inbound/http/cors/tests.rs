@@ -23,7 +23,7 @@ fn preflight_advertises_the_configured_origin() {
 fn preflight_allows_every_method_the_api_serves() {
     let methods = header("Access-Control-Allow-Methods");
 
-    for method in ["GET", "PUT", "PATCH", "DELETE", "OPTIONS"] {
+    for method in ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] {
         assert!(
             methods.contains(method),
             "a browser drops a {method} request the preflight did not allow, got: {methods}"
