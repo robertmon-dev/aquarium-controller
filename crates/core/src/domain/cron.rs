@@ -1,5 +1,7 @@
 const WEEKDAY_NAMES: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
+pub const REPEAT_HORIZON_S: u64 = 86_400;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CivilTime {
     pub minute: u8,
@@ -7,6 +9,25 @@ pub struct CivilTime {
     pub day: u8,
     pub month: u8,
     pub weekday: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Firing {
+    minute: (u8, u8, u8, u8),
+    epoch: u64,
+}
+
+impl Firing {
+    pub const fn new(at: CivilTime, epoch: u64) -> Self {
+        Self {
+            minute: (at.month, at.day, at.hour, at.minute),
+            epoch,
+        }
+    }
+
+    pub fn repeats(&self, at: CivilTime, epoch: u64) -> bool {
+        Self::new(at, epoch).minute == self.minute && self.epoch.abs_diff(epoch) < REPEAT_HORIZON_S
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
