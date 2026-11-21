@@ -2,6 +2,8 @@ use crate::domain::metrics::Tds;
 
 pub const PPM_PER_MICROSIEMENS: f32 = 0.5;
 pub const REFERENCE_CELSIUS: f32 = 25.0;
+pub const NOISE_FLOOR_VOLTS: f32 = -0.05;
+pub const BOARD_MAX_VOLTS: f32 = 2.3;
 
 const COMPENSATION_PER_CELSIUS: f32 = 0.02;
 const CUBIC_COEFFICIENT: f32 = 133.42;
@@ -35,6 +37,16 @@ pub struct TdsReading {
 pub fn convert(volts: f32, celsius: f32, factor: f32) -> Result<TdsReading, TdsError> {
     if !volts.is_finite() {
         return Err(TdsError::InvalidVoltage);
+    }
+
+    if volts < NOISE_FLOOR_VOLTS {
+        return Err(TdsError::OutOfRange("voltage is below the noise floor"));
+    }
+
+    if volts > BOARD_MAX_VOLTS {
+        return Err(TdsError::OutOfRange(
+            "voltage exceeds what the TDS board can output",
+        ));
     }
 
     if !celsius.is_finite() {

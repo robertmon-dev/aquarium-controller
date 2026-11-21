@@ -160,3 +160,47 @@ fn a_cold_sample_inflates_the_reading_enough_to_leave_the_board_range() {
          represent; reporting it as out of range beats reporting a wrong number, got {cold:?}"
     );
 }
+
+#[test]
+fn a_strongly_negative_voltage_is_a_fault_not_an_empty_tank() {
+    assert!(matches!(
+        convert(-1.0, 25.0, 1.0),
+        Err(TdsError::OutOfRange(_))
+    ));
+}
+
+#[test]
+fn noise_down_to_the_floor_still_reads_zero() {
+    let reading = convert(NOISE_FLOOR_VOLTS, 25.0, 1.0).expect("within the noise band");
+
+    assert_eq!(reading.ppm.as_ppm(), 0.0);
+}
+
+#[test]
+fn just_below_the_noise_floor_is_rejected() {
+    assert!(matches!(
+        convert(NOISE_FLOOR_VOLTS - 0.01, 25.0, 1.0),
+        Err(TdsError::OutOfRange(_))
+    ));
+}
+
+#[test]
+fn the_board_ceiling_itself_is_accepted() {
+    assert!(convert(BOARD_MAX_VOLTS, 25.0, 1.0).is_ok());
+}
+
+#[test]
+fn a_small_factor_cannot_launder_a_voltage_past_the_board_ceiling() {
+    assert!(matches!(
+        convert(3.3, 25.0, 0.1),
+        Err(TdsError::OutOfRange(_))
+    ));
+}
+
+#[test]
+fn just_past_the_board_ceiling_is_rejected_even_with_a_small_factor() {
+    assert!(matches!(
+        convert(BOARD_MAX_VOLTS + 0.01, 25.0, 0.5),
+        Err(TdsError::OutOfRange(_))
+    ));
+}
