@@ -1,0 +1,9 @@
+{
+  "cargo": {
+    "target": "xtensa-esp32s3-espidf",
+    "allTargets": false
+  },
+  "check": {
+    "allTargets": false
+  }
+}
