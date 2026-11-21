@@ -158,6 +158,21 @@ async fn run() -> anyhow::Result<()> {
         return probe_relays(&mut relays).await;
     }
 
+    let relays = if components.pumps.is_initialized() {
+        Some(
+            RelayOutputs::new(
+                peripherals.pins.gpio5,
+                peripherals.pins.gpio6,
+                peripherals.pins.gpio7,
+                peripherals.pins.gpio16,
+                SETTINGS.pumps.contacts,
+            )
+            .context("Failed to initialize the pump relay outputs")?,
+        )
+    } else {
+        None
+    };
+
     let temperature = if components.temperature.is_initialized() {
         let bus =
             OneWireBus::new(peripherals.pins.gpio4).context("Failed to initialize 1-Wire bus")?;
@@ -203,7 +218,10 @@ async fn run() -> anyhow::Result<()> {
         (None, _) => None,
     };
 
-    let clock = Arc::new(SystemClock::new(SETTINGS.timezone).context("Failed to start SNTP")?);
+    let clock = Arc::new(
+        SystemClock::new(SETTINGS.timezone, components.wifi.is_initialized())
+            .context("Failed to start SNTP")?,
+    );
 
     let store = Arc::new(InMemoryTelemetryStore::new());
     let lighting = Arc::new(InMemoryLightingStore::new());
@@ -290,29 +308,20 @@ async fn run() -> anyhow::Result<()> {
         (None, _) => (None, None),
     };
 
-    let (pump_events, pump_events_rx) = mpsc::unbounded_channel::<OperationEvent>();
+    let influx_exporting = SETTINGS.influx.is_some() && components.influx.is_running();
+    let (pump_events, pump_events_rx) = if influx_exporting {
+        let (sender, receiver) = mpsc::unbounded_channel::<OperationEvent>();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
     let pumps = Arc::new(PumpService::new(
         SETTINGS.pumps.defaults.clone(),
         NvsPumpStore::new(nvs_partition).context("Failed to open the pump namespace in NVS")?,
         Arc::clone(&clock),
-        Some(pump_events),
+        pump_events,
     ));
     let pumps_republish = Arc::new(Notify::new());
-
-    let relays = if components.pumps.is_initialized() {
-        Some(
-            RelayOutputs::new(
-                peripherals.pins.gpio5,
-                peripherals.pins.gpio6,
-                peripherals.pins.gpio7,
-                peripherals.pins.gpio16,
-                SETTINGS.pumps.contacts,
-            )
-            .context("Failed to initialize the pump relay outputs")?,
-        )
-    } else {
-        None
-    };
 
     let (pump_task, _idle_relays) = match (relays, components.pumps.is_running()) {
         (Some(outputs), true) => {
@@ -415,7 +424,7 @@ async fn run() -> anyhow::Result<()> {
                         influx.batch_max_snapshots,
                     ),
                     store.subscribe(),
-                    pump_events_rx,
+                    pump_events_rx.context("pump events are not wired for the Influx export")?,
                     influx.retry_backoff,
                 ))
             } else {
@@ -500,19 +509,21 @@ async fn export_task<W>(
     loop {
         let retrying = exporter.pending() > 0;
 
-        tokio::select! {
+        let should_flush = tokio::select! {
             changed = rx.changed() => {
                 if changed.is_err() {
                     return;
                 }
 
                 let snapshot = rx.borrow_and_update().clone();
-                exporter.enqueue(&snapshot);
+                exporter.enqueue(&snapshot)
             }
-            Some(event) = events.recv() => {
-                exporter.enqueue_operation(&event);
-            }
-            () = tokio::time::sleep(backoff), if retrying => {}
+            Some(event) = events.recv() => exporter.enqueue_operation(&event),
+            () = tokio::time::sleep(backoff), if retrying => true,
+        };
+
+        if !should_flush {
+            continue;
         }
 
         while exporter.pending() > 0 {
