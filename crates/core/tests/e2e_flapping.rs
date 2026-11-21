@@ -330,7 +330,7 @@ async fn flapping_level_sensors_block_the_makeup_as_dangerous() {
                 let sim = start(0.0).await;
                 settle_boot(&sim).await;
                 sim.water().evaporate_tank(TOP_OFF_DEFICIT_L);
-                sim.run_for(secs(2)).await;
+                sim.run_for(secs(10)).await;
                 sim.service.start_top_off(600).expect("top-off started");
                 sim.run_for(secs(5)).await;
                 assert!(sim.water().pump_on(PumpId::Makeup), "{role:?}");

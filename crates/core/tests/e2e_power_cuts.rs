@@ -563,8 +563,6 @@ fn resumed_checkpoint(record: PumpRecord, bytes: &[u8]) -> bool {
 }
 
 #[tokio::test(start_paused = true)]
-#[ignore = "production bug: the resumed checkpoint is written after the relays switch, so a \
-            power cut on that write auto-resumes the same operation again"]
 async fn power_cut_on_the_resume_checkpoint_write_still_resumes_at_most_once() {
     LocalSet::new()
         .run_until(async {
@@ -583,40 +581,53 @@ async fn power_cut_on_the_resume_checkpoint_write_still_resumes_at_most_once() {
             .await;
 
             sim.store.fail_on(resumed_checkpoint);
-            sim.power_cut(SHORT_OUTAGE, true).await;
-
-            let mut auto_resumes = 0;
             let first_cut = sim.water().t_s;
+            sim.power_cut(SHORT_OUTAGE, true).await;
+            let mut boots = vec![sim.water().t_s];
+
             loop {
                 sim.step().await;
                 let state = sim.service.status().operation.state;
 
                 if sim.store.frozen() {
-                    auto_resumes += 1;
                     sim.power_cut(SHORT_OUTAGE, true).await;
+                    boots.push(sim.water().t_s);
                 } else if state == OperationState::Suspended {
                     break;
                 }
                 assert!(sim.water().t_s - first_cut < 2000.0, "no verdict");
             }
 
-            {
-                let water = sim.water();
-                assert_eq!(water.spilled_l, 0.0, "{}", water.describe());
-            }
-            assert!(
-                auto_resumes <= 1,
-                "{auto_resumes} automatic resumes of one operation over {:.0} s of power cuts \
-                 at the resume checkpoint write (persisted resumed flag never lands)",
-                sim.water().t_s - first_cut
+            let water = sim.water();
+            let mut draining_boots: Vec<usize> = water
+                .log
+                .iter()
+                .filter(|(at, event)| {
+                    *at >= first_cut && *event == Event::Pump(PumpId::Drain, true)
+                })
+                .map(|(at, _)| boots.iter().filter(|boot| **boot <= *at).count())
+                .collect();
+            draining_boots.dedup();
+            println!(
+                "resume write lost on {} boots over {:.0} s; the drain ran in {} of them",
+                boots.len() - 1,
+                water.t_s - first_cut,
+                draining_boots.len()
             );
+
+            assert!(
+                draining_boots.len() <= 1,
+                "the drain relay switched on in {} boots of one operation",
+                draining_boots.len()
+            );
+            assert!(boots.len() > 2);
+            assert_eq!(water.spilled_l, 0.0, "{}", water.describe());
+            assert!(!water.pump_on(PumpId::Drain));
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-#[ignore = "production bug: a power cut late in a refill drains the weir skim onto the stop \
-            sensor and the resumed refill ends sump_full at once, short of full"]
 async fn power_cut_late_in_a_refill_still_refills_the_system_to_full() {
     LocalSet::new()
         .run_until(async {

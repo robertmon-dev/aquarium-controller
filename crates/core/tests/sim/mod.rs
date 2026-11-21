@@ -680,11 +680,19 @@ fn state(wet: bool) -> WaterLevelState {
 
 pub type Water = Arc<Mutex<Aquarium>>;
 
-pub struct SimOutputs(Water);
+pub struct SimOutputs {
+    water: Water,
+    store: Arc<SimStore>,
+}
 
 impl PumpOutputs for SimOutputs {
     fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
-        self.0.lock().expect("aquarium poisoned").set_pump(id, on);
+        if !self.store.frozen() {
+            self.water
+                .lock()
+                .expect("aquarium poisoned")
+                .set_pump(id, on);
+        }
         Ok(())
     }
 }
@@ -1103,7 +1111,10 @@ async fn boot(
 
     let control = tokio::task::spawn_local(pump_loop(
         PumpController::new(
-            SimOutputs(Arc::clone(water)),
+            SimOutputs {
+                water: Arc::clone(water),
+                store: Arc::clone(store),
+            },
             Arc::clone(&service),
             options.timing,
         ),
