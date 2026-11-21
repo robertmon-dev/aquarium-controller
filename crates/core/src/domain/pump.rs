@@ -101,7 +101,7 @@ impl LevelConditions {
         Self {
             sump_low: dangerous(WaterLevelRole::SumpPump, WaterLevelState::Dry),
             reservoir_empty: dangerous(WaterLevelRole::SumpReserve, WaterLevelState::Dry),
-            reservoir_ready: false,
+            reservoir_ready: !dangerous(WaterLevelRole::ReservoirReady, WaterLevelState::Dry),
             tank_overflow: dangerous(WaterLevelRole::MainTank, WaterLevelState::Wet),
             sump_full: refill_stop.is_some_and(|role| dangerous(role, WaterLevelState::Wet)),
         }
@@ -210,6 +210,10 @@ const fn default_water_change_gap_h() -> u32 {
     DEFAULT_WATER_CHANGE_GAP_H
 }
 
+const fn default_refill_stop_sensor() -> Option<WaterLevelRole> {
+    Some(WaterLevelRole::SumpReturnLevel)
+}
+
 fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -307,7 +311,7 @@ pub struct PumpSettings {
     pub flow_lph: FlowRates,
     pub resume_window_s: u32,
 
-    #[serde(default)]
+    #[serde(default = "default_refill_stop_sensor")]
     pub refill_stop_sensor: Option<WaterLevelRole>,
 
     #[serde(default = "default_water_change_gap_h")]
@@ -323,7 +327,7 @@ impl PumpSettings {
             drain: None,
         },
         resume_window_s: DEFAULT_RESUME_WINDOW_S,
-        refill_stop_sensor: None,
+        refill_stop_sensor: default_refill_stop_sensor(),
         min_water_change_gap_h: DEFAULT_WATER_CHANGE_GAP_H,
     };
 
@@ -368,9 +372,15 @@ impl PumpSettings {
 
         if !matches!(
             self.refill_stop_sensor,
-            None | Some(WaterLevelRole::SumpMechanical | WaterLevelRole::SumpBiological)
+            None | Some(
+                WaterLevelRole::SumpReturnLevel
+                    | WaterLevelRole::SumpMechanical
+                    | WaterLevelRole::SumpBiological
+            )
         ) {
-            return Err("refill_stop_sensor must be sump_mechanical or sump_biological");
+            return Err(
+                "refill_stop_sensor must be sump_return_level, sump_mechanical or sump_biological",
+            );
         }
 
         if self.min_water_change_gap_h > MAX_WATER_CHANGE_GAP_H {

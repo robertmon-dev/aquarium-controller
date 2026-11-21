@@ -261,6 +261,10 @@ impl State {
             }
         }
 
+        if plan.kind == OperationKind::WaterChange && !levels.reservoir_ready {
+            return Err(StartError::Blocked(Blocker::ReservoirLow));
+        }
+
         if self.forced_off(PumpId::Return, now, epoch) {
             return Err(StartError::Blocked(Blocker::ReturnOff));
         }
