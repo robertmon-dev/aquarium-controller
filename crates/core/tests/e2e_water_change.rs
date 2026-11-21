@@ -161,7 +161,11 @@ fn assert_return_cycles_on_the_sump_pump_sensor(water: &sim::Aquarium, after_s: 
     }
 }
 
-async fn water_change_exchange(layout: Layout, drain_s: u32) -> Exchange {
+async fn water_change_exchange(
+    layout: Layout,
+    drain_s: u32,
+    expected: OperationResult,
+) -> Exchange {
     let sim = Sim::start(layout).await;
     configure(&sim, Some("sump_return_level")).await;
     let started = sim.water().t_s;
@@ -219,7 +223,7 @@ async fn water_change_exchange(layout: Layout, drain_s: u32) -> Exchange {
     }
 
     let record = finish(&sim).await;
-    assert_eq!(record.result, OperationResult::SumpFull);
+    assert_eq!(record.result, expected);
     assert!(!record.resumed);
     assert_eq!(record.drain_ran_s, drain_s);
     assert_balanced(&sim);
@@ -327,7 +331,7 @@ async fn return_level_typical_water_change_exchanges_the_drained_volume() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL.with_reservoir(150.0);
-            let exchange = water_change_exchange(layout, 300).await;
+            let exchange = water_change_exchange(layout, 300, OperationResult::SumpFull).await;
 
             assert_near(exchange.drained_l, 125.0, LITRES_TOL, "drained");
             assert_near(exchange.added_l, 125.0, LITRES_TOL, "added");
@@ -367,7 +371,7 @@ async fn return_level_wide_return_chamber_exchanges_the_same_volume() {
         .run_until(async {
             let small = Layout::REAL;
             let wide = Layout::REAL.wide_return_chamber().with_reservoir(150.0);
-            let exchange = water_change_exchange(wide, 300).await;
+            let exchange = water_change_exchange(wide, 300, OperationResult::SumpFull).await;
 
             assert_near(exchange.drained_l, 125.0, LITRES_TOL, "drained");
             assert_near(exchange.added_l, 125.0, LITRES_TOL, "added");
@@ -412,7 +416,7 @@ async fn return_level_long_drain_is_bounded_by_the_drain_intake() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL.with_reservoir(200.0);
-            let exchange = water_change_exchange(layout, 600).await;
+            let exchange = water_change_exchange(layout, 600, OperationResult::Incomplete).await;
 
             let reachable_l = layout.tank_weir_l - layout.weir_skim_l - layout.drain_intake_l;
             assert_near(exchange.drained_l, reachable_l, LITRES_TOL, "drained");
