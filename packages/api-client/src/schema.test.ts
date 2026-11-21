@@ -26,6 +26,14 @@ const valid = {
       target_celsius: 25,
     },
   },
+  pumps: {
+    return: true,
+    uv: true,
+    makeup: false,
+    drain: false,
+    operation_kind: null,
+    operation_state: "idle",
+  },
   lighting: {
     profile: "daylight",
     channel_white_pct: 60,
@@ -61,6 +69,22 @@ describe("assertTelemetry", () => {
     void heaters;
 
     expect(() => assertTelemetry(rest)).toThrow(/heaters/);
+  });
+
+  it("rejects a snapshot missing the pumps block", () => {
+    const { pumps, ...rest } = valid;
+    void pumps;
+
+    expect(() => assertTelemetry(rest)).toThrow(/pumps/);
+  });
+
+  it("rejects an unknown operation state", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        pumps: { ...valid.pumps, operation_state: "flooding" },
+      }),
+    ).toThrow(/pumps\.operation_state/);
   });
 
   it("rejects an unknown heater mode", () => {

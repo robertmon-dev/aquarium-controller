@@ -10,6 +10,22 @@ const heaterStatusGuard = z.object({
   target_celsius: z.number(),
 });
 
+const pumpsGuard = z.object({
+  return: z.boolean(),
+  uv: z.boolean(),
+  makeup: z.boolean(),
+  drain: z.boolean(),
+  operation_kind: z.enum(["top_off", "water_change"]).nullable(),
+  operation_state: z.enum([
+    "idle",
+    "draining",
+    "settling",
+    "refilling",
+    "resuming",
+    "suspended",
+  ]),
+});
+
 const telemetryGuard = z.object({
   timestamp_epoch_s: z.number(),
   system_mode: z.enum(["normal", "maintenance", "emergency_lockout"]),
@@ -27,6 +43,7 @@ const telemetryGuard = z.object({
     tank: heaterStatusGuard,
     sump: heaterStatusGuard,
   }),
+  pumps: pumpsGuard,
   lighting: z.object({
     profile: z.enum(["off", "sunrise", "daylight", "sunset", "moonlight"]),
     channel_white_pct: z.number(),
