@@ -9,20 +9,18 @@ use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
+use aquarium_core::application::heater::probe_heaters;
 use aquarium_core::application::{
-    heater_loop, pump_loop, CalibrationService, HeaterController, HeaterService, MetricsExporter,
-    PumpController, PumpService, TelemetryCollector, TelemetryConfig, TelemetrySources,
-    WaterLevelSampler,
+    export_loop, heater_loop, pump_loop, CalibrationService, HeaterController, HeaterService,
+    MetricsExporter, PumpController, PumpService, TelemetryCollector, TelemetryConfig,
+    TelemetrySources, WaterLevelSampler,
 };
-use aquarium_core::domain::heater::HeaterId;
-use aquarium_core::domain::metrics::TankTelemetryDto;
-use aquarium_core::domain::pump::{OperationEvent, PumpId};
+use aquarium_core::domain::pump::{OperationEvent, PumpId, Supervision};
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
-    CalibrationSource, Clock, HeaterOutputs, HeaterStatusSource, LightingOverrideSource,
-    MetricsWriter, PhReader, ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader,
-    TelemetrySink, TemperatureReader, TemperatureSampleSink, WaterLevelPins, WaterLevelSink,
-    WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
+    ProbeVoltageSink, PumpStatusSource, PumpStore, SystemHealthProvider, TdsReader, TelemetrySink,
+    TemperatureReader, TemperatureSampleSink, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -38,7 +36,7 @@ use esp_idf_svc::io::vfs::MountedEventfs;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::sys::{self, link_patches, EspError};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{mpsc, Notify};
 use tokio::task::LocalSet;
 use tokio::time::{sleep, MissedTickBehavior};
 use tracing::{error, info, warn};
@@ -64,8 +62,8 @@ const SETTINGS: Settings = Settings::from_env();
 const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
 const NVS_ALARM_INTERVAL: Duration = Duration::from_secs(30);
 
-const PUMP_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
-const PUMP_WATCHDOG_CHECK: Duration = Duration::from_secs(2);
+const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+const WATCHDOG_CHECK: Duration = Duration::from_secs(2);
 
 const I2C_BAUDRATE_KHZ: u32 = 400;
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
@@ -150,7 +148,8 @@ async fn run() -> anyhow::Result<()> {
         let mut outputs = SsrOutputs::new(peripherals.pins.gpio17, peripherals.pins.gpio18)
             .context("Failed to initialize the heater SSR outputs")?;
 
-        return probe_ssr(&mut outputs).await;
+        info!("SSR probe: one channel at a time, GPIO17 tank SSR, then GPIO18 sump SSR");
+        probe_heaters(&mut outputs, PROBE_INTERVAL).await
     }
 
     if matches!(SETTINGS.run_mode, RunMode::RelayProbe) {
@@ -292,6 +291,7 @@ async fn run() -> anyhow::Result<()> {
             .context("Failed to open the heater namespace in NVS")?,
     ));
     let heaters_republish = Arc::new(Notify::new());
+    let heater_heartbeat = Arc::new(AtomicU32::new(0));
 
     let ssr = if components.heaters.is_initialized() {
         Some(
@@ -312,6 +312,7 @@ async fn run() -> anyhow::Result<()> {
                     heaters.change_signal(),
                     Arc::clone(&heaters_republish),
                     SETTINGS.heaters.watchdog,
+                    Arc::clone(&heater_heartbeat),
                 )),
                 None,
             )
@@ -346,22 +347,32 @@ async fn run() -> anyhow::Result<()> {
 
     let pumps_automated = components.pumps.is_running() && nvs_available;
 
-    let pump_watchdog_task = if pumps_automated {
+    let mut heartbeats = Vec::new();
+    if heater_task.is_some() {
+        heartbeats.push(Arc::clone(&heater_heartbeat));
+    }
+    if pumps_automated && relays.is_some() {
+        heartbeats.push(Arc::clone(&pump_heartbeat));
+    }
+
+    let watchdog_task = if heartbeats.is_empty() {
+        pumps.set_supervision(Supervision::Off);
+        None
+    } else {
+        pumps.set_supervision(Supervision::Unavailable);
         let config = TWDTConfig {
-            duration: PUMP_WATCHDOG_TIMEOUT,
+            duration: WATCHDOG_TIMEOUT,
             panic_on_trigger: true,
             subscribed_idle_tasks: Default::default(),
         };
 
         match TWDTDriver::new(peripherals.twdt, &config) {
-            Ok(driver) => Some(pump_watchdog(driver, Arc::clone(&pump_heartbeat))),
+            Ok(driver) => Some(main_watchdog(driver, heartbeats, Arc::clone(&pumps))),
             Err(error) => {
-                error!(%error, "Pump watchdog unavailable");
+                error!(%error, "Watchdog unavailable, new drain and makeup runs are refused");
                 None
             }
         }
-    } else {
-        None
     };
 
     let (pump_task, _idle_relays) = match (relays, pumps_automated) {
@@ -432,6 +443,7 @@ async fn run() -> anyhow::Result<()> {
             TelemetryConfig {
                 target_celsius: SETTINGS.sensors.target_celsius,
                 ph_nominal_volts_per_ph: SETTINGS.sensors.ph.nominal_volts_per_ph,
+                level_stale: SETTINGS.pumps.timing.level_stale,
             },
         ))
     } else {
@@ -459,15 +471,15 @@ async fn run() -> anyhow::Result<()> {
 
             if components.influx.is_running() {
                 info!(bucket = influx.bucket, "InfluxDB export running");
-                Some(export_task(
+                Some(export_loop(
                     MetricsExporter::new(
                         writer,
                         influx.buffer_capacity,
                         influx.batch_max_snapshots,
+                        influx.retry_backoff,
                     ),
                     store.subscribe(),
                     pump_events_rx.context("pump events are not wired for the Influx export")?,
-                    influx.retry_backoff,
                 ))
             } else {
                 info!("InfluxDB worker started but not exporting");
@@ -518,13 +530,13 @@ async fn run() -> anyhow::Result<()> {
     let health_loop = components.health.is_running().then(health_watch);
 
     tokio::join!(
+        optional(watchdog_task),
         optional(telemetry_loop),
         optional(level_loop),
         optional(export_loop),
         optional(server),
         optional(heater_task),
         optional(pump_task),
-        optional(pump_watchdog_task),
         optional(wifi_loop),
         optional(health_loop),
         optional(nvs_alarm),
@@ -556,77 +568,57 @@ async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
     }
 }
 
-async fn pump_watchdog(mut driver: TWDTDriver<'static>, heartbeat: Arc<AtomicU32>) {
+async fn main_watchdog<S: PumpStore, C: Clock>(
+    mut driver: TWDTDriver<'static>,
+    heartbeats: Vec<Arc<AtomicU32>>,
+    pumps: Arc<PumpService<S, C>>,
+) {
     let mut subscription = match driver.watch_current_task() {
         Ok(subscription) => subscription,
         Err(error) => {
-            error!(%error, "Pump watchdog could not watch the main task");
+            error!(%error, "Watchdog could not watch the main task, new drain and makeup runs are refused");
             return;
         }
     };
 
+    pumps.set_supervision(Supervision::Active);
     info!(
-        timeout_s = PUMP_WATCHDOG_TIMEOUT.as_secs(),
-        "Pump watchdog armed"
+        timeout_s = WATCHDOG_TIMEOUT.as_secs(),
+        loops = heartbeats.len(),
+        "Watchdog armed"
     );
 
-    let mut ticker = tokio::time::interval_at(
-        tokio::time::Instant::now() + PUMP_WATCHDOG_CHECK,
-        PUMP_WATCHDOG_CHECK,
-    );
+    let mut ticker =
+        tokio::time::interval_at(tokio::time::Instant::now() + WATCHDOG_CHECK, WATCHDOG_CHECK);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut last_beat = heartbeat.load(Ordering::Relaxed);
+    let mut last_beats: Vec<u32> = heartbeats
+        .iter()
+        .map(|beat| beat.load(Ordering::Relaxed))
+        .collect();
 
     loop {
         ticker.tick().await;
-        let beat = heartbeat.load(Ordering::Relaxed);
+        let beats: Vec<u32> = heartbeats
+            .iter()
+            .map(|beat| beat.load(Ordering::Relaxed))
+            .collect();
 
-        if beat == last_beat {
-            warn!("Pump loop heartbeat stalled, watchdog not fed");
+        if beats
+            .iter()
+            .zip(&last_beats)
+            .any(|(beat, last)| beat == last)
+        {
+            warn!("A control loop heartbeat stalled, watchdog not fed");
             continue;
         }
 
-        last_beat = beat;
+        last_beats = beats;
 
-        if let Err(error) = subscription.feed() {
-            error!(%error, "Pump watchdog feed failed");
-        }
-    }
-}
-
-async fn export_task<W>(
-    mut exporter: MetricsExporter<W>,
-    mut rx: watch::Receiver<TankTelemetryDto>,
-    mut events: mpsc::UnboundedReceiver<OperationEvent>,
-    backoff: Duration,
-) where
-    W: MetricsWriter,
-{
-    loop {
-        let retrying = exporter.pending() > 0;
-
-        let should_flush = tokio::select! {
-            changed = rx.changed() => {
-                if changed.is_err() {
-                    return;
-                }
-
-                let snapshot = rx.borrow_and_update().clone();
-                exporter.enqueue(&snapshot)
-            }
-            Some(event) = events.recv() => exporter.enqueue_operation(&event),
-            () = tokio::time::sleep(backoff), if retrying => true,
-        };
-
-        if !should_flush {
-            continue;
-        }
-
-        while exporter.pending() > 0 {
-            match exporter.flush().await {
-                Ok(0) => break,
-                Ok(_) => continue,
-                Err(_) => break,
+        match subscription.feed() {
+            Ok(()) => pumps.set_supervision(Supervision::Active),
+            Err(error) => {
+                error!(%error, "Watchdog feed failed");
+                pumps.set_supervision(Supervision::Unavailable);
             }
         }
     }
@@ -710,26 +702,6 @@ async fn probe_adc(front_end: &mut AnalogFrontEnd<'_>) -> anyhow::Result<()> {
             match front_end.probe(channel).await {
                 Ok((raw, volts)) => info!(raw, volts, "{label}"),
                 Err(reason) => error!(reason, "{label}"),
-            }
-        }
-    }
-}
-
-async fn probe_ssr(outputs: &mut SsrOutputs<'_>) -> anyhow::Result<()> {
-    let mut ticker = tokio::time::interval(PROBE_INTERVAL);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-    info!("SSR probe: one channel at a time, GPIO17 tank SSR, then GPIO18 sump SSR");
-
-    loop {
-        for (id, gpio) in [(HeaterId::Tank, 17), (HeaterId::Sump, 18)] {
-            for on in [true, false] {
-                ticker.tick().await;
-
-                match outputs.set(id, on) {
-                    Ok(()) => info!(heater = id.name(), gpio, on, "SSR {}", id.name()),
-                    Err(reason) => error!(heater = id.name(), gpio, reason, "SSR {}", id.name()),
-                }
             }
         }
     }

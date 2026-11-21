@@ -8,6 +8,8 @@ mod hw {
 
     use aquarium_core::ports::outbound::{PumpRecord, PumpStore};
 
+    use crate::adapters::outbound::nvs_blob::{read_blob, replace_blob};
+
     const NAMESPACE: &str = "aquarium";
     const MAX_BLOB_BYTES: usize = 2048;
 
@@ -25,24 +27,10 @@ mod hw {
 
     impl PumpStore for NvsPumpStore {
         fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
-            let length = match self.nvs.blob_len(record.key()) {
-                Ok(Some(length)) => length.min(MAX_BLOB_BYTES),
-                Ok(None) => return None,
-                Err(error) => {
-                    tracing::warn!(%error, key = record.key(), "pump record length unreadable");
-                    return None;
-                }
-            };
-
-            let mut buffer = vec![0_u8; length];
-
-            match self.nvs.get_blob(record.key(), &mut buffer) {
-                Ok(found) => found.map(<[u8]>::to_vec),
-                Err(error) => {
-                    tracing::warn!(%error, key = record.key(), "pump record unreadable");
-                    None
-                }
-            }
+            read_blob(&self.nvs, record.key(), MAX_BLOB_BYTES).unwrap_or_else(|error| {
+                tracing::warn!(%error, key = record.key(), "pump record unreadable");
+                None
+            })
         }
 
         fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
@@ -50,8 +38,7 @@ mod hw {
                 return Err("the pump record exceeds the NVS blob limit");
             }
 
-            self.nvs
-                .set_blob(record.key(), bytes)
+            replace_blob(&self.nvs, record.key(), bytes)
                 .map_err(|_| "the pump record could not be written to NVS")
         }
 
