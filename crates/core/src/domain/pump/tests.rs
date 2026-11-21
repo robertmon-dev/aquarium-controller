@@ -371,7 +371,7 @@ fn a_top_off_is_a_single_refilling_phase() {
     assert_eq!(record.kind, OperationKind::TopOff);
     assert_eq!(record.started_at, Some(100));
     assert_eq!(
-        (record.drain_s, record.settle_s, record.refill_s),
+        (record.drain_ran_s, record.settle_ran_s, record.refill_ran_s),
         (0, 0, 3)
     );
     assert!(!record.resumed);
@@ -422,7 +422,7 @@ fn a_water_change_drains_settles_and_refills() {
 
     let record = operation.record(OperationResult::Completed);
     assert_eq!(
-        (record.drain_s, record.settle_s, record.refill_s),
+        (record.drain_ran_s, record.settle_ran_s, record.refill_ran_s),
         (3, 2, 4)
     );
 }

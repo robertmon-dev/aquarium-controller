@@ -452,9 +452,9 @@ pub struct OperationRecord {
     #[cfg_attr(feature = "ts-export", ts(type = "number | null"))]
     pub started_at: Option<u64>,
 
-    pub drain_s: u32,
-    pub settle_s: u32,
-    pub refill_s: u32,
+    pub drain_ran_s: u32,
+    pub settle_ran_s: u32,
+    pub refill_ran_s: u32,
     pub result: OperationResult,
     pub resumed: bool,
 }
@@ -552,9 +552,9 @@ impl Operation {
         OperationRecord {
             kind: self.plan.kind,
             started_at: self.started_at,
-            drain_s: self.ran_s(Phase::Draining),
-            settle_s: self.ran_s(Phase::Settling),
-            refill_s: self.ran_s(Phase::Refilling),
+            drain_ran_s: self.ran_s(Phase::Draining),
+            settle_ran_s: self.ran_s(Phase::Settling),
+            refill_ran_s: self.ran_s(Phase::Refilling),
             result,
             resumed: self.resumed,
         }
