@@ -8,6 +8,7 @@ import {
   co2Card,
   filtrationCard,
   lightingCard,
+  pumpsCard,
   systemCard,
   tdsCard,
   temperatureCard,
@@ -29,6 +30,7 @@ export const TelemetryDashboard = ({
     co2Card(snapshot, t),
     tdsCard(snapshot, t),
     atoCard(snapshot, t),
+    pumpsCard(snapshot, t),
     lightingCard(snapshot, t),
     systemCard(snapshot, t),
   ];
