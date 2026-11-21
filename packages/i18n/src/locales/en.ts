@@ -72,6 +72,14 @@ export const en = {
       top_off: "top-off",
       water_change_phase: "phase",
     },
+    phases: {
+      idle: "idle",
+      draining: "draining",
+      settling: "settling",
+      refilling: "refilling",
+      resuming: "resuming",
+      suspended: "suspended",
+    },
     ranges: {
       h1: "1h",
       h6: "6h",

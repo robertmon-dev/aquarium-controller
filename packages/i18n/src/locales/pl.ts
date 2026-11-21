@@ -75,6 +75,14 @@ export const pl: DeepString<typeof en> = {
       top_off: "dolewka",
       water_change_phase: "faza",
     },
+    phases: {
+      idle: "bezczynna",
+      draining: "spust",
+      settling: "odstanie",
+      refilling: "uzupełnianie",
+      resuming: "wznawianie",
+      suspended: "wstrzymana",
+    },
     ranges: {
       h1: "1 godz.",
       h6: "6 godz.",

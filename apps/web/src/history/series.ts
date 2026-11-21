@@ -1,4 +1,5 @@
-export type ChartKind = "line" | "strip";
+export type ChartKind = "line" | "step" | "strip";
+export type Aggregate = "mean" | "last";
 
 export interface ChartSpec {
   id: string;
@@ -7,6 +8,12 @@ export interface ChartSpec {
   reference?: string;
   unit: string;
   kind: ChartKind;
+  aggregate?: Aggregate;
+  states?: readonly string[];
+}
+
+export function aggregateOf(chart: ChartSpec): Aggregate {
+  return chart.aggregate ?? (chart.kind === "line" ? "mean" : "last");
 }
 
 export const CHARTS: ChartSpec[] = [
@@ -101,7 +108,16 @@ export const CHARTS: ChartSpec[] = [
     measurement: "aquarium_pumps",
     fields: ["water_change_phase"],
     unit: "",
-    kind: "line",
+    kind: "step",
+    aggregate: "last",
+    states: [
+      "history.phases.idle",
+      "history.phases.draining",
+      "history.phases.settling",
+      "history.phases.refilling",
+      "history.phases.resuming",
+      "history.phases.suspended",
+    ],
   },
   {
     id: "systemState",

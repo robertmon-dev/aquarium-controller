@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSample, NO_SAMPLE } from "./readings";
+import { formatSample, NO_SAMPLE, stateKey } from "./readings";
 
 describe("formatSample", () => {
   it("marks a missing sample rather than printing zero", () => {
@@ -23,5 +23,27 @@ describe("formatSample", () => {
 
   it("does not swallow a genuine zero", () => {
     expect(formatSample(0, "number", "%")).toBe("0 %");
+  });
+});
+
+describe("stateKey", () => {
+  const states = ["phases.idle", "phases.draining", "phases.settling"];
+
+  it("names the state a code stands for", () => {
+    expect(stateKey(states, 0)).toBe("phases.idle");
+    expect(stateKey(states, 2)).toBe("phases.settling");
+  });
+
+  it("names nothing for a code between states", () => {
+    expect(stateKey(states, 1.5)).toBeNull();
+  });
+
+  it("names nothing for a code outside the known states", () => {
+    expect(stateKey(states, 3)).toBeNull();
+    expect(stateKey(states, -1)).toBeNull();
+  });
+
+  it("names nothing for a missing sample", () => {
+    expect(stateKey(states, null)).toBeNull();
   });
 });

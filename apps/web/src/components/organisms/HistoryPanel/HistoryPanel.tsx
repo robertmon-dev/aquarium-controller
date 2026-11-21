@@ -1,7 +1,7 @@
 import { useT } from "@aquarium/i18n/use-locale";
 import type { Translate, TranslationKey } from "@aquarium/i18n";
 import { Check } from "lucide-react";
-import { useReducer } from "react";
+import { useMemo, useReducer } from "react";
 import { Alert, Button, SegmentedControl } from "@/components/atoms";
 import { LineChart } from "@/components/atoms/Chart/LineChart";
 import { plotSeries, latestValue } from "@/components/atoms/Chart/chart-series";
@@ -19,7 +19,7 @@ import {
   type HistoryView,
   type RangeKey,
 } from "./history-reducer";
-import { formatSample } from "./readings";
+import { formatSample, stateKey } from "./readings";
 import { useHistoryWindow } from "./use-history-window";
 import "./HistoryPanel.scss";
 
@@ -115,14 +115,14 @@ const HistoryChart = ({
 
   const readings = chart.fields.map((field) => {
     const found = series.find((one) => one.field === field);
+    const latest = found ? latestValue(found) : null;
+    const state = chart.states ? stateKey(chart.states, latest) : null;
 
     return {
       label: label(t, `history.fields.${field}`),
-      value: formatSample(
-        found ? latestValue(found) : null,
-        found?.kind ?? "number",
-        chart.unit,
-      ),
+      value: state
+        ? label(t, state)
+        : formatSample(latest, found?.kind ?? "number", chart.unit),
     };
   });
 
@@ -168,6 +168,10 @@ const HistoryBody = ({
   error: Error | null;
 }) => {
   const t = useT();
+  const levels = useMemo(
+    () => chart.states?.map((key) => label(t, key)),
+    [chart.states, t],
+  );
 
   if (isPending)
     return <ScreenMessage loading>{t("history.loading")}</ScreenMessage>;
@@ -192,6 +196,8 @@ const HistoryBody = ({
       series={series}
       range={range}
       plotted={plotted}
+      stepped={chart.kind === "step"}
+      levels={levels}
     />
   );
 };

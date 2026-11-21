@@ -1,4 +1,4 @@
-import type uPlot from "uplot";
+import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import type { HistorySeries } from "@/history/csv";
 import { alignTimes, valuesAt } from "./chart-data";
@@ -27,6 +27,8 @@ export interface LineChartProps {
   range: [number, number];
   plotted: PlottedSeries[];
   height?: number;
+  stepped?: boolean;
+  levels?: readonly string[] | undefined;
 }
 
 export function LineChart({
@@ -35,6 +37,8 @@ export function LineChart({
   range,
   plotted,
   height = DEFAULT_HEIGHT,
+  stepped = false,
+  levels,
 }: LineChartProps) {
   const host = useUplot(
     (width): ChartSpec | null => {
@@ -42,6 +46,7 @@ export function LineChart({
 
       const times = alignTimes(series);
       const formatTick = axisTickFormat(range[1] - range[0]);
+      const steppedPath = uPlot.paths.stepped?.({ align: 1 });
 
       return {
         options: {
@@ -49,7 +54,10 @@ export function LineChart({
           height,
           cursor: { sync: { key: SYNC_KEY }, points: { size: POINT_SIZE } },
           legend: { show: false },
-          scales: { x: { time: true, range: [range[0], range[1]] } },
+          scales: {
+            x: { time: true, range: [range[0], range[1]] },
+            ...(levels ? { y: { range: [0, levels.length - 1] } } : {}),
+          },
           axes: [
             {
               stroke: TEXT_MUTED,
@@ -62,6 +70,14 @@ export function LineChart({
               grid: { stroke: GRID, width: 1 },
               ticks: { stroke: GRID },
               label: unit,
+              ...(levels
+                ? {
+                    size: 90,
+                    splits: () => levels.map((_, index) => index),
+                    values: (_: uPlot, splits: number[]) =>
+                      splits.map((split) => levels[split] ?? ""),
+                  }
+                : {}),
             },
           ],
           series: [
@@ -74,6 +90,7 @@ export function LineChart({
                 label: one.field,
                 stroke: color,
                 width: reference ? 1 : LINE_WIDTH,
+                ...(stepped && steppedPath ? { paths: steppedPath } : {}),
                 ...(reference ? { dash: [4, 4] } : {}),
                 points: {
                   show: !reference,
@@ -92,7 +109,7 @@ export function LineChart({
         ] as uPlot.AlignedData,
       };
     },
-    [unit, series, range, plotted, height],
+    [unit, series, range, plotted, height, stepped, levels],
   );
 
   return <div className="chart" ref={host} />;

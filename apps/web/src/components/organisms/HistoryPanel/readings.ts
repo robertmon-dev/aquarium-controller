@@ -13,3 +13,14 @@ export function formatSample(
   const digits = Number.isInteger(value) ? 0 : 2;
   return unit ? `${value.toFixed(digits)} ${unit}` : value.toFixed(digits);
 }
+
+export function stateKey(
+  states: readonly string[],
+  value: number | null | undefined,
+): string | null {
+  if (value === null || value === undefined || !Number.isInteger(value)) {
+    return null;
+  }
+
+  return states[value] ?? null;
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fluxQuery } from "./flux";
+import { chartFluxRequest, fluxQuery } from "./flux";
+import { CHARTS } from "./series";
 
 const base = {
   bucket: "aquarium",
@@ -9,12 +10,62 @@ const base = {
   stop: "2026-11-01T01:00:00Z",
 };
 
+const DAY_S = 24 * 3600;
+
+function chart(id: string) {
+  const found = CHARTS.find((one) => one.id === id);
+  if (!found) throw new Error(`no chart ${id}`);
+  return found;
+}
+
+const sevenDays = {
+  start: "2026-11-14T00:00:00Z",
+  stop: "2026-11-21T00:00:00Z",
+  seconds: 7 * DAY_S,
+};
+
+describe("chartFluxRequest", () => {
+  it("keeps the last water change phase per window instead of inventing an average one", () => {
+    const query = fluxQuery(
+      chartFluxRequest(chart("waterChangePhase"), sevenDays, false),
+    );
+
+    expect(query).toContain("every: 121s, fn: last");
+    expect(query).not.toContain("fn: mean");
+  });
+
+  it("still averages continuous series", () => {
+    const query = fluxQuery(
+      chartFluxRequest(chart("temperature"), sevenDays, false),
+    );
+
+    expect(query).toContain("every: 121s, fn: mean");
+    expect(query).toContain('set: ["tank_c", "sump_c", "target_tank_c"]');
+  });
+
+  it("aggregates every state strip with last", () => {
+    for (const one of CHARTS.filter((spec) => spec.kind === "strip")) {
+      expect(fluxQuery(chartFluxRequest(one, sevenDays, false))).toContain(
+        "fn: last",
+      );
+    }
+  });
+
+  it("asks for raw points when forced", () => {
+    const query = fluxQuery(
+      chartFluxRequest(chart("waterChangePhase"), sevenDays, true),
+    );
+
+    expect(query).not.toContain("aggregateWindow");
+  });
+});
+
 describe("fluxQuery", () => {
   it("filters by bucket, range, measurement and fields", () => {
     const q = fluxQuery({
       ...base,
       resolution: { mode: "raw" },
-      kind: "line",
+      aggregate: "mean",
     });
 
     expect(q).toContain('from(bucket: "aquarium")');
@@ -28,7 +79,7 @@ describe("fluxQuery", () => {
     const q = fluxQuery({
       ...base,
       resolution: { mode: "raw" },
-      kind: "line",
+      aggregate: "mean",
     });
 
     expect(q).not.toContain("aggregateWindow");
@@ -38,17 +89,17 @@ describe("fluxQuery", () => {
     const q = fluxQuery({
       ...base,
       resolution: { mode: "aggregated", everySeconds: 120 },
-      kind: "line",
+      aggregate: "mean",
     });
 
     expect(q).toContain("aggregateWindow(every: 120s, fn: mean");
   });
 
-  it("aggregates state series with last, because mean rejects booleans", () => {
+  it("aggregates with last when asked, because mean rejects booleans", () => {
     const q = fluxQuery({
       ...base,
       resolution: { mode: "aggregated", everySeconds: 120 },
-      kind: "strip",
+      aggregate: "last",
     });
 
     expect(q).toContain("aggregateWindow(every: 120s, fn: last");
@@ -59,7 +110,7 @@ describe("fluxQuery", () => {
     const q = fluxQuery({
       ...base,
       resolution: { mode: "aggregated", everySeconds: 60 },
-      kind: "line",
+      aggregate: "mean",
     });
 
     expect(q).toContain("createEmpty: false");
@@ -70,7 +121,7 @@ describe("fluxQuery", () => {
       ...base,
       fields: ['tank_c"] |> drop(columns: ["x'],
       resolution: { mode: "raw" },
-      kind: "line",
+      aggregate: "mean",
     });
 
     expect(q).not.toContain("drop(columns");

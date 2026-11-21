@@ -1,37 +1,19 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { parseAnnotatedCsv, type HistorySeries } from "./csv";
-import { fluxQuery } from "./flux";
-import { resolutionFor } from "./resolution";
+import { chartFluxRequest, fluxQuery, type HistoryWindow } from "./flux";
 import type { ChartSpec } from "./series";
 
-const BUCKET = "aquarium";
+export type { HistoryWindow } from "./flux";
+
 const ORG = "home";
 const PROXY = "/influx/api/v2/query";
-
-export interface HistoryWindow {
-  start: string;
-  stop: string;
-  seconds: number;
-}
 
 async function fetchSeries(
   chart: ChartSpec,
   window: HistoryWindow,
   forceRaw: boolean,
 ): Promise<HistorySeries[]> {
-  const fields = chart.reference
-    ? [...chart.fields, chart.reference]
-    : chart.fields;
-
-  const query = fluxQuery({
-    bucket: BUCKET,
-    measurement: chart.measurement,
-    fields,
-    start: window.start,
-    stop: window.stop,
-    resolution: resolutionFor(window.seconds, forceRaw),
-    kind: chart.kind,
-  });
+  const query = fluxQuery(chartFluxRequest(chart, window, forceRaw));
 
   const response = await fetch(`${PROXY}?org=${encodeURIComponent(ORG)}`, {
     method: "POST",

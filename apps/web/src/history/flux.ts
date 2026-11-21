@@ -1,5 +1,13 @@
-import type { Resolution } from "./resolution";
-import type { ChartKind } from "./series";
+import { resolutionFor, type Resolution } from "./resolution";
+import { aggregateOf, type Aggregate, type ChartSpec } from "./series";
+
+export const BUCKET = "aquarium";
+
+export interface HistoryWindow {
+  start: string;
+  stop: string;
+  seconds: number;
+}
 
 export interface FluxRequest {
   bucket: string;
@@ -8,13 +16,29 @@ export interface FluxRequest {
   start: string;
   stop: string;
   resolution: Resolution;
-  kind: ChartKind;
+  aggregate: Aggregate;
 }
 
 const SAFE = /^[A-Za-z0-9_]+$/;
 
 function safeIdentifiers(values: string[]): string[] {
   return values.filter((value) => SAFE.test(value));
+}
+
+export function chartFluxRequest(
+  chart: ChartSpec,
+  window: HistoryWindow,
+  forceRaw: boolean,
+): FluxRequest {
+  return {
+    bucket: BUCKET,
+    measurement: chart.measurement,
+    fields: chart.reference ? [...chart.fields, chart.reference] : chart.fields,
+    start: window.start,
+    stop: window.stop,
+    resolution: resolutionFor(window.seconds, forceRaw),
+    aggregate: aggregateOf(chart),
+  };
 }
 
 export function fluxQuery(request: FluxRequest): string {
@@ -29,9 +53,8 @@ export function fluxQuery(request: FluxRequest): string {
   ];
 
   if (request.resolution.mode === "aggregated") {
-    const fn = request.kind === "strip" ? "last" : "mean";
     lines.push(
-      `  |> aggregateWindow(every: ${request.resolution.everySeconds}s, fn: ${fn}, createEmpty: false)`,
+      `  |> aggregateWindow(every: ${request.resolution.everySeconds}s, fn: ${request.aggregate}, createEmpty: false)`,
     );
   }
 
