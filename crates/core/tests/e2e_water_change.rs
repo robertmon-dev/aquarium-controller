@@ -112,26 +112,103 @@ fn assert_record_litres(sim: &Sim, record: &OperationRecord) {
     );
 }
 
-struct Margins {
+struct Exchange {
+    record: OperationRecord,
     drained_l: f64,
+    added_l: f64,
+    tank_after_drain_l: f64,
+    return_level_after_settle_cm: f64,
+    return_starts: usize,
+    return_dry_s: f64,
+    makeup_dry_s: f64,
+    drain_dry_s: f64,
 }
 
-async fn return_level_full_water_change(layout: Layout) -> Margins {
+fn expected_drain_l(layout: &Layout, drain_s: u32) -> f64 {
+    (f64::from(drain_s) * layout.drain_l_per_s())
+        .min(layout.tank_weir_l - layout.weir_skim_l - layout.drain_intake_l)
+}
+
+fn assert_return_cycles_on_the_sump_pump_sensor(water: &sim::Aquarium, after_s: f64) {
+    for &(at, event) in &water.log {
+        if at < after_s {
+            continue;
+        }
+
+        if event == Event::Sensor(WaterLevelRole::SumpPump, true) {
+            let on = water
+                .first_after(Event::Pump(PumpId::Return, true), at)
+                .expect("return restarted");
+            assert!(
+                (30.0 - 0.01..=30.0 + SECONDS_TOL).contains(&(on - at)),
+                "return restarted {:.1} s after SumpPump got wet at {at:.1} s",
+                on - at
+            );
+        }
+
+        if event == Event::Pump(PumpId::Return, false) {
+            let dry = water
+                .log
+                .iter()
+                .rev()
+                .find(|(when, logged)| {
+                    *when <= at && *logged == Event::Sensor(WaterLevelRole::SumpPump, false)
+                })
+                .map(|(when, _)| *when)
+                .expect("return stopped on a dry SumpPump");
+            assert_near(at, dry, SECONDS_TOL, "return stops when SumpPump goes dry");
+        }
+    }
+}
+
+async fn water_change_exchange(layout: Layout, drain_s: u32) -> Exchange {
     let sim = Sim::start(layout).await;
     configure(&sim, Some("sump_return_level")).await;
-    start_water_change(&sim, 300, 30, 750).await;
+    let started = sim.water().t_s;
+    start_water_change(&sim, drain_s, 30, 900).await;
 
-    sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
+    sim.run_for(secs(2)).await;
+    let draining = sim.status().await;
+    assert_eq!(draining.operation.state, OperationState::Draining);
+    assert_eq!(
+        draining.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
+    );
+    assert_eq!(draining.channels.uv.blocked_by, Some(Blocker::ReturnOff));
+    {
+        let water = sim.water();
+        assert!(!water.pump_on(PumpId::Return) && !water.pump_on(PumpId::Uv));
+        assert!(water.pump_on(PumpId::Drain));
+    }
+
+    sim.run_until(LONG, "settling", in_state(OperationState::Settling))
         .await;
+    let tank_after_drain_l = sim.water().tank_l;
+    sim.run_for(secs(15)).await;
+    let settling = sim.status().await;
+    assert_eq!(settling.operation.state, OperationState::Settling);
+    assert_eq!(
+        settling.channels.return_pump.blocked_by,
+        Some(Blocker::WaterChange)
+    );
+
+    let refill_at = sim
+        .run_until(LONG, "refill", in_state(OperationState::Refilling))
+        .await;
+    let return_level_after_settle_cm = sim.water().return_level_cm();
+    let flooded = sim.status().await;
+    assert_eq!(flooded.channels.makeup.blocked_by, Some(Blocker::SumpFull));
+    assert_eq!(flooded.channels.return_pump.blocked_by, None);
+    assert_eq!(flooded.operation.refill_ran_s, 0);
     sim.run_for(secs(20)).await;
     let live = sim.status().await;
     {
         let water = sim.water();
         assert_near(
             f64::from(live.operation.drained_l.expect("drain flow set")),
-            water.drained_l,
+            water.drained_l + water.drain_dry_s * layout.drain_l_per_s(),
             LITRES_TOL,
-            "live drained litres",
+            "live drained litres, dry-run included",
         );
         assert_near(
             f64::from(live.operation.refilled_l.expect("makeup flow set")),
@@ -144,22 +221,47 @@ async fn return_level_full_water_change(layout: Layout) -> Margins {
     let record = finish(&sim).await;
     assert_eq!(record.result, OperationResult::SumpFull);
     assert!(!record.resumed);
-    assert_record_litres(&sim, &record);
+    assert_eq!(record.drain_ran_s, drain_s);
     assert_balanced(&sim);
+    sim.run_for(secs(5)).await;
 
     let water = sim.water();
-    let buffer = layout.buffer_to_sump_pump_l();
     assert_near(
-        water.drained_l,
-        buffer,
+        f64::from(record.drain_ran_s) * layout.drain_l_per_s(),
+        water.drained_l + water.drain_dry_s * layout.drain_l_per_s(),
         LITRES_TOL,
-        "drain ends at SumpPump",
+        "drained litres reported vs model, dry-run included",
     );
     assert_near(
-        f64::from(record.drain_ran_s),
-        buffer / layout.drain_l_per_s(),
+        f64::from(record.refill_ran_s) * layout.makeup_l_per_s(),
+        water.added_l,
+        LITRES_TOL,
+        "refilled litres reported vs model",
+    );
+    let return_on = water
+        .first_after(Event::Pump(PumpId::Return, true), started)
+        .expect("return restarted");
+    assert_near(
+        water
+            .first_after(Event::Pump(PumpId::Return, false), started)
+            .expect("return stopped"),
+        started,
         SECONDS_TOL,
-        "drain_ran_s",
+        "return stops when the drain starts",
+    );
+    assert_near(
+        return_on,
+        refill_at,
+        SECONDS_TOL,
+        "return restarts on refill",
+    );
+    assert_return_cycles_on_the_sump_pump_sensor(&water, refill_at);
+
+    assert_near(
+        water.drained_l,
+        expected_drain_l(&layout, drain_s),
+        LITRES_TOL,
+        "drained",
     );
     assert_near(
         water.added_l,
@@ -168,71 +270,129 @@ async fn return_level_full_water_change(layout: Layout) -> Margins {
         "added vs drained",
     );
     assert_near(
+        water.tank_l,
+        layout.tank_weir_l,
+        1e-9,
+        "tank back at the weir",
+    );
+    assert_near(
         water.return_level_cm(),
         layout.return_operating_cm,
         LEVEL_TOL_CM,
         "final return-chamber level",
     );
-    assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank level");
+    assert_near(
+        return_level_after_settle_cm,
+        layout.return_level_with_l(layout.weir_skim_l),
+        LEVEL_TOL_CM,
+        "return chamber flooded by the weir skim",
+    );
+    let stop_dry = water
+        .first_after(
+            Event::Sensor(WaterLevelRole::SumpReturnLevel, false),
+            refill_at,
+        )
+        .expect("the return pump lowers the return chamber");
+    let makeup_on = water
+        .first_after(Event::Pump(PumpId::Makeup, true), refill_at)
+        .expect("makeup ran");
+    assert!(
+        makeup_on >= stop_dry && makeup_on - stop_dry <= SECONDS_TOL,
+        "makeup started {:.1} s after the stop sensor dried",
+        makeup_on - stop_dry
+    );
     assert_eq!(water.spilled_l, 0.0);
     assert_eq!(water.tank_spilled_l, 0.0);
-    assert_eq!(water.return_dry_s, 0.0);
-    assert_eq!(water.makeup_dry_s, 0.0);
-
-    let dry = water
-        .first_after(Event::Sensor(WaterLevelRole::SumpPump, false), 0.0)
-        .expect("SumpPump went dry");
-    let off = water
-        .first_after(Event::Pump(PumpId::Return, false), 0.0)
-        .expect("return locked out");
-    let wet = water
-        .first_after(Event::Sensor(WaterLevelRole::SumpPump, true), dry)
-        .expect("SumpPump wet again");
-    let on = water
-        .first_after(Event::Pump(PumpId::Return, true), off)
-        .expect("return restarted");
-    assert_near(off, dry, SECONDS_TOL, "return stops when SumpPump goes dry");
-    assert!(
-        (30.0 - 0.01..=30.0 + SECONDS_TOL).contains(&(on - wet)),
-        "return restarted {:.1} s after SumpPump got wet",
-        on - wet
-    );
     assert!(!water.pump_on(PumpId::Makeup) && !water.pump_on(PumpId::Drain));
-    assert!(water.pump_on(PumpId::Return));
-
-    assert_eq!(
-        water.count(Event::Sensor(WaterLevelRole::ReservoirReady, false)),
-        0
-    );
+    assert!(water.pump_on(PumpId::Return) && water.pump_on(PumpId::Uv));
     assert!(water
         .first_after(Event::Sensor(WaterLevelRole::ReservoirFull, false), 0.0)
         .is_some());
-    assert!(water.reservoir_l < layout.reservoir_full_l);
 
-    Margins {
+    Exchange {
+        record,
         drained_l: water.drained_l,
+        added_l: water.added_l,
+        tank_after_drain_l,
+        return_level_after_settle_cm,
+        return_starts: water.count_after(Event::Pump(PumpId::Return, true), refill_at),
+        return_dry_s: water.return_dry_s,
+        makeup_dry_s: water.makeup_dry_s,
+        drain_dry_s: water.drain_dry_s,
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn return_level_full_water_change_ends_with_sump_full() {
+async fn return_level_typical_water_change_exchanges_the_drained_volume() {
     LocalSet::new()
         .run_until(async {
-            let margins = return_level_full_water_change(Layout::REAL).await;
-            assert_near(margins.drained_l, 8.77, 0.5, "small chamber buffer");
+            let layout = Layout::REAL.with_reservoir(150.0);
+            let exchange = water_change_exchange(layout, 300).await;
+
+            assert_near(exchange.drained_l, 125.0, LITRES_TOL, "drained");
+            assert_near(exchange.added_l, 125.0, LITRES_TOL, "added");
+            assert_near(
+                exchange.tank_after_drain_l,
+                layout.tank_weir_l - layout.weir_skim_l - 125.0,
+                LITRES_TOL,
+                "tank after the drain",
+            );
+            assert_near(
+                f64::from(exchange.record.refill_ran_s),
+                750.0,
+                3.0,
+                "refill_ran_s",
+            );
+            assert_near(
+                exchange.return_level_after_settle_cm,
+                30.08,
+                LEVEL_TOL_CM,
+                "skim floods the small chamber over the baffle",
+            );
+            assert!(
+                (18..=20).contains(&exchange.return_starts),
+                "return starts: {}",
+                exchange.return_starts
+            );
+            assert_eq!(exchange.return_dry_s, 0.0);
+            assert_eq!(exchange.makeup_dry_s, 0.0);
+            assert_eq!(exchange.drain_dry_s, 0.0);
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn return_level_wide_return_chamber_doubles_the_margins() {
+async fn return_level_wide_return_chamber_exchanges_the_same_volume() {
     LocalSet::new()
         .run_until(async {
             let small = Layout::REAL;
-            let wide = Layout::REAL.wide_return_chamber();
-            let margins = return_level_full_water_change(wide).await;
+            let wide = Layout::REAL.wide_return_chamber().with_reservoir(150.0);
+            let exchange = water_change_exchange(wide, 300).await;
 
-            assert_near(margins.drained_l, 19.74, 0.5, "wide chamber buffer");
+            assert_near(exchange.drained_l, 125.0, LITRES_TOL, "drained");
+            assert_near(exchange.added_l, 125.0, LITRES_TOL, "added");
+            assert_near(
+                f64::from(exchange.record.refill_ran_s),
+                750.0,
+                3.0,
+                "refill_ran_s",
+            );
+            assert_near(
+                exchange.return_level_after_settle_cm,
+                27.58,
+                LEVEL_TOL_CM,
+                "skim stays below the baffle in the wide chamber",
+            );
+            assert!(
+                (15..=17).contains(&exchange.return_starts),
+                "return starts: {}",
+                exchange.return_starts
+            );
+            assert_eq!(exchange.return_dry_s, 0.0);
+            assert_eq!(exchange.makeup_dry_s, 0.0);
+            assert_eq!(exchange.drain_dry_s, 0.0);
+
+            assert_near(small.buffer_to_sump_pump_l(), 8.772, 0.01, "small buffer");
             assert_near(
                 wide.buffer_to_sump_pump_l() / small.buffer_to_sump_pump_l(),
                 27.0 / 12.0,
@@ -248,13 +408,82 @@ async fn return_level_wide_return_chamber_doubles_the_margins() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn return_level_long_drain_is_bounded_by_the_drain_intake() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL.with_reservoir(200.0);
+            let exchange = water_change_exchange(layout, 600).await;
+
+            let reachable_l = layout.tank_weir_l - layout.weir_skim_l - layout.drain_intake_l;
+            assert_near(exchange.drained_l, reachable_l, LITRES_TOL, "drained");
+            assert_near(exchange.drained_l, 137.0, LITRES_TOL, "drained");
+            assert_near(
+                exchange.tank_after_drain_l,
+                layout.drain_intake_l,
+                1e-9,
+                "tank at the intake",
+            );
+            assert_near(
+                exchange.drain_dry_s,
+                600.0 - reachable_l / layout.drain_l_per_s(),
+                2.0,
+                "drain dry-run",
+            );
+            assert_near(exchange.drain_dry_s, 271.2, 2.0, "drain dry-run");
+            assert_eq!(exchange.record.drain_ran_s, 600);
+            assert_near(
+                f64::from(exchange.record.drain_ran_s) * layout.drain_l_per_s(),
+                250.0,
+                LITRES_TOL,
+                "drained litres the record implies",
+            );
+            assert!(
+                (19..=21).contains(&exchange.return_starts),
+                "return starts: {}",
+                exchange.return_starts
+            );
+            assert_eq!(exchange.return_dry_s, 0.0);
+            assert_eq!(exchange.makeup_dry_s, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn real_layout_default_reservoir_cannot_cover_a_typical_drain() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL;
+            let sim = Sim::start(layout).await;
+            configure(&sim, Some("sump_return_level")).await;
+            start_water_change(&sim, 300, 30, 900).await;
+
+            let record = finish(&sim).await;
+            assert_eq!(record.result, OperationResult::ReservoirEmpty);
+            assert_balanced(&sim);
+            sim.run_for(secs(60)).await;
+
+            let water = sim.water();
+            let usable_l = layout.reservoir_l - layout.reserve_wet_l;
+            assert_near(water.drained_l, 125.0, LITRES_TOL, "drained");
+            assert_near(water.added_l, usable_l, 0.05, "added");
+            assert_near(water.tank_l, 680.9, 1.0, "tank left short of the weir");
+            assert!(water.return_level_cm() < layout.sump_pump.height_cm);
+            assert!(!water.pump_on(PumpId::Return));
+            assert_eq!(water.makeup_dry_s, 0.0);
+            assert_eq!(water.return_dry_s, 0.0);
+            assert_eq!(water.spilled_l, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn real_layout_stop_sensor_in_a_baffled_chamber_never_trips() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
             configure(&sim, Some("sump_biological")).await;
-            start_water_change(&sim, 300, 30, 180).await;
+            start_water_change(&sim, 30, 30, 180).await;
 
             let record = finish(&sim).await;
             assert_eq!(record.result, OperationResult::Completed);
@@ -270,11 +499,11 @@ async fn real_layout_stop_sensor_in_a_baffled_chamber_never_trips() {
             );
             assert_near(
                 water.drained_l,
-                layout.buffer_to_sump_pump_l(),
+                30.0 * layout.drain_l_per_s(),
                 LITRES_TOL,
                 "drained",
             );
-            assert_near(overshoot, 21.23, LITRES_TOL, "overshoot");
+            assert_near(overshoot, 17.5, LITRES_TOL, "overshoot");
             assert_near(
                 water.return_level_cm(),
                 layout.baffle_cm
@@ -282,7 +511,8 @@ async fn real_layout_stop_sensor_in_a_baffled_chamber_never_trips() {
                 LEVEL_TOL_CM,
                 "flooded level",
             );
-            assert!(water.return_level_cm() > 33.0);
+            assert!(water.return_level_cm() > 32.5);
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
             assert_eq!(water.spilled_l, 0.0);
         })
         .await;
@@ -295,7 +525,7 @@ async fn real_layout_stop_sensor_trips_only_once_the_whole_sump_floods() {
             let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
             configure(&sim, Some("sump_biological")).await;
-            start_water_change(&sim, 300, 30, 750).await;
+            start_water_change(&sim, 30, 30, 750).await;
 
             let record = finish(&sim).await;
             assert_eq!(record.result, OperationResult::SumpFull);
@@ -328,7 +558,7 @@ async fn real_layout_without_stop_sensor_spills_on_a_long_refill() {
             let layout = Layout::REAL.with_reservoir(150.0);
             let sim = Sim::start(layout).await;
             configure(&sim, None).await;
-            start_water_change(&sim, 300, 30, 750).await;
+            start_water_change(&sim, 30, 30, 750).await;
 
             let record = finish(&sim).await;
             assert_eq!(record.result, OperationResult::Completed);
@@ -338,7 +568,7 @@ async fn real_layout_without_stop_sensor_spills_on_a_long_refill() {
             let water = sim.water();
             let expected = water.added_l - water.drained_l - layout.headroom_to_rim_l();
             assert_near(water.spilled_l, expected, LITRES_TOL, "spill");
-            assert_near(water.spilled_l, 62.05, LITRES_TOL, "spill");
+            assert_near(water.spilled_l, 58.32, LITRES_TOL, "spill");
             assert_near(
                 water.return_level_cm(),
                 layout.sump_height_cm,
@@ -378,10 +608,10 @@ async fn return_level_stuck_wet_ready_sensor_still_ends_the_refill_on_an_empty_r
 async fn return_level_return_override_pauses_the_refill() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::REAL;
+            let layout = Layout::REAL.with_reservoir(150.0);
             let sim = Sim::start(layout).await;
             configure(&sim, Some("sump_return_level")).await;
-            start_water_change(&sim, 300, 30, 750).await;
+            start_water_change(&sim, 300, 30, 900).await;
 
             sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
                 .await;
@@ -403,6 +633,7 @@ async fn return_level_return_override_pauses_the_refill() {
             assert_eq!(paused.operation.state, OperationState::Refilling);
             assert_eq!(paused.operation.refill_ran_s, refill_ran);
             assert_eq!(paused.channels.makeup.blocked_by, Some(Blocker::ReturnOff));
+            assert_eq!(paused.channels.return_pump.blocked_by, None);
             {
                 let water = sim.water();
                 assert_eq!(water.added_l, added);
@@ -425,6 +656,7 @@ async fn return_level_return_override_pauses_the_refill() {
                 LITRES_TOL,
                 "added vs drained",
             );
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
             assert_eq!(water.spilled_l, 0.0);
         })
         .await;
@@ -457,6 +689,14 @@ async fn return_level_restart_mid_drain_resumes_and_completes() {
                 in_state(OperationState::Draining),
             )
             .await;
+            sim.run_for(secs(2)).await;
+            let resumed = sim.status().await;
+            assert_eq!(
+                resumed.channels.return_pump.blocked_by,
+                Some(Blocker::WaterChange)
+            );
+            assert!(!sim.water().pump_on(PumpId::Return));
+            assert!(sim.water().pump_on(PumpId::Drain));
 
             let record = finish(&sim).await;
             assert_eq!(record.result, OperationResult::SumpFull);
@@ -471,10 +711,18 @@ async fn return_level_restart_mid_drain_resumes_and_completes() {
                 water.drained_l
             );
             assert!(
-                water.drained_l <= layout.buffer_to_sump_pump_l() + LITRES_TOL,
+                water.drained_l <= 50.0 * layout.drain_l_per_s() + LITRES_TOL,
                 "drained {:.2} L",
                 water.drained_l
             );
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
+            assert_near(
+                water.return_level_cm(),
+                layout.return_operating_cm,
+                LEVEL_TOL_CM,
+                "final return-chamber level",
+            );
+            assert_eq!(water.return_dry_s, 0.0);
             assert_near(
                 water.added_l,
                 water.drained_l,
@@ -549,14 +797,14 @@ async fn return_level_cron_window_fires_and_the_gap_skips_the_next() {
                 (0, 9, 58, 22, 11)
             );
 
-            let sim = Sim::start(Layout::REAL).await;
+            let sim = Sim::start(Layout::REAL.with_reservoir(200.0)).await;
             configure(&sim, Some("sump_return_level")).await;
             let (code, response) = sim
                 .send(
                     "PATCH",
                     SETTINGS,
                     r#"{"water_change":[
-                        {"cron":"0 10 * * sun","drain_s":300,"settle_s":30,"refill_s":750},
+                        {"cron":"0 10 * * sun","drain_s":300,"settle_s":30,"refill_s":900},
                         {"cron":"0 11 * * sun","drain_s":300,"settle_s":30,"refill_s":750}]}"#,
                 )
                 .await;
@@ -592,44 +840,45 @@ async fn return_level_cron_window_fires_and_the_gap_skips_the_next() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn return_level_sump_pump_stuck_wet_runs_the_return_dry() {
+async fn return_level_sump_pump_stuck_wet_runs_the_return_dry_while_refilling() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::REAL;
+            let layout = Layout::REAL.with_reservoir(150.0);
             let sim = Sim::start(layout).await;
             sim.water().faults[WaterLevelRole::SumpPump.index()] = Some(Fault::StuckWet);
             configure(&sim, Some("sump_return_level")).await;
-            start_water_change(&sim, 600, 30, 60).await;
+            start_water_change(&sim, 300, 30, 900).await;
 
-            sim.run_until(LONG, "settling", in_state(OperationState::Settling))
+            sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
                 .await;
-            let (drained, dry_after_drain) = {
+            {
                 let water = sim.water();
-                let expected = layout.buffer_to_return_intake_l()
-                    + (layout.tank_weir_l - layout.drain_intake_l);
-                assert_near(water.drained_l, expected, LITRES_TOL, "drained");
-                assert_near(water.drained_l, 151.35, LITRES_TOL, "drained");
-                assert_near(water.tank_l, layout.drain_intake_l, 1e-9, "tank at intake");
-                (water.drained_l, water.return_dry_s)
-            };
-            let empty_after = layout.buffer_to_return_intake_l() / layout.drain_l_per_s();
-            assert_near(dry_after_drain, 600.0 - empty_after, 2.0, "return dry-run");
+                assert_near(water.drained_l, 125.0, LITRES_TOL, "drained");
+                assert_eq!(water.return_dry_s, 0.0);
+            }
 
             let record = finish(&sim).await;
-            assert_eq!(record.result, OperationResult::Completed);
-            assert_eq!(record.drain_ran_s, 600);
+            assert_eq!(record.result, OperationResult::SumpFull);
             assert_balanced(&sim);
 
             let water = sim.water();
-            assert_eq!(water.drained_l, drained);
-            let partial = 1.0 - layout.makeup_lph / layout.return_lph;
+            let r = layout.return_l_per_s();
+            let m = layout.makeup_l_per_s();
+            let to_intake_s = layout.buffer_to_return_intake_l() / (r - m);
+            let starved_s = (water.drained_l - r * to_intake_s) / m;
+            let expected_dry_s = starved_s * (1.0 - m / r);
+            assert_near(water.return_dry_s, expected_dry_s, 5.0, "return dry-run");
+            assert_near(water.return_dry_s, 531.9, 5.0, "return dry-run");
+            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
             assert_near(
-                water.return_dry_s,
-                dry_after_drain + 30.0 + 60.0 * partial,
-                3.0,
-                "return dry-run at the end",
+                water.added_l,
+                water.drained_l,
+                LITRES_TOL,
+                "added vs drained",
             );
-            assert!(water.return_dry_s > 640.0);
+            assert_near(water.tank_l, layout.tank_weir_l, 1e-9, "tank at the weir");
+            assert_eq!(water.spilled_l, 0.0);
+            assert_eq!(water.makeup_dry_s, 0.0);
         })
         .await;
 }
@@ -677,7 +926,15 @@ async fn return_level_level_outage_aborts_the_drain_and_keeps_the_return() {
             let water = sim.water();
             assert!(water.drained_l - drained <= 2.1 * layout.drain_l_per_s());
             assert!(water.pump_on(PumpId::Return));
-            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 0);
+            assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
+            let restarted = water
+                .first_after(Event::Pump(PumpId::Return, true), 0.0)
+                .expect("return back on");
+            assert!(
+                restarted - outage_at <= 2.1,
+                "return off {:.1} s into the outage",
+                restarted - outage_at
+            );
             assert_eq!(water.return_dry_s, 0.0);
         })
         .await;
@@ -720,7 +977,7 @@ async fn return_level_blocked_weir_ends_the_refill_with_overflow() {
             let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
             configure(&sim, Some("sump_return_level")).await;
-            start_water_change(&sim, 300, 30, 750).await;
+            start_water_change(&sim, 60, 30, 750).await;
 
             sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
                 .await;
