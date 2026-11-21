@@ -467,7 +467,7 @@ fn interrupted_drain(started_at: u64) -> Operation {
         }),
         Some(started_at),
     );
-    operation.advance(4000, Some(HEALTHY));
+    operation.advance(4000, 4000, Some(HEALTHY));
     operation
 }
 
@@ -1322,8 +1322,8 @@ fn a_resumed_settling_pause_keeps_the_return_pump_off() {
         }),
         Some(EPOCH - 200),
     );
-    operation.advance(10_000, Some(HEALTHY));
-    operation.advance(5000, Some(HEALTHY));
+    operation.advance(10_000, 10_000, Some(HEALTHY));
+    operation.advance(5000, 5000, Some(HEALTHY));
     assert_eq!(operation.phase, Phase::Settling);
     let store = Arc::new(VolatilePumpStore::default());
     seed_checkpoint(&store, operation, Some(EPOCH - 100));
@@ -1920,4 +1920,174 @@ async fn the_loop_beats_its_heartbeat_every_tick() {
             );
         })
         .await;
+}
+
+fn full_sump() -> WaterLevelSnapshot {
+    snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+        WaterLevelRole::SumpReturnLevel,
+    ])
+}
+
+#[test]
+fn a_refill_stuck_on_a_wet_stop_sensor_times_out() {
+    let mut rig = Rig::new();
+    let full = full_sump();
+
+    rig.tick(Some(&full));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.tick(Some(&full));
+    rig.run(5, Some(&full));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+
+    rig.run(304, Some(&full));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+    let checkpoint: Checkpoint = decode(&rig.store, PumpRecord::Checkpoint).expect("stored");
+    assert!(
+        checkpoint.operation.refill_wall_ms >= 290_000,
+        "{}",
+        checkpoint.operation.refill_wall_ms
+    );
+
+    rig.run(1, Some(&full));
+    let status = rig.service.status();
+    assert_eq!(status.operation, OperationStatus::IDLE);
+    let record = status.last_water_change.expect("recorded");
+    assert_eq!(record.result, OperationResult::RefillTimeout);
+    assert_eq!(record.refill_ran_s, 0);
+    assert_eq!(rig.pins(), [true, true, false, false]);
+    assert_eq!(
+        decode::<Option<Checkpoint>>(&rig.store, PumpRecord::Checkpoint).flatten(),
+        None
+    );
+}
+
+#[test]
+fn a_resumed_refill_continues_its_wall_time_budget() {
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+    let mut operation = Operation::start(
+        OperationPlan::water_change(WaterChangePlan {
+            drain_s: 10,
+            settle_s: 0,
+            refill_s: 60,
+        }),
+        Some(EPOCH - 400),
+    );
+    operation.advance(10_000, 10_000, Some(HEALTHY));
+    operation.advance(0, 0, Some(HEALTHY));
+    assert_eq!(operation.phase, Phase::Refilling);
+    operation.advance(0, 350_000, Some(full));
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, operation, Some(EPOCH - 100));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    let full = full_sump();
+
+    rig.tick(None);
+    rig.now += Duration::from_secs(300);
+    rig.tick(Some(&full));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+
+    rig.run(10, Some(&full));
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Refilling
+    );
+
+    rig.run(1, Some(&full));
+    let record = rig.service.status().last_water_change.expect("recorded");
+    assert_eq!(record.result, OperationResult::RefillTimeout);
+    assert!(record.resumed);
+}
+
+fn reservoir_patch(drain_lph: u32, reservoir_l: Option<u32>) -> PumpSettingsPatch {
+    PumpSettingsPatch {
+        flow_lph: Some(crate::domain::pump::FlowRates {
+            makeup: Some(600),
+            drain: Some(drain_lph),
+        }),
+        reservoir_ready_l: Some(reservoir_l),
+        ..PumpSettingsPatch::default()
+    }
+}
+
+#[test]
+fn a_water_change_draining_more_than_the_ready_reservoir_is_refused() {
+    let (service, _store) = service_and_store();
+    service
+        .apply_settings(reservoir_patch(1500, Some(50)))
+        .expect("valid");
+    observe(&service, Some(HEALTHY));
+
+    assert_eq!(
+        service.start_water_change(WaterChangePlan {
+            drain_s: 121,
+            ..PLAN
+        }),
+        Err(StartError::Invalid(
+            "the planned drain exceeds the water the reservoir holds"
+        ))
+    );
+    assert_eq!(service.status().operation, OperationStatus::IDLE);
+    assert_eq!(service.status().last_water_change, None);
+
+    assert_eq!(
+        service.start_water_change(WaterChangePlan {
+            drain_s: 120,
+            ..PLAN
+        }),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_settings_change_that_would_overdraw_a_stored_window_is_refused() {
+    let (service, store) = service_and_store();
+    service
+        .apply_settings(PumpSettingsPatch {
+            water_change: Some(vec![crate::domain::pump::WaterChangeWindow {
+                cron: "0 10 * * sun".into(),
+                drain_s: 120,
+                settle_s: 0,
+                refill_s: 300,
+            }]),
+            ..reservoir_patch(1500, Some(50))
+        })
+        .expect("valid");
+    let saved = service.settings();
+
+    for patch in [
+        reservoir_patch(1600, Some(50)),
+        reservoir_patch(1500, Some(49)),
+    ] {
+        assert_eq!(
+            service.apply_settings(patch),
+            Err(PumpSettingsError::Invalid(
+                "a water-change window drains more than reservoir_ready_l holds"
+            ))
+        );
+        assert_eq!(service.settings(), saved);
+        assert_eq!(
+            decode::<PumpSettings>(&store, PumpRecord::Settings),
+            Some(saved.clone())
+        );
+    }
+
+    let cleared = service
+        .apply_settings(reservoir_patch(1600, None))
+        .expect("no reservoir volume, no check");
+    assert_eq!(cleared.reservoir_ready_l, None);
 }
