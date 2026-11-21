@@ -6,8 +6,7 @@ mod sim;
 use tokio::task::LocalSet;
 
 use aquarium_core::domain::pump::{
-    Blocker, OperationKind, OperationRecord, OperationResult, OperationState, PumpId,
-    PumpSettingsPatch, SkipReason, SkippedWindow,
+    OperationRecord, OperationResult, OperationState, PumpId, PumpSettingsPatch, SkippedWindow,
 };
 use aquarium_core::ports::inbound::PumpControl;
 
@@ -103,11 +102,11 @@ fn warsaw_offsets_follow_the_eu_rules() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn dst_fall_back_fires_a_0230_top_off_twice() {
+async fn dst_fall_back_fires_a_0230_top_off_once() {
     LocalSet::new()
         .run_until(async {
             let first = utc(2026, 10, 25, 0, 30);
-            let second = utc(2026, 10, 25, 1, 30);
+            let repeated = utc(2026, 10, 25, 1, 30);
             let sim = start(utc(2026, 10, 24, 22, 0), TOP_OFF_AT_0230).await;
 
             let firings = run_until_epoch(
@@ -122,17 +121,15 @@ async fn dst_fall_back_fires_a_0230_top_off_twice() {
                 .iter()
                 .map(|record| record.started_at)
                 .collect();
-            assert_eq!(started, [Some(first), Some(second)]);
-            assert!(firings
-                .top_offs
-                .iter()
-                .all(|record| record.result == OperationResult::SumpFull));
-            assert_eq!(local_hm(first), local_hm(second));
+            assert_eq!(started, [Some(first)]);
+            assert_eq!(firings.top_offs[0].result, OperationResult::SumpFull);
+            assert_eq!(local_hm(first), local_hm(repeated));
             assert!(firings.skipped.is_empty());
 
             let water = sim.water();
-            assert_eq!(water.count(Event::Pump(PumpId::Makeup, true)), 2);
-            assert!((water.added_l - 2.0 * EVAPORATED_L).abs() < 0.5);
+            assert_eq!(water.count(Event::Pump(PumpId::Makeup, true)), 1);
+            assert!((water.added_l - EVAPORATED_L).abs() < 0.5);
+            assert!((water.deficit_l() - EVAPORATED_L).abs() < 0.5);
         })
         .await;
 }
@@ -164,10 +161,15 @@ async fn dst_spring_forward_never_fires_a_0230_top_off() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn dst_fall_back_runs_a_0230_water_change_once_thanks_to_the_gap() {
+async fn dst_fall_back_runs_a_0230_water_change_once_without_a_skip() {
     LocalSet::new()
         .run_until(async {
             let sim = start(utc(2026, 10, 24, 22, 0), WATER_CHANGE_AT_0230).await;
+            let patch: PumpSettingsPatch =
+                serde_json::from_str(r#"{"min_water_change_gap_h":0}"#).expect("settings json");
+            sim.service
+                .apply_settings(patch)
+                .expect("settings accepted");
 
             let firings = run_until_epoch(&sim, utc(2026, 10, 25, 3, 0), &[]).await;
 
@@ -176,16 +178,7 @@ async fn dst_fall_back_runs_a_0230_water_change_once_thanks_to_the_gap() {
             assert_eq!(record.started_at, Some(utc(2026, 10, 25, 0, 30)));
             assert_eq!(record.result, OperationResult::SumpFull);
             assert_eq!(record.drain_ran_s, 112);
-            assert_eq!(
-                firings.skipped,
-                [SkippedWindow {
-                    kind: OperationKind::WaterChange,
-                    index: 0,
-                    reason: SkipReason::Blocked,
-                    blocked_by: Some(Blocker::RecentWaterChange),
-                    at: Some(utc(2026, 10, 25, 1, 30)),
-                }]
-            );
+            assert!(firings.skipped.is_empty());
             assert_eq!(sim.water().count(Event::Pump(PumpId::Drain, true)), 1);
         })
         .await;
