@@ -458,6 +458,89 @@ fn the_water_change_gap_is_bounded() {
 }
 
 #[test]
+fn the_reservoir_volume_is_optional_and_bounded() {
+    assert_eq!(defaults().reservoir_ready_l, None);
+
+    for litres in [1, MAX_RESERVOIR_L] {
+        let mut settings = defaults();
+        settings.reservoir_ready_l = Some(litres);
+        assert_eq!(settings.validate(), Ok(()), "{litres}");
+    }
+
+    for litres in [0, MAX_RESERVOIR_L + 1] {
+        let mut settings = defaults();
+        settings.reservoir_ready_l = Some(litres);
+        assert_eq!(
+            settings.validate(),
+            Err("reservoir_ready_l must be between 1 and 10000"),
+            "{litres}"
+        );
+    }
+}
+
+fn reservoir_settings(drain_lph: Option<u32>, reservoir_l: Option<u32>) -> PumpSettings {
+    let mut settings = defaults();
+    settings.flow_lph.drain = drain_lph;
+    settings.reservoir_ready_l = reservoir_l;
+    settings
+}
+
+#[test]
+fn a_drain_must_fit_in_the_ready_reservoir_when_both_are_known() {
+    let settings = reservoir_settings(Some(1500), Some(50));
+
+    assert!(settings.drain_fits_reservoir(120));
+    assert!(!settings.drain_fits_reservoir(121));
+    assert!(reservoir_settings(None, Some(50)).drain_fits_reservoir(MAX_DRAIN_S));
+    assert!(reservoir_settings(Some(1500), None).drain_fits_reservoir(MAX_DRAIN_S));
+}
+
+#[test]
+fn a_water_change_window_must_fit_in_the_ready_reservoir() {
+    let window = |drain_s| WaterChangeWindow {
+        drain_s,
+        ..water_change("0 10 * * sun")
+    };
+
+    let mut fits = reservoir_settings(Some(1500), Some(50));
+    fits.water_change = vec![window(120)];
+    assert_eq!(fits.validate(), Ok(()));
+
+    let mut too_long = reservoir_settings(Some(1500), Some(50));
+    too_long.water_change = vec![window(120), window(121)];
+    assert_eq!(
+        too_long.validate(),
+        Err("a water-change window drains more than reservoir_ready_l holds")
+    );
+
+    for unchecked in [
+        reservoir_settings(None, Some(50)),
+        reservoir_settings(Some(1500), None),
+    ] {
+        let mut settings = unchecked;
+        settings.water_change = vec![window(MAX_DRAIN_S)];
+        assert_eq!(settings.validate(), Ok(()));
+    }
+}
+
+#[test]
+fn a_patch_sets_keeps_or_clears_the_reservoir_volume() {
+    let mut base = defaults();
+    base.reservoir_ready_l = Some(40);
+
+    let set: PumpSettingsPatch =
+        serde_json::from_str(r#"{"reservoir_ready_l":47}"#).expect("patch");
+    assert_eq!(set.merge_onto(&base).reservoir_ready_l, Some(47));
+
+    let kept: PumpSettingsPatch = serde_json::from_str("{}").expect("patch");
+    assert_eq!(kept.merge_onto(&base).reservoir_ready_l, Some(40));
+
+    let cleared: PumpSettingsPatch =
+        serde_json::from_str(r#"{"reservoir_ready_l":null}"#).expect("patch");
+    assert_eq!(cleared.merge_onto(&base).reservoir_ready_l, None);
+}
+
+#[test]
 fn a_patch_sets_keeps_or_clears_the_refill_stop_sensor() {
     let mut base = defaults();
     base.refill_stop_sensor = Some(WaterLevelRole::SumpMechanical);
@@ -497,6 +580,7 @@ fn settings_stored_before_the_refill_safeguards_still_load() {
         Some(WaterLevelRole::SumpReturnLevel)
     );
     assert_eq!(stored.min_water_change_gap_h, DEFAULT_WATER_CHANGE_GAP_H);
+    assert_eq!(stored.reservoir_ready_l, None);
 }
 
 #[test]
@@ -603,7 +687,7 @@ fn plan(drain_s: u32, settle_s: u32, refill_s: u32) -> OperationPlan {
 fn run(operation: &mut Operation, seconds: u64, levels: LevelConditions) -> Step {
     let mut last = Step::Continue;
     for _ in 0..seconds {
-        last = operation.advance(SECOND, Some(levels));
+        last = operation.advance(SECOND, SECOND, Some(levels));
         if last != Step::Continue {
             return last;
         }
@@ -619,7 +703,7 @@ fn a_top_off_is_a_single_refilling_phase() {
     assert_eq!(operation.remaining_s(), 3);
     assert_eq!(run(&mut operation, 2, HEALTHY), Step::Continue);
     assert_eq!(
-        operation.advance(SECOND, Some(HEALTHY)),
+        operation.advance(SECOND, SECOND, Some(HEALTHY)),
         Step::Finished(OperationResult::Completed)
     );
 
@@ -639,6 +723,7 @@ fn a_top_off_stops_on_overflow_or_an_empty_reservoir() {
     assert_eq!(
         overflow.advance(
             SECOND,
+            SECOND,
             Some(LevelConditions {
                 tank_overflow: true,
                 ..HEALTHY
@@ -650,6 +735,7 @@ fn a_top_off_stops_on_overflow_or_an_empty_reservoir() {
     let mut empty = Operation::start(OperationPlan::top_off(60), None);
     assert_eq!(
         empty.advance(
+            SECOND,
             SECOND,
             Some(LevelConditions {
                 reservoir_empty: true,
@@ -669,12 +755,12 @@ fn a_full_sump_ends_the_refill_but_not_the_drain() {
 
     let mut top_off = Operation::start(OperationPlan::top_off(60), None);
     assert_eq!(
-        top_off.advance(0, Some(full)),
+        top_off.advance(0, 0, Some(full)),
         Step::Finished(OperationResult::SumpFull)
     );
 
     let mut draining = Operation::start(plan(60, 0, 60), None);
-    assert_eq!(draining.advance(SECOND, Some(full)), Step::Continue);
+    assert_eq!(draining.advance(SECOND, SECOND, Some(full)), Step::Continue);
 }
 
 #[test]
@@ -689,15 +775,133 @@ fn a_full_sump_ends_a_water_change_refill_only_after_the_makeup_ran() {
     assert_eq!(operation.phase, Phase::Refilling);
 
     for _ in 0..5 {
-        assert_eq!(operation.advance(0, Some(full)), Step::Continue);
+        assert_eq!(operation.advance(0, 0, Some(full)), Step::Continue);
     }
     assert_eq!(operation.ran_s(Phase::Refilling), 0);
 
-    assert_eq!(operation.advance(SECOND, Some(HEALTHY)), Step::Continue);
     assert_eq!(
-        operation.advance(0, Some(full)),
+        operation.advance(SECOND, SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(
+        operation.advance(0, 0, Some(full)),
         Step::Finished(OperationResult::SumpFull)
     );
+}
+
+#[test]
+fn the_refill_budget_is_twice_the_refill_or_five_minutes_more() {
+    assert_eq!(refill_timeout_s(1), 301);
+    assert_eq!(refill_timeout_s(60), 360);
+    assert_eq!(refill_timeout_s(300), 600);
+    assert_eq!(refill_timeout_s(420), 840);
+    assert_eq!(refill_timeout_s(MAX_REFILL_S), 1800);
+}
+
+#[test]
+fn a_stalled_water_change_refill_times_out_on_wall_time() {
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+    let mut operation = Operation::start(plan(10, 30, 60), None);
+    run(&mut operation, 10, HEALTHY);
+    run(&mut operation, 30, HEALTHY);
+    assert_eq!(operation.phase, Phase::Refilling);
+    assert_eq!(operation.refill_wall_ms, 0);
+
+    for _ in 0..360 {
+        assert_eq!(operation.advance(0, SECOND, Some(full)), Step::Continue);
+    }
+    assert_eq!(operation.ran_s(Phase::Refilling), 0);
+    assert_eq!(operation.refill_wall_ms, 360 * SECOND);
+
+    assert_eq!(
+        operation.advance(0, SECOND, Some(full)),
+        Step::Finished(OperationResult::RefillTimeout)
+    );
+    assert_eq!(
+        operation.record(OperationResult::RefillTimeout).result,
+        OperationResult::RefillTimeout
+    );
+}
+
+#[test]
+fn a_stalled_top_off_times_out_on_wall_time() {
+    let mut operation = Operation::start(OperationPlan::top_off(600), None);
+
+    assert_eq!(
+        operation.advance(0, 1200 * SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(
+        operation.advance(0, 1, Some(HEALTHY)),
+        Step::Finished(OperationResult::RefillTimeout)
+    );
+}
+
+#[test]
+fn wall_time_counts_only_while_refilling() {
+    let mut operation = Operation::start(plan(2, 2, 60), None);
+
+    assert_eq!(
+        operation.advance(0, 500 * SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(operation.refill_wall_ms, 0);
+    run(&mut operation, 2, HEALTHY);
+    assert_eq!(operation.phase, Phase::Settling);
+    assert_eq!(
+        operation.advance(2 * SECOND, 2 * SECOND, Some(HEALTHY)),
+        Step::PhaseChanged
+    );
+    assert_eq!(operation.phase, Phase::Refilling);
+    assert_eq!(operation.refill_wall_ms, 0);
+}
+
+#[test]
+fn a_finished_refill_completes_before_the_budget_is_checked() {
+    let mut operation = Operation::start(OperationPlan::top_off(60), None);
+
+    assert_eq!(
+        operation.advance(60 * SECOND, 400 * SECOND, Some(HEALTHY)),
+        Step::Finished(OperationResult::Completed)
+    );
+}
+
+#[test]
+fn resuming_keeps_the_refill_wall_time() {
+    let mut operation = Operation::start(OperationPlan::top_off(60), None);
+    operation.advance(0, 300 * SECOND, Some(HEALTHY));
+
+    operation.resume();
+
+    assert_eq!(operation.refill_wall_ms, 300 * SECOND);
+    assert_eq!(
+        operation.advance(0, 61 * SECOND, Some(HEALTHY)),
+        Step::Finished(OperationResult::RefillTimeout)
+    );
+}
+
+#[test]
+fn a_checkpoint_without_refill_wall_time_loads_as_zero() {
+    let mut operation = Operation::start(OperationPlan::top_off(60), Some(42));
+    operation.advance(4200, 4200, Some(HEALTHY));
+    let mut json = serde_json::to_value(Checkpoint {
+        operation,
+        checkpoint_at: Some(50),
+    })
+    .expect("encode");
+    json["operation"]
+        .as_object_mut()
+        .expect("operation object")
+        .remove("refill_wall_ms")
+        .expect("refill_wall_ms stored");
+
+    let decoded: Checkpoint = serde_json::from_value(json).expect("decode");
+
+    assert_eq!(decoded.operation.refill_wall_ms, 0);
+    assert_eq!(decoded.operation.ran_ms[Phase::Refilling.index()], 4200);
 }
 
 #[test]
@@ -733,7 +937,10 @@ fn a_low_sump_does_not_end_the_drain() {
 
     assert_eq!(run(&mut operation, 59, low), Step::Continue);
     assert_eq!(operation.phase, Phase::Draining);
-    assert_eq!(operation.advance(SECOND, Some(low)), Step::PhaseChanged);
+    assert_eq!(
+        operation.advance(SECOND, SECOND, Some(low)),
+        Step::PhaseChanged
+    );
     assert_eq!(operation.phase, Phase::Settling);
     assert_eq!(operation.ran_s(Phase::Draining), 60);
 }
@@ -743,7 +950,7 @@ fn missing_levels_abort_any_phase() {
     let mut operation = Operation::start(plan(60, 30, 60), None);
 
     assert_eq!(
-        operation.advance(SECOND, None),
+        operation.advance(SECOND, SECOND, None),
         Step::Finished(OperationResult::Aborted)
     );
 }
@@ -751,7 +958,7 @@ fn missing_levels_abort_any_phase() {
 #[test]
 fn remaining_time_rounds_up() {
     let mut operation = Operation::start(plan(10, 0, 10), None);
-    operation.advance(1500, Some(HEALTHY));
+    operation.advance(1500, 1500, Some(HEALTHY));
 
     assert_eq!(operation.remaining_s(), 9);
 }
@@ -838,7 +1045,7 @@ fn litres_need_a_flow_rate() {
 #[test]
 fn checkpoints_round_trip_through_json() {
     let mut operation = Operation::start(plan(10, 5, 10), Some(42));
-    operation.advance(4200, Some(HEALTHY));
+    operation.advance(4200, 4200, Some(HEALTHY));
     let checkpoint = Checkpoint {
         operation,
         checkpoint_at: Some(50),

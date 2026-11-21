@@ -22,6 +22,8 @@ pub const MAX_RESUME_WINDOW_S: u32 = 3600;
 pub const DEFAULT_RESUME_WINDOW_S: u32 = 600;
 pub const MAX_WATER_CHANGE_GAP_H: u32 = 168;
 pub const DEFAULT_WATER_CHANGE_GAP_H: u32 = 12;
+pub const MAX_RESERVOIR_L: u32 = 10_000;
+pub const REFILL_TIMEOUT_GRACE_S: u32 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -320,6 +322,9 @@ pub struct PumpSettings {
 
     #[serde(default = "default_water_change_gap_h")]
     pub min_water_change_gap_h: u32,
+
+    #[serde(default)]
+    pub reservoir_ready_l: Option<u32>,
 }
 
 impl PumpSettings {
@@ -333,7 +338,17 @@ impl PumpSettings {
         resume_window_s: DEFAULT_RESUME_WINDOW_S,
         refill_stop_sensor: default_refill_stop_sensor(),
         min_water_change_gap_h: DEFAULT_WATER_CHANGE_GAP_H,
+        reservoir_ready_l: None,
     };
+
+    pub fn drain_fits_reservoir(&self, drain_s: u32) -> bool {
+        match (self.flow_lph.drain, self.reservoir_ready_l) {
+            (Some(flow), Some(reservoir)) => {
+                u64::from(drain_s) * u64::from(flow) <= u64::from(reservoir) * 3600
+            }
+            _ => true,
+        }
+    }
 
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.top_off.len() > MAX_WINDOWS || self.water_change.len() > MAX_WINDOWS {
@@ -391,6 +406,21 @@ impl PumpSettings {
             return Err("min_water_change_gap_h must not exceed 168");
         }
 
+        if self
+            .reservoir_ready_l
+            .is_some_and(|litres| !(1..=MAX_RESERVOIR_L).contains(&litres))
+        {
+            return Err("reservoir_ready_l must be between 1 and 10000");
+        }
+
+        if self
+            .water_change
+            .iter()
+            .any(|window| !self.drain_fits_reservoir(window.drain_s))
+        {
+            return Err("a water-change window drains more than reservoir_ready_l holds");
+        }
+
         Ok(())
     }
 }
@@ -417,6 +447,10 @@ pub struct PumpSettingsPatch {
 
     #[serde(default)]
     pub min_water_change_gap_h: Option<u32>,
+
+    #[serde(default, deserialize_with = "nullable")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub reservoir_ready_l: Option<Option<u32>>,
 }
 
 impl PumpSettingsPatch {
@@ -432,6 +466,7 @@ impl PumpSettingsPatch {
             min_water_change_gap_h: self
                 .min_water_change_gap_h
                 .unwrap_or(base.min_water_change_gap_h),
+            reservoir_ready_l: self.reservoir_ready_l.unwrap_or(base.reservoir_ready_l),
         }
     }
 }
@@ -530,6 +565,7 @@ pub enum OperationResult {
     ReservoirEmpty,
     Aborted,
     InterruptedByReboot,
+    RefillTimeout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -562,6 +598,20 @@ pub struct Operation {
     pub ran_ms: [u64; 3],
     pub started_at: Option<u64>,
     pub resumed: bool,
+
+    #[serde(default)]
+    pub refill_wall_ms: u64,
+}
+
+pub const fn refill_timeout_s(refill_s: u32) -> u32 {
+    let doubled = refill_s.saturating_mul(2);
+    let graced = refill_s.saturating_add(REFILL_TIMEOUT_GRACE_S);
+
+    if doubled > graced {
+        doubled
+    } else {
+        graced
+    }
 }
 
 impl Operation {
@@ -572,6 +622,7 @@ impl Operation {
             ran_ms: [0; 3],
             started_at,
             resumed: false,
+            refill_wall_ms: 0,
         }
     }
 
@@ -586,14 +637,21 @@ impl Operation {
             .div_ceil(1000) as u32
     }
 
-    pub fn advance(&mut self, elapsed_ms: u64, levels: Option<LevelConditions>) -> Step {
+    pub fn advance(&mut self, ran_ms: u64, wall_ms: u64, levels: Option<LevelConditions>) -> Step {
         let Some(levels) = levels else {
             return Step::Finished(OperationResult::Aborted);
         };
 
         let slot = self.phase.index();
-        self.ran_ms[slot] += elapsed_ms;
+        self.ran_ms[slot] += ran_ms;
         let done = self.ran_ms[slot] >= u64::from(self.plan.target_s(self.phase)) * 1000;
+
+        if self.phase == Phase::Refilling {
+            self.refill_wall_ms += wall_ms;
+        }
+
+        let timed_out =
+            self.refill_wall_ms > u64::from(refill_timeout_s(self.plan.refill_s)) * 1000;
 
         match self.phase {
             Phase::Draining if done => {
@@ -602,6 +660,7 @@ impl Operation {
             }
             Phase::Settling if done => {
                 self.phase = Phase::Refilling;
+                self.refill_wall_ms = 0;
                 Step::PhaseChanged
             }
             Phase::Refilling if levels.reservoir_empty => {
@@ -615,6 +674,7 @@ impl Operation {
                 Step::Finished(OperationResult::SumpFull)
             }
             Phase::Refilling if done => Step::Finished(OperationResult::Completed),
+            Phase::Refilling if timed_out => Step::Finished(OperationResult::RefillTimeout),
             _ => Step::Continue,
         }
     }
