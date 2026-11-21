@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use tokio::task::LocalSet;
 
-use aquarium_core::domain::pump::{Blocker, OperationResult, PumpId, PumpSettingsPatch};
+use aquarium_core::domain::pump::{
+    Blocker, OperationResult, PumpId, PumpSettingsPatch, Supervision,
+};
 use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::ports::inbound::PumpControl;
 use aquarium_core::ports::outbound::PumpStatusSource;
@@ -262,6 +264,36 @@ async fn an_unplugged_harness_mid_drain_aborts_and_holds_the_return_off() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_harness_shorted_during_a_restart_blocks_automatic_and_manual_drain_resume() {
+    LocalSet::new()
+        .run_until(async {
+            let mut sim = start(Layout::REAL.with_reservoir(150.0)).await;
+            assert_eq!(sim.send("POST", WATER_CHANGE, PLAN).await.0, 202);
+            sim.run_for(secs(12)).await;
+            sim.crash(false);
+            let drained = sim.water().drained_l;
+            assert!(drained > 0.0);
+            sim.water().faults = [Some(Fault::StuckWet); WaterLevelRole::COUNT];
+            sim.run_for(secs(2)).await;
+            sim.boot_up(true).await;
+            sim.run_for(secs(800)).await;
+            assert_eq!(sim.water().drained_l, drained);
+            assert_eq!(sim.water().return_dry_s, 0.0);
+            assert_eq!(
+                sim.send("POST", "/api/water-change/resume", "").await.0,
+                423
+            );
+            sim.water().faults = [None; WaterLevelRole::COUNT];
+            sim.run_for(secs(3)).await;
+            assert_eq!(
+                sim.send("POST", "/api/water-change/resume", "").await.0,
+                202
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_shorted_harness_is_flagged_and_refuses_the_water_change() {
     LocalSet::new()
         .run_until(async {
@@ -338,6 +370,107 @@ async fn a_wet_flood_sensor_ends_a_top_off_and_refuses_the_next() {
             }
             assert!(sim.water().pump_on(PumpId::Return));
             assert_eq!(sim.water().spilled_l, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_level_sampler_that_dies_mid_drain_never_dry_runs_the_return() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start(Layout::REAL.with_reservoir(150.0)).await;
+            assert_eq!(sim.send("POST", WATER_CHANGE, PLAN).await.0, 202);
+            sim.run_until(LONG, "the drain", |status, _| {
+                status.operation.drain_ran_s >= 100
+            })
+            .await;
+
+            sim.water().sensing = false;
+            sim.run_for(secs(600)).await;
+
+            let status = sim.status().await;
+            assert!(!status.level_sensors_suspect);
+            assert!(status.return_held_after_drain);
+            assert_eq!(
+                status.channels.return_pump.blocked_by,
+                Some(Blocker::LevelsUnavailableAfterDrain)
+            );
+            {
+                let water = sim.water();
+                assert!(!water.pump_on(PumpId::Return));
+                assert!(!water.pump_on(PumpId::Uv));
+                assert!(!water.pump_on(PumpId::Drain));
+                assert_eq!(water.return_dry_s, 0.0, "{}", water.describe());
+            }
+            assert_balanced(&sim);
+
+            sim.water().sensing = true;
+            sim.run_for(secs(3)).await;
+            assert!(!sim.status().await.return_held_after_drain);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restart_soon_after_an_aborted_drain_keeps_the_blind_return_hold() {
+    LocalSet::new()
+        .run_until(async {
+            let mut sim = start(Layout::REAL.with_reservoir(150.0)).await;
+            assert_eq!(sim.send("POST", WATER_CHANGE, PLAN).await.0, 202);
+            sim.run_until(LONG, "the drain", |status, _| {
+                status.operation.drain_ran_s >= 100
+            })
+            .await;
+            assert_eq!(sim.send("DELETE", WATER_CHANGE, "").await.0, 204);
+            sim.run_for(secs(60)).await;
+
+            sim.restart(secs(5), true).await;
+            sim.water().sensing = false;
+            sim.run_for(secs(120)).await;
+
+            let status = sim.status().await;
+            assert!(status.return_held_after_drain);
+            assert!(status.last_water_change.unwrap().finished_at.is_some());
+            assert!(!sim.water().pump_on(PumpId::Return));
+            assert_eq!(sim.water().return_dry_s, 0.0);
+
+            sim.water().sensing = true;
+            sim.run_for(secs(60)).await;
+            assert!(!sim.status().await.return_held_after_drain);
+            let status = sim.status().await;
+            assert_ne!(
+                status.channels.return_pump.blocked_by,
+                Some(Blocker::LevelsUnavailableAfterDrain)
+            );
+            assert_eq!(sim.water().return_dry_s, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_supervision_the_api_refuses_new_water_movers() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start(Layout::REAL.with_reservoir(150.0)).await;
+            sim.service.set_supervision(Supervision::Unavailable);
+            sim.run_for(secs(2)).await;
+
+            let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
+            assert_eq!(code, 423, "{response}");
+            assert!(response.contains("watchdog"), "{response}");
+            assert_eq!(
+                sim.send("POST", TOP_OFF, r#"{"duration_s":30}"#).await.0,
+                423
+            );
+            assert_eq!(sim.status().await.supervision, Supervision::Unavailable);
+            sim.run_for(secs(30)).await;
+            {
+                let water = sim.water();
+                assert_eq!(water.drained_l + water.added_l, 0.0);
+            }
+
+            sim.service.set_supervision(Supervision::Active);
+            assert_eq!(sim.send("POST", WATER_CHANGE, PLAN).await.0, 202);
         })
         .await;
 }

@@ -173,6 +173,24 @@ async fn dst_fall_back_fires_each_minute_of_a_two_minute_window_once() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn an_every_minute_window_skipped_in_summer_time_stays_skipped_in_winter_time() {
+    LocalSet::new()
+        .run_until(async {
+            let first = utc(2026, 10, 25, 0, 0);
+            let repeat = first + 3600;
+            let settings = r#"{"top_off":[{"cron":"* 2 * * *","duration_s":5}]}"#;
+            let sim = start(first - 60, settings).await;
+            let firings = run_until_epoch(&sim, repeat, &[]).await;
+            assert_eq!(firings.skipped.len(), 60);
+            let firings = run_until_epoch(&sim, repeat + 3600, &[repeat]).await;
+            assert!(firings.top_offs.is_empty());
+            assert!(firings.skipped.is_empty());
+            assert_eq!(sim.water().count(Event::Pump(PumpId::Makeup, true)), 0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn dst_spring_forward_never_fires_a_0230_top_off() {
     LocalSet::new()
         .run_until(async {

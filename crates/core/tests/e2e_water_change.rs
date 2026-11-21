@@ -910,7 +910,7 @@ async fn return_level_sump_pump_stuck_wet_runs_the_return_dry_while_refilling() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn return_level_level_outage_aborts_the_drain_and_keeps_the_return() {
+async fn return_level_level_outage_aborts_the_drain_and_holds_the_return_until_levels_return() {
     LocalSet::new()
         .run_until(async {
             let layout = Layout::REAL;
@@ -940,13 +940,20 @@ async fn return_level_level_outage_aborts_the_drain_and_keeps_the_return() {
             );
 
             sim.run_for(secs(5)).await;
-            sim.water().outage = false;
+            assert!(!sim.water().pump_on(PumpId::Return));
+            assert!(sim.status().await.return_held_after_drain);
+            let restored_at = {
+                let mut water = sim.water();
+                water.outage = false;
+                water.t_s
+            };
             sim.run_for(secs(5)).await;
 
             let status = sim.status().await;
             let record = status.last_water_change.expect("a record");
             assert_eq!(record.result, OperationResult::Aborted);
             assert_eq!(status.operation.state, OperationState::Idle);
+            assert!(!status.return_held_after_drain);
             assert_balanced(&sim);
 
             let water = sim.water();
@@ -954,12 +961,12 @@ async fn return_level_level_outage_aborts_the_drain_and_keeps_the_return() {
             assert!(water.pump_on(PumpId::Return));
             assert_eq!(water.count(Event::Pump(PumpId::Return, false)), 1);
             let restarted = water
-                .first_after(Event::Pump(PumpId::Return, true), 0.0)
+                .first_after(Event::Pump(PumpId::Return, true), outage_at)
                 .expect("return back on");
             assert!(
-                restarted - outage_at <= 2.1,
-                "return off {:.1} s into the outage",
-                restarted - outage_at
+                (0.0..=2.1).contains(&(restarted - restored_at)),
+                "return back {:.1} s after the levels",
+                restarted - restored_at
             );
             assert_eq!(water.return_dry_s, 0.0);
         })

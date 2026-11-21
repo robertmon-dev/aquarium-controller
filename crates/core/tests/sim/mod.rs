@@ -15,7 +15,7 @@ use aquarium_core::application::{
     pump_loop, PumpController, PumpService, PumpTiming, WaterLevelSampler,
 };
 use aquarium_core::domain::cron::CivilTime;
-use aquarium_core::domain::pump::{PumpId, PumpSettings, PumpsStatus};
+use aquarium_core::domain::pump::{Checkpoint, PumpId, PumpSettings, PumpsStatus};
 use aquarium_core::domain::water::{
     WaterLevelReading, WaterLevelRole, WaterLevelSnapshot, WaterLevelState,
 };
@@ -937,6 +937,12 @@ pub struct SimStore {
     ops: Mutex<Vec<StoreOp>>,
 }
 
+fn is_finished_checkpoint(bytes: &[u8]) -> bool {
+    bytes == b"null"
+        || serde_json::from_slice::<serde_json::Value>(bytes)
+            .is_ok_and(|value| value.get("finished").is_some())
+}
+
 impl SimStore {
     pub fn seed(&self, record: PumpRecord, bytes: &[u8]) {
         self.inner.put(record, bytes.to_vec());
@@ -966,7 +972,9 @@ impl SimStore {
                 record,
                 erase,
                 applied: false,
-                tombstone: !erase && bytes == b"null",
+                tombstone: record == PumpRecord::Checkpoint
+                    && !erase
+                    && is_finished_checkpoint(bytes),
             });
         }
 
@@ -997,7 +1005,7 @@ impl SimStore {
     pub fn holds_checkpoint(&self) -> bool {
         self.inner
             .get(PumpRecord::Checkpoint)
-            .is_some_and(|bytes| bytes != b"null")
+            .is_some_and(|bytes| serde_json::from_slice::<Checkpoint>(&bytes).is_ok())
     }
 
     fn admit(&self, record: PumpRecord, bytes: &[u8], erase: bool) -> bool {
@@ -1013,7 +1021,7 @@ impl SimStore {
             .expect("store poisoned")
             .is_none_or(|predicate| !predicate(record, bytes));
         let applied = within && wanted && !self.frozen();
-        let tombstone = !erase && bytes == b"null";
+        let tombstone = record == PumpRecord::Checkpoint && !erase && is_finished_checkpoint(bytes);
 
         if !applied {
             self.frozen.store(true, Ordering::Relaxed);
@@ -1307,7 +1315,9 @@ impl Sim {
     }
 
     pub fn published(&self) -> WaterLevelSnapshot {
-        self.levels.levels()
+        self.levels
+            .levels()
+            .map_or_else(WaterLevelSnapshot::dry, |sample| sample.levels)
     }
 
     pub fn crash(&mut self, power_lost: bool) {

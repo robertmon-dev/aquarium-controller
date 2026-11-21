@@ -186,6 +186,9 @@ async fn a_cancel_that_cannot_be_recorded_stops_the_drain_and_lands_once_storage
             assert!(!sim.water().pump_on(PumpId::Drain));
             assert!(sim.store.holds_checkpoint());
 
+            assert_eq!(sim.send("DELETE", WATER_CHANGE, "").await.0, 503);
+            assert_eq!(sim.send("DELETE", TOP_OFF, "").await.0, 204);
+
             let refused = sim.store.ops().iter().filter(|op| !op.applied).count();
             sim.run_for(secs(5)).await;
             assert!(sim.store.ops().iter().filter(|op| !op.applied).count() >= refused + 5);
@@ -207,6 +210,45 @@ async fn a_cancel_that_cannot_be_recorded_stops_the_drain_and_lands_once_storage
             assert_eq!(water.drained_l, drained_l);
             assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 1);
             assert_eq!(water.spilled_l, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_drain_keeps_its_gap_even_if_history_is_unwritable_at_restart() {
+    LocalSet::new()
+        .run_until(async {
+            for restart_before_recovery in [true, false] {
+                let mut sim = start().await;
+                assert_eq!(sim.send("POST", WATER_CHANGE, PLAN).await.0, 202);
+                sim.run_for(secs(12)).await;
+                assert!(sim.water().drained_l > 0.0);
+                sim.store.refuse(Some(|_, _| true));
+                assert_eq!(sim.send("DELETE", WATER_CHANGE, "").await.0, 503);
+                sim.store
+                    .refuse(Some(|record, _| record == PumpRecord::LastOperations));
+                sim.run_for(secs(2)).await;
+                assert!(!sim.status().await.invalidation_pending);
+                assert_eq!(sim.send("DELETE", WATER_CHANGE, "").await.0, 204);
+                if !restart_before_recovery {
+                    sim.store.refuse(None);
+                    sim.run_for(secs(2)).await;
+                }
+                let drained = sim.water().drained_l;
+                sim.restart(secs(5), true).await;
+                sim.run_for(secs(3)).await;
+                assert_eq!(sim.water().drained_l, drained);
+                assert_eq!(
+                    sim.status().await.last_water_change.unwrap().result,
+                    OperationResult::Aborted
+                );
+                sim.store.refuse(None);
+                sim.run_for(secs(2)).await;
+                assert_eq!(sim.send("DELETE", WATER_CHANGE, "").await.0, 204);
+                let (code, response) = sim.send("POST", WATER_CHANGE, PLAN).await;
+                assert_eq!(code, 423, "{response}");
+                assert!(response.contains("too recent"), "{response}");
+            }
         })
         .await;
 }

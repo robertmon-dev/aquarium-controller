@@ -293,3 +293,27 @@ async fn a_drain_relay_that_refuses_to_switch_off_keeps_the_makeup_off() {
         })
         .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn starting_a_drain_waits_for_a_confirmed_makeup_off() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start_stopping_at(None, "sump_return_level").await;
+            sim.relays.refuse_off(Some(PumpId::Makeup));
+            sim.service.start_water_change(PLAN).unwrap();
+            sim.run_for(secs(10)).await;
+
+            let status = sim.service.status();
+            assert_eq!(
+                status.channels.makeup.fault,
+                Some(ChannelFault::OutputError)
+            );
+            assert_eq!(status.channels.drain.blocked_by, Some(Blocker::Interlock));
+            assert_eq!(sim.water().drained_l, 0.0);
+
+            sim.relays.refuse_off(None);
+            sim.run_for(secs(3)).await;
+            assert!(sim.water().drained_l > 0.0);
+        })
+        .await;
+}

@@ -540,10 +540,10 @@ async fn power_cut_around_a_cancel_honours_only_acknowledged_cancels() {
                             assert_eq!(run.resumes, 1, "{label}");
                         }
                         if freeze == Some(1) {
-                            assert_ne!(
+                            assert_eq!(
                                 record(&run.sim, kind).map(|last| last.result),
                                 Some(OperationResult::Aborted),
-                                "{label}: the lost history write"
+                                "{label}: recover history from the terminal checkpoint"
                             );
                         }
                         assert_invariants(&run, kind, &label);
