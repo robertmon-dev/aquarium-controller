@@ -17,6 +17,7 @@ use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
 use aquarium_core::domain::pump::PumpSettings;
+use aquarium_core::ports::inbound::PumpControl;
 use aquarium_core::ports::outbound::Clock;
 
 pub const TOKEN: &str = "test-token";
@@ -171,6 +172,26 @@ pub async fn start_with_all(
         lighting,
         calibration,
         heaters,
+        pumps,
+        config(),
+    ));
+
+    addr
+}
+
+pub async fn start_with_pump_control<P: PumpControl + 'static>(pumps: Arc<P>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+
+    tokio::task::spawn_local(http::run(
+        listener,
+        Arc::new(InMemoryTelemetryStore::new()),
+        Arc::new(InMemoryLightingStore::new()),
+        Arc::new(CalibrationService::new(
+            calibration_defaults(),
+            VolatileCalibrationStore,
+        )),
+        heaters(),
         pumps,
         config(),
     ));
