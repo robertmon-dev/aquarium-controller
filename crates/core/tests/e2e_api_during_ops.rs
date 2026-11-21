@@ -9,7 +9,7 @@ use tokio::task::LocalSet;
 
 use aquarium_core::domain::pump::{
     Blocker, ChannelMode, ChannelStatus, OperationKind, OperationRecord, OperationResult,
-    OperationState, PumpId, PumpSettings, PumpsStatus,
+    OperationState, PumpId, PumpSettings, PumpsStatus, WaterChangePlan,
 };
 use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::ports::inbound::PumpControl;
@@ -471,6 +471,119 @@ async fn api_conflicting_starts_from_two_clients_admit_one_operation() {
             let last = finish(&sim, OperationKind::WaterChange).await;
             assert_eq!(last.result, OperationResult::SumpFull);
             assert_safe(&sim, Phase::TopOff);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn api_water_change_cancelled_before_it_drained_does_not_start_the_gap() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start_sim().await;
+            sim.run_for(secs(5)).await;
+            sim.service
+                .start_water_change(WaterChangePlan {
+                    drain_s: 60,
+                    settle_s: 60,
+                    refill_s: 600,
+                })
+                .expect("idle");
+            sim.service.cancel(OperationKind::WaterChange);
+            let cancelled = sim.service.status().last_water_change.expect("a record");
+            assert_eq!(cancelled.result, OperationResult::Aborted);
+            assert_eq!(cancelled.drain_ran_s, 0);
+
+            sim.run_for(secs(5)).await;
+            accepted(&sim, "POST", WATER_CHANGE, PLAN, 202).await;
+            let done = finish(&sim, OperationKind::WaterChange).await;
+            assert_eq!(done.result, OperationResult::SumpFull);
+            assert_eq!(done.drain_ran_s, 60);
+
+            sim.run_for(secs(5)).await;
+            let response = accepted(&sim, "POST", WATER_CHANGE, PLAN, 423).await;
+            assert!(response.contains("recent"), "got: {response}");
+
+            let water = sim.water();
+            assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 1);
+            assert!((water.drained_l - 25.0).abs() < LITRES_TOL);
+            drop(water);
+            assert_safe(&sim, Phase::Draining);
+        })
+        .await;
+}
+
+const SCHEDULED: &str = r#"{
+    "water_change":[{"cron":"* * * * *","drain_s":60,"settle_s":60,"refill_s":600}],
+    "top_off":[{"cron":"* * * * *","duration_s":300}]}"#;
+
+const RESCHEDULED: &str = r#"{
+    "water_change":[{"cron":"0 0 1 1 *","drain_s":1,"settle_s":0,"refill_s":1}],
+    "top_off":[{"cron":"0 0 1 1 *","duration_s":1}],
+    "flow_lph":{"makeup":300,"drain":750}}"#;
+
+async fn start_scheduled_in(phase: Phase) -> Sim {
+    let sim = start_sim().await;
+    let only_top_off = r#"{"water_change":[],"top_off":[{"cron":"* * * * *","duration_s":300}]}"#;
+
+    if phase == Phase::TopOff {
+        sim.water().evaporate(TOP_OFF_DEFICIT_L);
+        accepted(&sim, "PATCH", SETTINGS, only_top_off, 200).await;
+    } else {
+        accepted(&sim, "PATCH", SETTINGS, SCHEDULED, 200).await;
+    }
+
+    sim.run_until(LONG, "the scheduled phase", |status, _| {
+        status.operation.state == phase.state() && status.operation.kind == Some(phase.kind())
+    })
+    .await;
+    sim.run_for(secs(3)).await;
+    sim
+}
+
+#[tokio::test(start_paused = true)]
+async fn api_settings_patch_mid_phase_keeps_the_running_plan() {
+    LocalSet::new()
+        .run_until(async {
+            for phase in Phase::ALL {
+                let sim = start_scheduled_in(phase).await;
+                let before = sim.status().await.operation;
+
+                accepted(&sim, "PATCH", SETTINGS, RESCHEDULED, 200).await;
+                let after = sim.status().await.operation;
+                assert_eq!(after.state, before.state, "{phase:?}");
+                assert!(
+                    after.phase_remaining_s.expect("running")
+                        >= before.phase_remaining_s.expect("running").saturating_sub(1),
+                    "{phase:?}: {before:?} -> {after:?}"
+                );
+                assert!(
+                    (after.refilled_l.expect("makeup flow")
+                        - after.refill_ran_s as f32 * 300.0 / 3600.0)
+                        .abs()
+                        < FLOW_TOL_L,
+                    "{phase:?}: {after:?}"
+                );
+
+                let last = finish(&sim, phase.kind()).await;
+                assert_eq!(
+                    last.result,
+                    OperationResult::SumpFull,
+                    "{phase:?}: {last:?}"
+                );
+                match phase {
+                    Phase::TopOff => assert!(last.refill_ran_s > 1, "{phase:?}: {last:?}"),
+                    _ => {
+                        assert_eq!(last.drain_ran_s, 60, "{phase:?}");
+                        assert_eq!(last.settle_ran_s, 60, "{phase:?}");
+                        assert!(last.refill_ran_s > 1, "{phase:?}: {last:?}");
+                    }
+                }
+                assert_safe(&sim, phase);
+
+                let settings: PumpSettings = sim.fetch(SETTINGS).await;
+                assert_eq!(settings.water_change.first().map(|w| w.drain_s), Some(1));
+                assert_eq!(settings.flow_lph.makeup, Some(300));
+            }
         })
         .await;
 }
