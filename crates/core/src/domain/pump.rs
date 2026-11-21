@@ -24,6 +24,10 @@ pub const MAX_WATER_CHANGE_GAP_H: u32 = 168;
 pub const DEFAULT_WATER_CHANGE_GAP_H: u32 = 12;
 pub const MAX_RESERVOIR_L: u32 = 10_000;
 pub const REFILL_TIMEOUT_GRACE_S: u32 = 300;
+pub const MIN_REFILL_SHARE_PCT: u64 = 70;
+pub const STARVED_LOCKOUTS: usize = 3;
+pub const STARVED_WINDOW_S: u64 = 600;
+pub const STARVED_CLEAR_S: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,6 +99,7 @@ impl LevelConditions {
         snapshot: &WaterLevelSnapshot,
         refill_stop: Option<WaterLevelRole>,
     ) -> Self {
+        let snapshot = snapshot.clone().with_plausibility();
         let dangerous = |role: WaterLevelRole, danger: WaterLevelState| {
             let reading = snapshot.get(role);
             reading.faulty || reading.state == danger
@@ -566,6 +571,7 @@ pub enum OperationResult {
     Aborted,
     InterruptedByReboot,
     RefillTimeout,
+    Incomplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,6 +588,33 @@ pub struct OperationRecord {
     pub refill_ran_s: u32,
     pub result: OperationResult,
     pub resumed: bool,
+}
+
+impl OperationRecord {
+    pub fn graded(mut self, flows: FlowRates, sump_low: bool) -> Self {
+        let claims_full = matches!(
+            self.result,
+            OperationResult::Completed | OperationResult::SumpFull
+        );
+
+        if self.kind != OperationKind::WaterChange || !claims_full {
+            return self;
+        }
+
+        let short = match (flows.drain, flows.makeup) {
+            (Some(drain), Some(makeup)) => {
+                u64::from(self.refill_ran_s) * u64::from(makeup) * 100
+                    < MIN_REFILL_SHARE_PCT * u64::from(self.drain_ran_s) * u64::from(drain)
+            }
+            _ => false,
+        };
+
+        if short || sump_low {
+            self.result = OperationResult::Incomplete;
+        }
+
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -796,6 +829,31 @@ pub struct RuntimeCounters {
 pub struct LastOperations {
     pub top_off: Option<OperationRecord>,
     pub water_change: Option<OperationRecord>,
+
+    #[serde(default)]
+    pub drained_at: Option<u64>,
+}
+
+impl LastOperations {
+    pub fn remember(&mut self, operation: &Operation, record: OperationRecord) {
+        match record.kind {
+            OperationKind::TopOff => self.top_off = Some(record),
+            OperationKind::WaterChange => {
+                if operation.ran_ms[Phase::Draining.index()] > 0 {
+                    self.drained_at = record.started_at;
+                }
+                self.water_change = Some(record);
+            }
+        }
+    }
+
+    pub fn last_drain_started_at(&self) -> Option<u64> {
+        self.drained_at.or_else(|| {
+            self.water_change
+                .filter(|record| record.drain_ran_s > 0)
+                .and_then(|record| record.started_at)
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -936,6 +994,7 @@ pub struct PumpsStatus {
     pub last_top_off: Option<OperationRecord>,
     pub last_water_change: Option<OperationRecord>,
     pub last_skipped: Option<SkippedWindow>,
+    pub circulation_starved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -949,6 +1008,7 @@ pub struct PumpsTelemetry {
     pub drain: bool,
     pub operation_kind: Option<OperationKind>,
     pub operation_state: OperationState,
+    pub circulation_starved: bool,
 }
 
 impl PumpsTelemetry {
@@ -959,6 +1019,7 @@ impl PumpsTelemetry {
         drain: false,
         operation_kind: None,
         operation_state: OperationState::Idle,
+        circulation_starved: false,
     };
 }
 

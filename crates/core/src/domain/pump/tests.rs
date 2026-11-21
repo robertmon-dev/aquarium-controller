@@ -92,7 +92,10 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
 
 #[test]
 fn only_the_ready_sensor_says_the_reservoir_holds_a_water_change() {
-    let ready = snapshot(&[WaterLevelRole::ReservoirReady], &[]);
+    let ready = snapshot(
+        &[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirReady],
+        &[],
+    );
     assert!(LevelConditions::from_snapshot(&ready, None).reservoir_ready);
 
     let only_full = snapshot(
@@ -1106,4 +1109,223 @@ fn a_resumed_refill_waits_for_the_makeup_pump_before_a_full_sump_ends_it() {
         resumed.advance(0, SECOND, Some(full)),
         Step::Finished(OperationResult::SumpFull)
     );
+}
+
+#[test]
+fn level_conditions_distrust_an_implausible_return_chamber() {
+    let stuck = snapshot(
+        &[
+            WaterLevelRole::SumpReturnLevel,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::ReservoirReady,
+        ],
+        &[],
+    );
+
+    let levels = LevelConditions::from_snapshot(&stuck, Some(WaterLevelRole::SumpReturnLevel));
+
+    assert!(levels.sump_low);
+    assert!(levels.sump_full);
+    assert!(!levels.reservoir_empty && levels.reservoir_ready);
+}
+
+#[test]
+fn level_conditions_distrust_an_implausible_reservoir() {
+    let ready_over_empty = snapshot(
+        &[WaterLevelRole::SumpPump, WaterLevelRole::ReservoirReady],
+        &[],
+    );
+    let levels = LevelConditions::from_snapshot(&ready_over_empty, None);
+    assert!(levels.reservoir_empty);
+    assert!(!levels.reservoir_ready);
+
+    let full_over_low = snapshot(
+        &[
+            WaterLevelRole::SumpPump,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::ReservoirFull,
+        ],
+        &[],
+    );
+    let levels = LevelConditions::from_snapshot(&full_over_low, None);
+    assert!(!levels.reservoir_empty);
+    assert!(!levels.reservoir_ready);
+}
+
+const FLOWS: FlowRates = FlowRates {
+    makeup: Some(600),
+    drain: Some(1500),
+};
+
+fn change_record(drain_ran_s: u32, refill_ran_s: u32, result: OperationResult) -> OperationRecord {
+    OperationRecord {
+        kind: OperationKind::WaterChange,
+        started_at: Some(100),
+        drain_ran_s,
+        settle_ran_s: 30,
+        refill_ran_s,
+        result,
+        resumed: false,
+    }
+}
+
+#[test]
+fn a_refill_that_added_less_than_seventy_percent_of_the_drain_is_incomplete() {
+    for result in [OperationResult::SumpFull, OperationResult::Completed] {
+        let short = change_record(100, 174, result).graded(FLOWS, false);
+        assert_eq!(short.result, OperationResult::Incomplete, "{result:?}");
+
+        let enough = change_record(100, 175, result).graded(FLOWS, false);
+        assert_eq!(enough.result, result);
+    }
+}
+
+#[test]
+fn only_refills_that_claim_success_are_graded() {
+    for result in [
+        OperationResult::Overflow,
+        OperationResult::ReservoirEmpty,
+        OperationResult::Aborted,
+        OperationResult::InterruptedByReboot,
+        OperationResult::RefillTimeout,
+    ] {
+        assert_eq!(
+            change_record(100, 0, result).graded(FLOWS, true).result,
+            result
+        );
+    }
+}
+
+#[test]
+fn the_volume_rule_needs_both_flow_rates() {
+    for flows in [
+        FlowRates {
+            makeup: None,
+            drain: Some(1500),
+        },
+        FlowRates {
+            makeup: Some(600),
+            drain: None,
+        },
+        FlowRates::default(),
+    ] {
+        assert_eq!(
+            change_record(100, 0, OperationResult::SumpFull)
+                .graded(flows, false)
+                .result,
+            OperationResult::SumpFull
+        );
+    }
+}
+
+#[test]
+fn a_refill_that_ends_with_the_sump_still_low_is_incomplete() {
+    assert_eq!(
+        change_record(100, 600, OperationResult::Completed)
+            .graded(FlowRates::default(), true)
+            .result,
+        OperationResult::Incomplete
+    );
+    assert_eq!(
+        change_record(100, 600, OperationResult::SumpFull)
+            .graded(FLOWS, true)
+            .result,
+        OperationResult::Incomplete
+    );
+    assert_eq!(
+        change_record(100, 600, OperationResult::Completed)
+            .graded(FLOWS, false)
+            .result,
+        OperationResult::Completed
+    );
+}
+
+#[test]
+fn top_offs_are_never_graded() {
+    let record = OperationRecord {
+        kind: OperationKind::TopOff,
+        ..change_record(0, 10, OperationResult::Completed)
+    };
+
+    assert_eq!(
+        record.graded(FLOWS, true).result,
+        OperationResult::Completed
+    );
+}
+
+#[test]
+fn an_incomplete_result_is_snake_case_on_the_wire() {
+    assert_eq!(
+        serde_json::to_string(&OperationResult::Incomplete).expect("encode"),
+        r#""incomplete""#
+    );
+}
+
+fn finished_change(started_at: Option<u64>, drain_ms: u64) -> (Operation, OperationRecord) {
+    let mut operation = Operation::start(plan(10, 0, 10), started_at);
+    operation.ran_ms[Phase::Draining.index()] = drain_ms;
+    let record = operation.record(OperationResult::Aborted);
+    (operation, record)
+}
+
+#[test]
+fn only_a_water_change_that_drained_sets_the_gap() {
+    let mut last = LastOperations::default();
+
+    let (operation, record) = finished_change(Some(100), 0);
+    last.remember(&operation, record);
+    assert_eq!(last.water_change, Some(record));
+    assert_eq!(last.last_drain_started_at(), None);
+
+    let (operation, record) = finished_change(Some(200), 400);
+    last.remember(&operation, record);
+    assert_eq!(last.last_drain_started_at(), Some(200));
+
+    let (operation, record) = finished_change(Some(300), 0);
+    last.remember(&operation, record);
+    assert_eq!(last.water_change, Some(record));
+    assert_eq!(last.last_drain_started_at(), Some(200));
+}
+
+#[test]
+fn a_drained_water_change_without_a_start_time_clears_the_gap() {
+    let mut last = LastOperations::default();
+    let (operation, record) = finished_change(Some(200), 4000);
+    last.remember(&operation, record);
+
+    let (operation, record) = finished_change(None, 4000);
+    last.remember(&operation, record);
+
+    assert_eq!(last.last_drain_started_at(), None);
+}
+
+#[test]
+fn a_top_off_leaves_the_gap_alone() {
+    let mut last = LastOperations::default();
+    let (operation, record) = finished_change(Some(200), 4000);
+    last.remember(&operation, record);
+
+    let mut top_off = Operation::start(OperationPlan::top_off(60), Some(300));
+    top_off.ran_ms[Phase::Refilling.index()] = 60_000;
+    last.remember(&top_off, top_off.record(OperationResult::Completed));
+
+    assert_eq!(last.last_drain_started_at(), Some(200));
+    assert!(last.top_off.is_some());
+}
+
+#[test]
+fn history_stored_before_the_gap_mark_falls_back_to_the_last_water_change() {
+    let drained: LastOperations = serde_json::from_str(
+        r#"{"top_off":null,"water_change":{"kind":"water_change","started_at":500,
+            "drain_ran_s":3,"settle_ran_s":0,"refill_ran_s":0,"result":"aborted","resumed":false}}"#,
+    )
+    .expect("old history");
+    assert_eq!(drained.last_drain_started_at(), Some(500));
+
+    let undrained: LastOperations = serde_json::from_str(
+        r#"{"top_off":null,"water_change":{"kind":"water_change","started_at":500,
+            "drain_ran_s":0,"settle_ran_s":0,"refill_ran_s":0,"result":"aborted","resumed":false}}"#,
+    )
+    .expect("old history");
+    assert_eq!(undrained.last_drain_started_at(), None);
 }
