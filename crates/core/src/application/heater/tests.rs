@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -544,6 +545,38 @@ async fn tick_reports_a_change_only_when_an_output_or_fault_moved() {
     assert!(controller.tick(Some(&snapshot(Some(28.0), Some(20.5)))));
 }
 
+#[tokio::test(start_paused = true)]
+async fn ssr_probe_retries_off_before_switching_to_the_other_heater() {
+    let pins = FakeOutputs::default();
+    pins.refuse_off(Some(HeaterId::Tank));
+    let mut outputs = pins.clone();
+    let period = Duration::from_secs(2);
+    let task = tokio::spawn(async move { probe_heaters(&mut outputs, period).await });
+    for _ in 0..5 {
+        tokio::time::sleep(period).await;
+    }
+    assert!(pins.pin(HeaterId::Tank));
+    assert!(
+        pins.writes(HeaterId::Tank)
+            .iter()
+            .filter(|&&on| !on)
+            .count()
+            >= 2
+    );
+    assert!(pins.writes(HeaterId::Sump).is_empty());
+
+    pins.refuse_off(None);
+    tokio::time::timeout(period * 3, async {
+        while !pins.pin(HeaterId::Sump) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("sump test starts after tank OFF succeeds");
+    assert!(!pins.pin(HeaterId::Tank));
+    task.abort();
+}
+
 const WATCHDOG: Duration = Duration::from_secs(6);
 
 struct Loop {
@@ -551,6 +584,7 @@ struct Loop {
     outputs: FakeOutputs,
     service: Arc<TestService>,
     republish: Arc<Notify>,
+    heartbeat: Arc<AtomicU32>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -559,6 +593,7 @@ fn spawn_loop() -> Loop {
     let outputs = FakeOutputs::default();
     let service = shared_service();
     let republish = Arc::new(Notify::new());
+    let heartbeat = Arc::new(AtomicU32::new(0));
 
     let handle = tokio::spawn(heater_loop(
         HeaterController::new(outputs.clone(), Arc::clone(&service)),
@@ -566,6 +601,7 @@ fn spawn_loop() -> Loop {
         service.change_signal(),
         Arc::clone(&republish),
         WATCHDOG,
+        Arc::clone(&heartbeat),
     ));
 
     Loop {
@@ -573,8 +609,46 @@ fn spawn_loop() -> Loop {
         outputs,
         service,
         republish,
+        heartbeat,
         handle,
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_uncertain_heater_retries_off_without_new_samples() {
+    let subject = spawn_loop();
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(20.0), Some(28.0))));
+    expect_republish(&subject.republish).await;
+    assert!(subject.outputs.pin(HeaterId::Tank));
+
+    subject.outputs.refuse_off(Some(HeaterId::Tank));
+    subject
+        .tx
+        .send_replace(Some(snapshot(Some(28.0), Some(28.0))));
+    expect_republish(&subject.republish).await;
+    assert!(subject.outputs.pin(HeaterId::Tank));
+    let failed = subject.outputs.writes(HeaterId::Tank).len();
+
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert!(subject.outputs.writes(HeaterId::Tank).len() >= failed + 2);
+
+    subject.outputs.refuse_off(None);
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(!subject.outputs.pin(HeaterId::Tank));
+    assert_eq!(subject.service.status().tank.fault, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_heater_loop_beats_without_samples() {
+    let subject = spawn_loop();
+    tokio::task::yield_now().await;
+    let first = subject.heartbeat.load(Ordering::Relaxed);
+
+    tokio::time::sleep(WATCHDOG * 3).await;
+
+    assert!(subject.heartbeat.load(Ordering::Relaxed) >= first + 15);
 }
 
 async fn expect_republish(republish: &Notify) {

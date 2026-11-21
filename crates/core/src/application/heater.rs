@@ -1,8 +1,9 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use tokio::sync::{watch, Notify};
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::domain::heater::{
     decide, validate_override, Decision, HeaterFault, HeaterId, HeaterMode, HeaterSettings,
@@ -268,6 +269,10 @@ impl<O: HeaterOutputs, P: HeaterPersistence> HeaterController<O, P> {
         changed
     }
 
+    fn retrying(&self) -> bool {
+        self.uncertain.contains(&true)
+    }
+
     fn drive(&mut self, id: HeaterId, decision: Decision) -> Output {
         let index = id.index();
 
@@ -329,26 +334,60 @@ fn reading(sample: &TemperatureSample, id: HeaterId) -> Option<f32> {
     }
 }
 
+pub async fn probe_heaters(outputs: &mut impl HeaterOutputs, period: Duration) -> ! {
+    let mut ticker = tokio::time::interval(period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        for id in HeaterId::ALL {
+            ticker.tick().await;
+            match outputs.set(id, true) {
+                Ok(()) => tracing::info!(heater = id.name(), on = true, "SSR probe"),
+                Err(reason) => tracing::error!(heater = id.name(), reason, "SSR probe ON failed"),
+            }
+            loop {
+                ticker.tick().await;
+                match outputs.set(id, false) {
+                    Ok(()) => {
+                        tracing::info!(heater = id.name(), on = false, "SSR probe");
+                        break;
+                    }
+                    Err(reason) => {
+                        tracing::error!(heater = id.name(), reason, "SSR probe retrying OFF")
+                    }
+                }
+            }
+        }
+    }
+}
+
+const OUTPUT_RETRY: Duration = Duration::from_secs(1);
+
 pub async fn heater_loop<O, P>(
     mut controller: HeaterController<O, P>,
     mut samples: watch::Receiver<Option<TemperatureSample>>,
     api_changed: Arc<Notify>,
     republish: Arc<Notify>,
     watchdog: Duration,
+    heartbeat: Arc<AtomicU32>,
 ) where
     O: HeaterOutputs,
     P: HeaterPersistence,
 {
     let mut latest: Option<TemperatureSample> = None;
     let mut stale_at = Some(Instant::now() + watchdog);
+    let mut ticker = tokio::time::interval(OUTPUT_RETRY);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
     loop {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
+
         let wake_at = [stale_at, controller.service.next_override_expiry()]
             .into_iter()
             .flatten()
             .min();
 
         let announce = tokio::select! {
+            biased;
             received = samples.changed() => {
                 if received.is_err() {
                     controller.tick(None);
@@ -360,6 +399,12 @@ pub async fn heater_loop<O, P>(
             }
             () = api_changed.notified() => true,
             () = sleep_until_some(wake_at) => true,
+            _ = ticker.tick() => {
+                if !controller.retrying() {
+                    continue;
+                }
+                false
+            }
         };
 
         let now = Instant::now();
