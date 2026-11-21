@@ -38,7 +38,7 @@ where
         }
 
         if self.filters.iter().all(LevelFilter::is_settled) {
-            self.sink.publish(snapshot);
+            self.sink.publish(snapshot.with_plausibility());
         }
     }
 }
