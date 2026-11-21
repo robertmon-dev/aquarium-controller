@@ -233,13 +233,16 @@ async fn run() -> anyhow::Result<()> {
     let levels = Arc::new(InMemoryWaterLevelStore::new());
 
     let sampler = if components.water_level.is_initialized() {
-        let pins = Xkc25Adapter::new(
-            peripherals.pins.gpio11,
-            peripherals.pins.gpio12,
-            peripherals.pins.gpio13,
-            peripherals.pins.gpio14,
-            peripherals.pins.gpio15,
-        )
+        let pins = Xkc25Adapter::new([
+            peripherals.pins.gpio11.degrade_input(),
+            peripherals.pins.gpio12.degrade_input(),
+            peripherals.pins.gpio13.degrade_input(),
+            peripherals.pins.gpio14.degrade_input(),
+            peripherals.pins.gpio15.degrade_input(),
+            peripherals.pins.gpio21.degrade_input(),
+            peripherals.pins.gpio10.degrade_input(),
+            peripherals.pins.gpio39.degrade_input(),
+        ])
         .context("Failed to initialize XKC-Y25 level inputs")?;
 
         Some(WaterLevelSampler::new(
