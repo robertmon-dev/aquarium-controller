@@ -240,3 +240,19 @@ fn a_sensor_that_glitches_at_boot_holds_back_the_first_snapshot() {
         WaterLevelState::Dry
     );
 }
+
+#[test]
+fn an_implausible_pair_is_published_faulty() {
+    let harness = Harness::new();
+    harness.set(WaterLevelRole::SumpReturnLevel, true);
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, IMMEDIATE);
+
+    sampler.tick();
+
+    let snapshot = sink.published.borrow().last().cloned().expect("published");
+    assert!(snapshot.get(WaterLevelRole::SumpReturnLevel).faulty);
+    assert!(snapshot.get(WaterLevelRole::SumpPump).faulty);
+    assert!(!snapshot.get(WaterLevelRole::MainTank).faulty);
+}
