@@ -52,9 +52,12 @@ pub struct Layout {
     pub sump_pump: Mount,
     pub sump_biological: Mount,
     pub sump_mechanical: Mount,
+    pub sump_return_level: Mount,
     pub main_tank_margin_l: f64,
     pub reservoir_l: f64,
     pub reserve_wet_l: f64,
+    pub reservoir_ready_l: f64,
+    pub reservoir_full_l: f64,
     pub return_lph: f64,
     pub drain_lph: f64,
     pub makeup_lph: f64,
@@ -84,20 +87,18 @@ impl Layout {
             chamber: 1,
             height_cm: 36.0,
         },
-        main_tank_margin_l: 2.0,
-        reservoir_l: 100.0,
-        reserve_wet_l: 3.0,
-        return_lph: 3000.0,
-        drain_lph: 1500.0,
-        makeup_lph: 600.0,
-    };
-
-    pub const PROPOSED: Self = Self {
-        sump_biological: Mount {
+        sump_return_level: Mount {
             chamber: 4,
             height_cm: 25.0,
         },
-        ..Self::REAL
+        main_tank_margin_l: 2.0,
+        reservoir_l: 100.0,
+        reserve_wet_l: 3.0,
+        reservoir_ready_l: 50.0,
+        reservoir_full_l: 95.0,
+        return_lph: 3000.0,
+        drain_lph: 1500.0,
+        makeup_lph: 600.0,
     };
 
     pub const fn wide_return_chamber(self) -> Self {
@@ -195,6 +196,7 @@ pub struct Aquarium {
     pub outage: bool,
     pub drained_l: f64,
     pub added_l: f64,
+    pub evaporated_l: f64,
     pub spilled_l: f64,
     pub tank_spilled_l: f64,
     pub return_dry_s: f64,
@@ -219,6 +221,7 @@ impl Aquarium {
             outage: false,
             drained_l: 0.0,
             added_l: 0.0,
+            evaporated_l: 0.0,
             spilled_l: 0.0,
             tank_spilled_l: 0.0,
             return_dry_s: 0.0,
@@ -238,7 +241,8 @@ impl Aquarium {
     }
 
     pub fn balance_error_l(&self) -> f64 {
-        self.stored_l() + self.drained_l + self.spilled_l + self.tank_spilled_l - self.initial_l
+        self.stored_l() + self.drained_l + self.evaporated_l + self.spilled_l + self.tank_spilled_l
+            - self.initial_l
     }
 
     pub fn sump_l(&self) -> f64 {
@@ -272,6 +276,12 @@ impl Aquarium {
         } else {
             self.baffled_level_cm()
         }
+    }
+
+    pub fn evaporate(&mut self, litres: f64) {
+        self.return_l -= litres;
+        self.evaporated_l += litres;
+        self.track_sensors();
     }
 
     pub fn pump_on(&self, id: PumpId) -> bool {
@@ -373,10 +383,13 @@ impl Aquarium {
             WaterLevelRole::SumpPump => mounted(layout.sump_pump),
             WaterLevelRole::SumpBiological => mounted(layout.sump_biological),
             WaterLevelRole::SumpMechanical => mounted(layout.sump_mechanical),
+            WaterLevelRole::SumpReturnLevel => mounted(layout.sump_return_level),
             WaterLevelRole::MainTank => {
                 self.tank_l > layout.tank_weir_l + layout.main_tank_margin_l
             }
             WaterLevelRole::SumpReserve => self.reservoir_l >= layout.reserve_wet_l,
+            WaterLevelRole::ReservoirReady => self.reservoir_l >= layout.reservoir_ready_l,
+            WaterLevelRole::ReservoirFull => self.reservoir_l >= layout.reservoir_full_l,
         }
     }
 

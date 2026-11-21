@@ -8,7 +8,8 @@ use std::time::Duration;
 use tokio::task::LocalSet;
 
 use aquarium_core::domain::pump::{
-    Blocker, OperationKind, OperationRecord, OperationResult, OperationState, PumpId, PumpsStatus,
+    Blocker, OperationKind, OperationRecord, OperationResult, OperationState, PumpId, PumpSettings,
+    PumpsStatus,
 };
 use aquarium_core::domain::water::WaterLevelRole;
 
@@ -20,6 +21,7 @@ const SECONDS_TOL: f64 = 1.5;
 const BALANCE_TOL: f64 = 1e-6;
 
 const WATER_CHANGE: &str = "/api/water-change";
+const TOP_OFF: &str = "/api/pumps/top-off";
 const SETTINGS: &str = "/api/pumps/settings";
 const RETURN_OVERRIDE: &str = "/api/pumps/return/override";
 
@@ -114,9 +116,9 @@ struct Margins {
     drained_l: f64,
 }
 
-async fn proposed_layout_full_water_change(layout: Layout) -> Margins {
+async fn return_level_full_water_change(layout: Layout) -> Margins {
     let sim = Sim::start(layout).await;
-    configure(&sim, Some("sump_biological")).await;
+    configure(&sim, Some("sump_return_level")).await;
     start_water_change(&sim, 300, 30, 750).await;
 
     sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
@@ -198,28 +200,37 @@ async fn proposed_layout_full_water_change(layout: Layout) -> Margins {
     assert!(!water.pump_on(PumpId::Makeup) && !water.pump_on(PumpId::Drain));
     assert!(water.pump_on(PumpId::Return));
 
+    assert_eq!(
+        water.count(Event::Sensor(WaterLevelRole::ReservoirReady, false)),
+        0
+    );
+    assert!(water
+        .first_after(Event::Sensor(WaterLevelRole::ReservoirFull, false), 0.0)
+        .is_some());
+    assert!(water.reservoir_l < layout.reservoir_full_l);
+
     Margins {
         drained_l: water.drained_l,
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_full_water_change_ends_with_sump_full() {
+async fn return_level_full_water_change_ends_with_sump_full() {
     LocalSet::new()
         .run_until(async {
-            let margins = proposed_layout_full_water_change(Layout::PROPOSED).await;
+            let margins = return_level_full_water_change(Layout::REAL).await;
             assert_near(margins.drained_l, 8.77, 0.5, "small chamber buffer");
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_wide_return_chamber_doubles_the_margins() {
+async fn return_level_wide_return_chamber_doubles_the_margins() {
     LocalSet::new()
         .run_until(async {
-            let small = Layout::PROPOSED;
-            let wide = Layout::PROPOSED.wide_return_chamber();
-            let margins = proposed_layout_full_water_change(wide).await;
+            let small = Layout::REAL;
+            let wide = Layout::REAL.wide_return_chamber();
+            let margins = return_level_full_water_change(wide).await;
 
             assert_near(margins.drained_l, 19.74, 0.5, "wide chamber buffer");
             assert_near(
@@ -339,12 +350,13 @@ async fn real_layout_without_stop_sensor_spills_on_a_long_refill() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_reservoir_running_out_ends_the_refill() {
+async fn return_level_stuck_wet_ready_sensor_still_ends_the_refill_on_an_empty_reservoir() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED.with_reservoir(5.0);
+            let layout = Layout::REAL.with_reservoir(5.0);
             let sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            sim.water().faults[WaterLevelRole::ReservoirReady.index()] = Some(Fault::StuckWet);
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 300, 30, 750).await;
 
             let record = finish(&sim).await;
@@ -363,12 +375,12 @@ async fn proposed_layout_reservoir_running_out_ends_the_refill() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_return_override_pauses_the_refill() {
+async fn return_level_return_override_pauses_the_refill() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED;
+            let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 300, 30, 750).await;
 
             sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
@@ -419,12 +431,12 @@ async fn proposed_layout_return_override_pauses_the_refill() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_restart_mid_drain_resumes_and_completes() {
+async fn return_level_restart_mid_drain_resumes_and_completes() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED.wide_return_chamber();
+            let layout = Layout::REAL.wide_return_chamber();
             let mut sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 40, 30, 750).await;
 
             sim.run_until(LONG, "25 s of drain", |status, _| {
@@ -475,12 +487,12 @@ async fn proposed_layout_restart_mid_drain_resumes_and_completes() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_second_restart_in_one_operation_suspends() {
+async fn return_level_second_restart_in_one_operation_suspends() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED.wide_return_chamber();
+            let layout = Layout::REAL.wide_return_chamber();
             let mut sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 40, 30, 750).await;
 
             sim.run_until(LONG, "10 s of drain", |status, _| {
@@ -522,7 +534,7 @@ async fn proposed_layout_second_restart_in_one_operation_suspends() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_cron_window_fires_and_the_gap_skips_the_next() {
+async fn return_level_cron_window_fires_and_the_gap_skips_the_next() {
     LocalSet::new()
         .run_until(async {
             let start = civil(BASE_EPOCH);
@@ -537,8 +549,8 @@ async fn proposed_layout_cron_window_fires_and_the_gap_skips_the_next() {
                 (0, 9, 58, 22, 11)
             );
 
-            let sim = Sim::start(Layout::PROPOSED).await;
-            configure(&sim, Some("sump_biological")).await;
+            let sim = Sim::start(Layout::REAL).await;
+            configure(&sim, Some("sump_return_level")).await;
             let (code, response) = sim
                 .send(
                     "PATCH",
@@ -580,13 +592,13 @@ async fn proposed_layout_cron_window_fires_and_the_gap_skips_the_next() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_sump_pump_stuck_wet_runs_the_return_dry() {
+async fn return_level_sump_pump_stuck_wet_runs_the_return_dry() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED;
+            let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
             sim.water().faults[WaterLevelRole::SumpPump.index()] = Some(Fault::StuckWet);
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 600, 30, 60).await;
 
             sim.run_until(LONG, "settling", in_state(OperationState::Settling))
@@ -623,12 +635,12 @@ async fn proposed_layout_sump_pump_stuck_wet_runs_the_return_dry() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_level_outage_aborts_the_drain_and_keeps_the_return() {
+async fn return_level_level_outage_aborts_the_drain_and_keeps_the_return() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED;
+            let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 300, 30, 750).await;
 
             sim.run_until(LONG, "5 s of drain", |status, _| {
@@ -681,7 +693,7 @@ async fn real_layout_faulty_or_stuck_dry_reserve_sensor_refuses_a_top_off() {
             sim.run_for(secs(1)).await;
 
             let top_off = r#"{"duration_s":60}"#;
-            let (code, response) = sim.send("POST", "/api/pumps/top-off", top_off).await;
+            let (code, response) = sim.send("POST", TOP_OFF, top_off).await;
             assert_eq!(code, 423, "got: {response}");
             assert!(
                 response.contains("the makeup reservoir is empty"),
@@ -690,24 +702,24 @@ async fn real_layout_faulty_or_stuck_dry_reserve_sensor_refuses_a_top_off() {
 
             sim.water().faults[WaterLevelRole::SumpReserve.index()] = Some(Fault::StuckDry);
             sim.run_for(secs(1)).await;
-            let (code, response) = sim.send("POST", "/api/pumps/top-off", top_off).await;
+            let (code, response) = sim.send("POST", TOP_OFF, top_off).await;
             assert_eq!(code, 423, "got: {response}");
 
             sim.water().faults[WaterLevelRole::SumpReserve.index()] = None;
             sim.run_for(secs(1)).await;
-            let (code, response) = sim.send("POST", "/api/pumps/top-off", top_off).await;
+            let (code, response) = sim.send("POST", TOP_OFF, top_off).await;
             assert_eq!(code, 202, "got: {response}");
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn proposed_layout_blocked_weir_ends_the_refill_with_overflow() {
+async fn return_level_blocked_weir_ends_the_refill_with_overflow() {
     LocalSet::new()
         .run_until(async {
-            let layout = Layout::PROPOSED;
+            let layout = Layout::REAL;
             let sim = Sim::start(layout).await;
-            configure(&sim, Some("sump_biological")).await;
+            configure(&sim, Some("sump_return_level")).await;
             start_water_change(&sim, 300, 30, 750).await;
 
             sim.run_until(LONG, "refill", in_state(OperationState::Refilling))
@@ -727,6 +739,100 @@ async fn proposed_layout_blocked_weir_ends_the_refill_with_overflow() {
             assert!(water.tank_l > layout.tank_weir_l + layout.main_tank_margin_l);
             assert_eq!(water.spilled_l, 0.0);
             assert_eq!(water.tank_spilled_l, 0.0);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn return_level_default_sensor_tops_off_while_the_reservoir_is_too_low_for_a_change() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL.with_reservoir(30.0);
+            let sim = Sim::start(layout).await;
+            let settings: PumpSettings = sim.fetch(SETTINGS).await;
+            assert_eq!(
+                settings.refill_stop_sensor,
+                Some(WaterLevelRole::SumpReturnLevel)
+            );
+
+            sim.water().evaporate(2.0);
+            sim.run_for(secs(1)).await;
+
+            let (code, response) = sim
+                .send(
+                    "POST",
+                    WATER_CHANGE,
+                    r#"{"drain_s":300,"settle_s":30,"refill_s":750}"#,
+                )
+                .await;
+            assert_eq!(code, 423, "got: {response}");
+            assert!(
+                response.contains("the makeup reservoir does not hold enough for a water change"),
+                "got: {response}"
+            );
+
+            let (code, response) = sim.send("POST", TOP_OFF, r#"{"duration_s":120}"#).await;
+            assert_eq!(code, 202, "got: {response}");
+
+            sim.run_until(LONG, "the top-off to finish", |status, _| {
+                status.operation.state == OperationState::Idle && status.last_top_off.is_some()
+            })
+            .await;
+            let status = sim.status().await;
+            let record = status.last_top_off.expect("a finished top-off");
+            assert_eq!(record.result, OperationResult::SumpFull);
+            assert_eq!(status.last_water_change, None);
+            assert_balanced(&sim);
+
+            let water = sim.water();
+            assert_near(water.added_l, 2.0, LITRES_TOL, "evaporation replaced");
+            assert_near(
+                water.return_level_cm(),
+                layout.return_operating_cm,
+                LEVEL_TOL_CM,
+                "back at the operating level",
+            );
+            assert_eq!(water.drained_l, 0.0);
+            assert_eq!(water.spilled_l, 0.0);
+            assert!(!water.pump_on(PumpId::Makeup));
+            assert!(water.pump_on(PumpId::Return));
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn return_level_scheduled_water_change_is_skipped_until_the_reservoir_is_ready() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = Layout::REAL.with_reservoir(Layout::REAL.reservoir_ready_l - 1.0);
+            let sim = Sim::start(layout).await;
+            configure(&sim, Some("sump_return_level")).await;
+            let (code, response) = sim
+                .send(
+                    "PATCH",
+                    SETTINGS,
+                    r#"{"water_change":[
+                        {"cron":"0 10 * * sun","drain_s":300,"settle_s":30,"refill_s":750}]}"#,
+                )
+                .await;
+            assert_eq!(code, 200, "got: {response}");
+
+            sim.run_until(secs(200), "the 10:00 window", |status, _| {
+                status.last_skipped.is_some()
+            })
+            .await;
+            let status = sim.status().await;
+            let skipped = status.last_skipped.expect("a skipped window");
+            assert_eq!(skipped.kind, OperationKind::WaterChange);
+            assert_eq!(skipped.blocked_by, Some(Blocker::ReservoirLow));
+            assert_eq!(skipped.at, Some(BASE_EPOCH + 120));
+            assert_eq!(status.operation.state, OperationState::Idle);
+            assert_eq!(status.last_water_change, None);
+
+            let water = sim.water();
+            assert_eq!(water.drained_l, 0.0);
+            assert_eq!(water.added_l, 0.0);
+            assert_eq!(water.count(Event::Pump(PumpId::Drain, true)), 0);
         })
         .await;
 }
