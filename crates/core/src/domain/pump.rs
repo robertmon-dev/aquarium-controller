@@ -121,6 +121,7 @@ pub enum Blocker {
     SumpFull,
     RecentWaterChange,
     ReservoirLow,
+    WaterChange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
