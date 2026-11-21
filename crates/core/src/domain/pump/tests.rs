@@ -4,6 +4,7 @@ use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 const HEALTHY: LevelConditions = LevelConditions {
     sump_low: false,
     reservoir_empty: false,
+    reservoir_ready: true,
     tank_overflow: false,
     sump_full: false,
 };
@@ -48,7 +49,11 @@ fn pump_names_round_trip() {
 #[test]
 fn level_conditions_treat_faulty_sensors_as_dangerous() {
     let wet_sump_and_reserve = snapshot(
-        &[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve],
+        &[
+            WaterLevelRole::SumpPump,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::ReservoirReady,
+        ],
         &[],
     );
     assert_eq!(
@@ -58,13 +63,19 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
 
     let all_dry = LevelConditions::from_snapshot(&WaterLevelSnapshot::dry(), None);
     assert!(all_dry.sump_low && all_dry.reservoir_empty && !all_dry.tank_overflow);
+    assert!(!all_dry.reservoir_ready);
 
     let faulty = snapshot(
-        &[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve],
+        &[
+            WaterLevelRole::SumpPump,
+            WaterLevelRole::SumpReserve,
+            WaterLevelRole::ReservoirReady,
+        ],
         &[
             WaterLevelRole::SumpPump,
             WaterLevelRole::SumpReserve,
             WaterLevelRole::MainTank,
+            WaterLevelRole::ReservoirReady,
         ],
     );
     assert_eq!(
@@ -72,10 +83,29 @@ fn level_conditions_treat_faulty_sensors_as_dangerous() {
         LevelConditions {
             sump_low: true,
             reservoir_empty: true,
+            reservoir_ready: false,
             tank_overflow: true,
             sump_full: false,
         }
     );
+}
+
+#[test]
+fn only_the_ready_sensor_says_the_reservoir_holds_a_water_change() {
+    let ready = snapshot(&[WaterLevelRole::ReservoirReady], &[]);
+    assert!(LevelConditions::from_snapshot(&ready, None).reservoir_ready);
+
+    let only_full = snapshot(
+        &[WaterLevelRole::SumpReserve, WaterLevelRole::ReservoirFull],
+        &[],
+    );
+    assert!(!LevelConditions::from_snapshot(&only_full, None).reservoir_ready);
+
+    let faulty = snapshot(
+        &[WaterLevelRole::ReservoirReady],
+        &[WaterLevelRole::ReservoirReady],
+    );
+    assert!(!LevelConditions::from_snapshot(&faulty, None).reservoir_ready);
 }
 
 #[test]
@@ -327,9 +357,13 @@ fn settings_validation_covers_every_field() {
 
 #[test]
 fn the_refill_stop_sensor_must_sit_in_the_sump() {
-    assert_eq!(defaults().refill_stop_sensor, None);
+    assert_eq!(
+        defaults().refill_stop_sensor,
+        Some(WaterLevelRole::SumpReturnLevel)
+    );
 
     for role in [
+        WaterLevelRole::SumpReturnLevel,
         WaterLevelRole::SumpMechanical,
         WaterLevelRole::SumpBiological,
     ] {
@@ -342,12 +376,14 @@ fn the_refill_stop_sensor_must_sit_in_the_sump() {
         WaterLevelRole::SumpPump,
         WaterLevelRole::MainTank,
         WaterLevelRole::SumpReserve,
+        WaterLevelRole::ReservoirReady,
+        WaterLevelRole::ReservoirFull,
     ] {
         let mut settings = defaults();
         settings.refill_stop_sensor = Some(role);
         assert_eq!(
             settings.validate(),
-            Err("refill_stop_sensor must be sump_mechanical or sump_biological"),
+            Err("refill_stop_sensor must be sump_return_level, sump_mechanical or sump_biological"),
             "{role:?}"
         );
     }
@@ -409,8 +445,25 @@ fn settings_stored_before_the_refill_safeguards_still_load() {
     .expect("old settings");
 
     assert_eq!(stored.resume_window_s, 120);
-    assert_eq!(stored.refill_stop_sensor, None);
+    assert_eq!(
+        stored.refill_stop_sensor,
+        Some(WaterLevelRole::SumpReturnLevel)
+    );
     assert_eq!(stored.min_water_change_gap_h, DEFAULT_WATER_CHANGE_GAP_H);
+}
+
+#[test]
+fn a_stored_null_refill_stop_sensor_stays_cleared() {
+    let stored: PumpSettings = serde_json::from_str(
+        r#"{"top_off":[],"water_change":[],"flow_lph":{"makeup":null,"drain":null},"resume_window_s":120,"refill_stop_sensor":null}"#,
+    )
+    .expect("settings");
+
+    assert_eq!(stored.refill_stop_sensor, None);
+
+    let round_trip: PumpSettings =
+        serde_json::from_str(&serde_json::to_string(&stored).expect("encodes")).expect("decodes");
+    assert_eq!(round_trip.refill_stop_sensor, None);
 }
 
 #[test]

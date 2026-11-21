@@ -16,10 +16,13 @@ pub enum WaterLevelRole {
     SumpPump,
     MainTank,
     SumpReserve,
+    SumpReturnLevel,
+    ReservoirReady,
+    ReservoirFull,
 }
 
 impl WaterLevelRole {
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 8;
 
     pub const ALL: [Self; Self::COUNT] = [
         Self::SumpMechanical,
@@ -27,6 +30,9 @@ impl WaterLevelRole {
         Self::SumpPump,
         Self::MainTank,
         Self::SumpReserve,
+        Self::SumpReturnLevel,
+        Self::ReservoirReady,
+        Self::ReservoirFull,
     ];
 
     pub const fn index(self) -> usize {
@@ -36,6 +42,9 @@ impl WaterLevelRole {
             Self::SumpPump => 2,
             Self::MainTank => 3,
             Self::SumpReserve => 4,
+            Self::SumpReturnLevel => 5,
+            Self::ReservoirReady => 6,
+            Self::ReservoirFull => 7,
         }
     }
 }
