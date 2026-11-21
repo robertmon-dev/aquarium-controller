@@ -45,6 +45,10 @@ fn populated() -> TankTelemetryDto {
         wet: false,
         faulty: true,
     };
+    dto.water_level.reservoir_ready = WaterLevelEntryDto {
+        wet: true,
+        faulty: false,
+    };
 
     dto
 }
@@ -122,6 +126,9 @@ fn each_water_level_sensor_gets_its_own_tagged_line() {
         "sump_pump",
         "main_tank",
         "sump_reserve",
+        "sump_return_level",
+        "reservoir_ready",
+        "reservoir_full",
     ] {
         assert!(
             encoded.contains(&format!("aquarium_water_level,sensor={sensor} ")),
@@ -135,6 +142,10 @@ fn each_water_level_sensor_gets_its_own_tagged_line() {
     );
     assert!(
         encoded.contains("aquarium_water_level,sensor=main_tank wet=false,faulty=true"),
+        "got: {encoded}"
+    );
+    assert!(
+        encoded.contains("aquarium_water_level,sensor=reservoir_ready wet=true,faulty=false"),
         "got: {encoded}"
     );
 }
