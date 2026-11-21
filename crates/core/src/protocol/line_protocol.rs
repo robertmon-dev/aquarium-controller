@@ -192,6 +192,7 @@ fn result_name(result: OperationResult) -> &'static str {
         OperationResult::ReservoirEmpty => "reservoir_empty",
         OperationResult::Aborted => "aborted",
         OperationResult::InterruptedByReboot => "interrupted_by_reboot",
+        OperationResult::RefillTimeout => "refill_timeout",
     }
 }
 

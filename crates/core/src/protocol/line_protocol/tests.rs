@@ -499,3 +499,12 @@ fn a_refill_stopped_by_a_full_sump_is_tagged() {
     let encoded = encode_operation(&event).expect("encodes");
     assert!(encoded.contains(",result=sump_full "), "{encoded}");
 }
+
+#[test]
+fn a_refill_timeout_is_tagged() {
+    let mut event = finished_water_change();
+    event.record.result = OperationResult::RefillTimeout;
+
+    let encoded = encode_operation(&event).expect("encodes");
+    assert!(encoded.contains(",result=refill_timeout "), "{encoded}");
+}
