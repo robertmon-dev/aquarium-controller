@@ -60,6 +60,7 @@ impl<Q, L, C, H, P> FromRef<AppState<Q, L, C, H, P>> for CalibrationState<C> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router<Q, L, C, H, P>(
     telemetry: Arc<Q>,
     lighting: Arc<L>,
