@@ -188,6 +188,7 @@ fn result_name(result: OperationResult) -> &'static str {
     match result {
         OperationResult::Completed => "completed",
         OperationResult::Overflow => "overflow",
+        OperationResult::SumpFull => "sump_full",
         OperationResult::ReservoirEmpty => "reservoir_empty",
         OperationResult::Aborted => "aborted",
         OperationResult::InterruptedByReboot => "interrupted_by_reboot",

@@ -479,3 +479,12 @@ fn an_operation_without_a_finish_time_is_not_exported() {
 
     assert_eq!(encode_operation(&event), None);
 }
+
+#[test]
+fn a_refill_stopped_by_a_full_sump_is_tagged() {
+    let mut event = finished_water_change();
+    event.record.result = OperationResult::SumpFull;
+
+    let encoded = encode_operation(&event).expect("encodes");
+    assert!(encoded.contains(",result=sump_full "), "{encoded}");
+}
