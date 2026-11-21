@@ -433,15 +433,14 @@ async fn api_conflicting_starts_from_two_clients_admit_one_operation() {
             );
             sim.run_for(secs(2)).await;
             let status = sim.service.status();
-            let water = sim.water();
+            let draining = sim.water().pump_on(PumpId::Drain);
             if restart.0 == 202 {
                 assert_eq!(status.operation.state, OperationState::Draining);
-                assert!(water.pump_on(PumpId::Drain));
+                assert!(draining);
             } else {
                 assert_eq!(status.operation.state, OperationState::Idle);
-                assert!(!water.pump_on(PumpId::Drain));
+                assert!(!draining);
             }
-            drop(water);
 
             let sim = start_sim().await;
             sim.water().evaporate(TOP_OFF_DEFICIT_L);
