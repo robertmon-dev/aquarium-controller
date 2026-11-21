@@ -97,6 +97,13 @@ export const CHARTS: ChartSpec[] = [
     kind: "strip",
   },
   {
+    id: "waterChangePhase",
+    measurement: "aquarium_pumps",
+    fields: ["water_change_phase"],
+    unit: "",
+    kind: "line",
+  },
+  {
     id: "systemState",
     measurement: "aquarium_health",
     fields: ["leak", "water_healthy"],
