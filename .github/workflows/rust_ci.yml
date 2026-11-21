@@ -22,6 +22,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  WIFI_SSID: ci-placeholder
+  WIFI_PASS: ci-placeholder
+  API_TOKEN: ci-placeholder
 
 jobs:
   rust-checks:
