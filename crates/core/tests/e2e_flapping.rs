@@ -19,6 +19,9 @@ const RESERVOIR_L: f64 = 150.0;
 const RIPPLE_CM: f64 = 0.3;
 const WAVE_CM: f64 = 1.0;
 const TOP_OFF_DEFICIT_L: f64 = 15.0;
+const EVAPORATION_L_PER_DAY: f64 = 10.0;
+const REST_S: f64 = 3.0 * 3600.0;
+const SLACK_L: f64 = 0.1;
 const SEED: u64 = 0xF1A9;
 const RESTART_DELAY_S: f64 = 30.0;
 const MIN_MAKEUP_BURST_S: f64 = 5.0;
@@ -138,7 +141,11 @@ struct Waves {
     bursts: usize,
     shortest_burst_s: f64,
     faulty_during: Vec<WaterLevelRole>,
-    faulty_at_rest: Vec<WaterLevelRole>,
+    stop_flagged_at_rest_s: f64,
+}
+
+fn stop_overshoot_l(layout: &Layout, wave_cm: f64) -> f64 {
+    wave_cm * layout.return_area_l_per_cm() + layout.makeup_l_per_s() * debounce_s()
 }
 
 async fn water_change_in_waves(wave_cm: f64) -> Waves {
@@ -161,14 +168,18 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
     let finished = sim.water().t_s;
     let deficit_l = sim.water().deficit_l();
 
-    let mut faulty_at_rest = [false; WaterLevelRole::COUNT];
-    sim.run_until(secs(240), "four filter windows at rest", |_, water| {
-        for reading in sim.published().sensors {
-            faulty_at_rest[reading.role.index()] |= reading.faulty;
+    let mut stop_flagged_at_rest_s = 0.0;
+    while sim.water().t_s - finished < REST_S {
+        sim.water().evaporate(EVAPORATION_L_PER_DAY / 86_400.0);
+        sim.run_for(secs(1)).await;
+        if sim.published().get(WaterLevelRole::SumpReturnLevel).faulty {
+            stop_flagged_at_rest_s += 1.0;
+            assert_eq!(
+                sim.service.start_top_off(60),
+                Err(StartError::Blocked(Blocker::SumpFull))
+            );
         }
-        water.t_s - finished >= 4.0 * window_s()
-    })
-    .await;
+    }
 
     let water = sim.water();
     let bursts = water.runs(PumpId::Makeup, started);
@@ -182,18 +193,18 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
             .min_by(f64::total_cmp)
             .expect("makeup ran"),
         faulty_during: roles(faulty_during),
-        faulty_at_rest: roles(faulty_at_rest),
+        stop_flagged_at_rest_s,
     };
     println!(
         "waves ±{wave_cm} cm: {record:?}, {} return starts, min restart gap {:.1} s, \
          {} makeup bursts, shortest {:.1} s, deficit {deficit_l:.2} L, faulty during {:?}, \
-         faulty at rest {:?}",
+         stop sensor faulty for {:.0} s of {REST_S} s at rest",
         waves.restarts,
         waves.min_gap_s,
         waves.bursts,
         waves.shortest_burst_s,
         waves.faulty_during,
-        waves.faulty_at_rest,
+        waves.stop_flagged_at_rest_s,
     );
 
     assert_eq!(record.result, OperationResult::SumpFull);
@@ -207,7 +218,10 @@ async fn water_change_in_waves(wave_cm: f64) -> Waves {
         "a makeup burst lasted {:.1} s",
         waves.shortest_burst_s
     );
-    assert!(deficit_l.abs() < LITRES_TOL, "deficit {deficit_l:.2} L");
+    assert!(
+        deficit_l < LITRES_TOL && -deficit_l < stop_overshoot_l(&water.layout, wave_cm) + SLACK_L,
+        "deficit {deficit_l:.2} L"
+    );
     assert_eq!(water.spilled_l, 0.0);
     assert_eq!(water.return_dry_s, 0.0);
     assert_eq!(water.makeup_dry_s, 0.0);
@@ -221,17 +235,19 @@ async fn ripple_through_the_firmware_filter_keeps_restarts_and_bursts_sane() {
     LocalSet::new()
         .run_until(async {
             let waves = water_change_in_waves(RIPPLE_CM).await;
-            assert!(waves.faulty_during.is_empty() && waves.faulty_at_rest.is_empty());
+            assert!(waves.faulty_during.is_empty());
+            assert!(waves.stop_flagged_at_rest_s > 0.0);
         })
         .await;
 }
 
 #[tokio::test(start_paused = true)]
-async fn waves_through_the_firmware_filter_flag_the_stop_sensor_at_rest() {
+async fn waves_through_the_firmware_filter_flag_the_evaporating_stop_sensor() {
     LocalSet::new()
         .run_until(async {
             let waves = water_change_in_waves(WAVE_CM).await;
-            assert_eq!(waves.faulty_at_rest, [WaterLevelRole::SumpReturnLevel]);
+            assert!(waves.faulty_during.is_empty());
+            assert!(waves.stop_flagged_at_rest_s > 0.0);
         })
         .await;
 }
