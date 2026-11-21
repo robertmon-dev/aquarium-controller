@@ -1,7 +1,7 @@
 export type { ApiPath, DeviceConfig } from "./config";
 export { ApiError } from "./transport";
 export type { ApiErrorKind, FetchImpl, Transport } from "./transport";
-export type { DeviceClient } from "./client";
+export type { DeviceClient, OverridablePump } from "./client";
 export type { SseEvent } from "./events";
 export type {
   DeviceFormMessages,

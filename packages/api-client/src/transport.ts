@@ -67,7 +67,7 @@ export const request = async <T>(
     throw new ApiError("unauthorized", "device rejected the api token", 401);
   }
 
-  if (response.status === 204) {
+  if (response.status === 204 || response.status === 202) {
     return undefined as T;
   }
 

@@ -21,6 +21,16 @@ async function rejection(promise: Promise<unknown>): Promise<ApiError> {
 }
 
 describe("request", () => {
+  it("resolves an accepted request without a body", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+
+    await expect(
+      request({ device, fetchImpl }, "/api/water-change", { method: "POST" }),
+    ).resolves.toBeUndefined();
+  });
+
   it("sends the token as a bearer header", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
 
