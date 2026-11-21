@@ -156,11 +156,12 @@ impl State {
 
     fn channel(&mut self, id: PumpId, now: Instant, epoch: Option<u64>) -> ChannelStatus {
         let over = self.live_override(id, now, epoch);
+        let in_force = self.forced_off(id, now, epoch);
         let output = self.outputs[id.index()];
 
         ChannelStatus {
             on: output.is_some_and(|output| output.on),
-            mode: if over.is_some() {
+            mode: if in_force {
                 ChannelMode::ManualOff
             } else {
                 ChannelMode::Auto
@@ -243,6 +244,12 @@ impl State {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RecordOutcome {
+    pub changed: bool,
+    pub on_changed: bool,
+}
+
 pub struct Observation {
     phase: Option<Phase>,
     return_forced_off: bool,
@@ -288,7 +295,8 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let runtime = load::<S, RuntimeCounters>(&store, PumpRecord::Runtime).unwrap_or_default();
         let last =
             load::<S, LastOperations>(&store, PumpRecord::LastOperations).unwrap_or_default();
-        let activity = load::<S, Checkpoint>(&store, PumpRecord::Checkpoint)
+        let activity = load::<S, Option<Checkpoint>>(&store, PumpRecord::Checkpoint)
+            .flatten()
             .map_or(Activity::Idle, Activity::Resuming);
 
         Self {
@@ -334,6 +342,20 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         } else {
             elapsed_ms
         };
+
+        if let Activity::Running(operation) = &state.activity {
+            let channel_ran = |id: PumpId| state.outputs[id.index()].is_some_and(|o| o.on);
+
+            let idle_channel = match operation.phase {
+                Phase::Draining => !channel_ran(PumpId::Drain),
+                Phase::Refilling => !channel_ran(PumpId::Makeup),
+                Phase::Settling => false,
+            };
+
+            if idle_channel {
+                operation_elapsed_ms = 0;
+            }
+        }
 
         for id in PumpId::ALL {
             if state.outputs[id.index()].is_some_and(|output| output.on) {
@@ -419,7 +441,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
     }
 
-    pub fn fire_due_windows(&self) -> bool {
+    pub fn fire_due_windows(&self, levels: Option<LevelConditions>) -> bool {
         let (Some(epoch), Some(civil)) =
             (self.clock.epoch_seconds(), self.clock.local_civil_time())
         else {
@@ -433,6 +455,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             return false;
         }
         state.last_fired_minute = Some(minute);
+        state.levels = levels;
 
         let due: Vec<(OperationKind, usize, OperationPlan)> = state
             .schedule
@@ -503,14 +526,19 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         on: bool,
         fault: Option<ChannelFault>,
         blocked_by: Option<Blocker>,
-    ) -> bool {
+    ) -> RecordOutcome {
         let next = Output {
             on,
             fault,
             blocked_by,
         };
 
-        self.lock().outputs[id.index()].replace(next) != Some(next)
+        let previous = self.lock().outputs[id.index()].replace(next);
+
+        RecordOutcome {
+            changed: previous != Some(next),
+            on_changed: previous.map(|output| output.on) != Some(on),
+        }
     }
 
     pub fn checkpoint(&self) {
@@ -570,7 +598,11 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         self.persist(PumpRecord::LastOperations, &state.last);
 
         if let Err(reason) = self.store.erase(PumpRecord::Checkpoint) {
-            tracing::error!(reason, "pump checkpoint not erased");
+            tracing::warn!(reason, "pump checkpoint not erased, writing a tombstone");
+
+            if let Err(reason) = self.write(PumpRecord::Checkpoint, &None::<Checkpoint>) {
+                tracing::error!(reason, "pump checkpoint tombstone not stored");
+            }
         }
 
         tracing::info!(kind = ?record.kind, ?result, "pump operation finished");
@@ -580,8 +612,8 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             let _ = events.send(OperationEvent {
                 record,
                 finished_at: epoch,
-                drained_l: litres(record.drain_s, flows.drain),
-                refilled_l: litres(record.refill_s, flows.makeup),
+                drained_l: litres(record.drain_ran_s, flows.drain),
+                refilled_l: litres(record.refill_ran_s, flows.makeup),
             });
         }
     }
@@ -808,7 +840,10 @@ struct ReturnLockout {
 impl ReturnLockout {
     fn update(&mut self, levels: Option<LevelConditions>, now: Instant, delay: Duration) -> bool {
         match levels {
-            None => false,
+            None => {
+                self.wet_since = None;
+                false
+            }
             Some(levels) if levels.sump_low => {
                 self.locked = true;
                 self.wet_since = None;
@@ -859,7 +894,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
         self.last_tick = Some(now);
 
-        let started = self.service.fire_due_windows();
+        let started = self.service.fire_due_windows(levels);
         let observed = self.service.observe(levels, elapsed, now);
         let locked_out = self
             .lockout
@@ -874,15 +909,17 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
         });
 
         let mut outputs_changed = false;
+        let mut on_changed = false;
         for id in PumpId::ALL {
             let decision = decisions[id.index()];
             let (on, fault) = self.drive(id, decision.on);
-            outputs_changed |= self.service.record(id, on, fault, decision.blocked_by);
+            let outcome = self.service.record(id, on, fault, decision.blocked_by);
+            outputs_changed |= outcome.changed;
+            on_changed |= outcome.on_changed;
         }
 
         let last_flush = *self.last_flush.get_or_insert(now);
-        if outputs_changed || now.saturating_duration_since(last_flush) >= self.timing.runtime_flush
-        {
+        if on_changed || now.saturating_duration_since(last_flush) >= self.timing.runtime_flush {
             self.service.flush_runtime();
             self.last_flush = Some(now);
         }

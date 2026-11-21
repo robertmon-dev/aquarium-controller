@@ -561,7 +561,7 @@ fn a_top_off_runs_makeup_then_reports_the_result() {
     assert_eq!(status.operation, OperationStatus::IDLE);
     let record = status.last_top_off.expect("recorded");
     assert_eq!(
-        (record.result, record.refill_s),
+        (record.result, record.refill_ran_s),
         (OperationResult::Completed, 3)
     );
 
@@ -602,7 +602,7 @@ fn a_water_change_drains_settles_refills_and_stops_on_overflow() {
 
     let record = rig.service.status().last_water_change.expect("recorded");
     assert_eq!(record.result, OperationResult::Overflow);
-    assert_eq!((record.drain_s, record.settle_s), (2, 2));
+    assert_eq!((record.drain_ran_s, record.settle_ran_s), (2, 2));
 }
 
 #[test]
@@ -741,7 +741,7 @@ fn an_interrupted_water_change_resumes_after_a_short_outage() {
 
     let record = rig.service.status().last_water_change.expect("recorded");
     assert!(record.resumed);
-    assert_eq!(record.drain_s, 10);
+    assert_eq!(record.drain_ran_s, 10);
     assert_eq!(record.result, OperationResult::Completed);
 }
 
@@ -951,4 +951,213 @@ async fn an_api_change_is_applied_without_waiting_for_the_ticker() {
                 .expect("republished");
         })
         .await;
+}
+
+struct EraseFails(Arc<VolatilePumpStore>);
+
+impl PumpStore for EraseFails {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.0.load(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        self.0.store(record, bytes)
+    }
+
+    fn erase(&self, _record: PumpRecord) -> Result<(), &'static str> {
+        Err("flash is stuck")
+    }
+}
+
+#[test]
+fn a_failed_checkpoint_erase_does_not_resurrect_the_operation() {
+    let store = Arc::new(VolatilePumpStore::default());
+    let service = PumpService::new(
+        PumpSettings::DEFAULT,
+        EraseFails(Arc::clone(&store)),
+        TestClock::synced(EPOCH),
+        None,
+    );
+
+    service.observe(Some(HEALTHY), Duration::ZERO, Instant::now());
+    service.start_top_off(60).expect("idle");
+    service.cancel(OperationKind::TopOff);
+
+    let restarted = service_on(&store, TestClock::synced(EPOCH));
+    assert_eq!(restarted.status().operation, OperationStatus::IDLE);
+}
+
+#[test]
+fn the_return_lockout_does_not_span_a_gap_in_level_data() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let low = snapshot(&[WaterLevelRole::SumpReserve]);
+
+    rig.tick(Some(&healthy));
+    rig.run(1, Some(&low));
+    rig.run(20, Some(&healthy));
+    rig.run(5, None);
+
+    rig.run(30, Some(&healthy));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+
+    rig.run(1, Some(&healthy));
+    assert_eq!(rig.pins(), [true, true, false, false]);
+}
+
+#[test]
+fn operation_time_does_not_accrue_while_the_drain_output_fails() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    *rig.outputs.failing.lock().unwrap() = Some(PumpId::Drain);
+    rig.tick(Some(&healthy));
+    rig.run(10, Some(&healthy));
+
+    let status = rig.service.status();
+    assert_eq!(status.operation.state, OperationState::Draining);
+    assert_eq!(status.operation.drain_ran_s, 0);
+    assert_eq!(status.channels.drain.fault, Some(ChannelFault::OutputError));
+}
+
+#[test]
+fn an_unsynced_return_override_is_not_reported_as_in_force() {
+    let store = Arc::new(VolatilePumpStore::default());
+    let stored = Some(StoredOverride {
+        expires_at: Some(EPOCH + 600),
+    });
+    store.put(
+        PumpRecord::Overrides,
+        serde_json::to_vec(&[stored, stored]).expect("encode"),
+    );
+    let mut rig = Rig::build(store, TestClock::unsynced(), None);
+
+    rig.tick(Some(&healthy()));
+
+    let channels = rig.service.status().channels;
+    assert_eq!(channels.return_pump.mode, ChannelMode::Auto);
+    assert!(channels.return_pump.on);
+    assert_eq!(channels.uv.mode, ChannelMode::ManualOff);
+}
+
+#[test]
+fn blocker_changes_alone_do_not_rewrite_the_runtime_record() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let overflow = snapshot(&[
+        WaterLevelRole::SumpPump,
+        WaterLevelRole::SumpReserve,
+        WaterLevelRole::MainTank,
+    ]);
+
+    rig.tick(Some(&healthy));
+    rig.store.erase(PumpRecord::Runtime).expect("erased");
+
+    rig.run(1, Some(&overflow));
+    rig.run(1, Some(&healthy));
+    rig.run(1, Some(&overflow));
+
+    assert_eq!(rig.store.get(PumpRecord::Runtime), None);
+}
+
+#[test]
+fn a_window_due_on_the_first_tick_sees_the_current_levels() {
+    let mut rig = Rig::new();
+    schedule_top_off(&rig.service);
+    rig.clock.set_civil(Some(sunday_ten_am()));
+
+    rig.tick(Some(&healthy()));
+
+    assert!(rig.pins()[2]);
+    assert_eq!(rig.service.status().last_skipped, None);
+}
+
+#[test]
+fn a_dry_sump_ends_the_drain_and_the_change_still_completes() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let low = snapshot(&[WaterLevelRole::SumpReserve]);
+
+    rig.tick(Some(&healthy));
+    rig.service.start_water_change(PLAN).expect("idle");
+    rig.tick(Some(&healthy));
+    assert_eq!(rig.pins(), [true, true, false, true]);
+
+    rig.run(1, Some(&low));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Settling
+    );
+
+    rig.run(2, Some(&healthy));
+    assert_eq!(rig.pins(), [false, false, true, false]);
+
+    rig.run(4, Some(&healthy));
+    assert_eq!(rig.pins(), [false, false, false, false]);
+    assert_eq!(
+        rig.service
+            .status()
+            .last_water_change
+            .map(|record| record.result),
+        Some(OperationResult::Completed)
+    );
+}
+
+#[test]
+fn an_empty_reservoir_stops_the_refill() {
+    let mut rig = Rig::new();
+    let healthy = healthy();
+    let empty_reservoir = snapshot(&[WaterLevelRole::SumpPump]);
+
+    rig.tick(Some(&healthy));
+    rig.service.start_top_off(60).expect("idle");
+    rig.run(1, Some(&healthy));
+    assert!(rig.pins()[2]);
+
+    rig.run(1, Some(&empty_reservoir));
+    assert!(!rig.pins()[2]);
+    assert_eq!(
+        rig.service
+            .status()
+            .last_top_off
+            .map(|record| record.result),
+        Some(OperationResult::ReservoirEmpty)
+    );
+}
+
+#[test]
+fn an_automatic_resume_does_not_credit_the_elapsed_gap() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 200), Some(EPOCH - 100));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+
+    rig.tick(None);
+    rig.now += Duration::from_secs(300);
+    rig.tick(Some(&healthy()));
+
+    let operation = rig.service.status().operation;
+    assert_eq!(operation.state, OperationState::Draining);
+    assert_eq!(operation.drain_ran_s, 4);
+}
+
+#[test]
+fn an_api_resume_does_not_credit_the_elapsed_gap() {
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 4000), Some(EPOCH - 3600));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    let healthy = healthy();
+
+    rig.tick(Some(&healthy));
+    rig.service
+        .resume(OperationKind::WaterChange)
+        .expect("suspended");
+    rig.now += Duration::from_secs(300);
+    rig.tick(Some(&healthy));
+
+    let operation = rig.service.status().operation;
+    assert_eq!(operation.state, OperationState::Draining);
+    assert_eq!(operation.drain_ran_s, 4);
 }
