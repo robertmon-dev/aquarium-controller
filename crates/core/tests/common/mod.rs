@@ -10,10 +10,14 @@ use tokio::net::{TcpListener, TcpStream};
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore, VolatileHeaterStore,
+    VolatilePumpStore,
 };
-use aquarium_core::application::{CalibrationService, HeaterService};
+use aquarium_core::application::{CalibrationService, HeaterService, PumpService};
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
+use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
+use aquarium_core::domain::pump::PumpSettings;
+use aquarium_core::ports::outbound::Clock;
 
 pub const TOKEN: &str = "test-token";
 pub const ORIGIN: &str = "http://localhost:8081";
@@ -78,12 +82,63 @@ pub fn heaters() -> Arc<TestHeaters> {
     Arc::new(HeaterService::new(heater_defaults(), VolatileHeaterStore))
 }
 
+pub const PUMP_EPOCH: u64 = 1_700_000_000;
+
+pub struct FixedClock;
+
+impl Clock for FixedClock {
+    fn epoch_seconds(&self) -> Option<u64> {
+        Some(PUMP_EPOCH)
+    }
+
+    fn uptime_seconds(&self) -> u64 {
+        0
+    }
+
+    fn local_minute_of_day(&self) -> Option<u16> {
+        None
+    }
+
+    fn local_month(&self) -> Option<u8> {
+        None
+    }
+
+    fn local_civil_time(&self) -> Option<CivilTime> {
+        None
+    }
+}
+
+pub type TestPumps = PumpService<VolatilePumpStore, FixedClock>;
+
+pub fn pumps() -> Arc<TestPumps> {
+    Arc::new(PumpService::new(
+        PumpSettings::DEFAULT,
+        VolatilePumpStore::default(),
+        FixedClock,
+        None,
+    ))
+}
+
+pub async fn start_with_pumps(pumps: Arc<TestPumps>) -> SocketAddr {
+    start_with_all(
+        Arc::new(InMemoryTelemetryStore::new()),
+        Arc::new(InMemoryLightingStore::new()),
+        Arc::new(CalibrationService::new(
+            calibration_defaults(),
+            VolatileCalibrationStore,
+        )),
+        heaters(),
+        pumps,
+    )
+    .await
+}
+
 pub async fn start_with_calibration(
     store: Arc<InMemoryTelemetryStore>,
     lighting: Arc<InMemoryLightingStore>,
     calibration: Arc<TestCalibration>,
 ) -> SocketAddr {
-    start_with_all(store, lighting, calibration, heaters()).await
+    start_with_all(store, lighting, calibration, heaters(), pumps()).await
 }
 
 pub async fn start_with_heaters(heaters: Arc<TestHeaters>) -> SocketAddr {
@@ -95,6 +150,7 @@ pub async fn start_with_heaters(heaters: Arc<TestHeaters>) -> SocketAddr {
             VolatileCalibrationStore,
         )),
         heaters,
+        pumps(),
     )
     .await
 }
@@ -104,6 +160,7 @@ pub async fn start_with_all(
     lighting: Arc<InMemoryLightingStore>,
     calibration: Arc<TestCalibration>,
     heaters: Arc<TestHeaters>,
+    pumps: Arc<TestPumps>,
 ) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local_addr");
@@ -114,6 +171,7 @@ pub async fn start_with_all(
         lighting,
         calibration,
         heaters,
+        pumps,
         config(),
     ));
 
