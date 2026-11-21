@@ -49,6 +49,9 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
       sump_pump: { wet: true, faulty: false },
       main_tank: { wet: true, faulty: false },
       sump_reserve: { wet: false, faulty: false },
+      sump_return_level: { wet: true, faulty: false },
+      reservoir_ready: { wet: true, faulty: false },
+      reservoir_full: { wet: false, faulty: false },
       sensors_healthy: true,
     },
     heaters: {
