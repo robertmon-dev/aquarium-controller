@@ -52,7 +52,7 @@ jobs:
         run: cargo test -p aquarium-core
 
       - name: E2E (simulated aquarium)
-        run: cargo test -p aquarium-core --test e2e_water_change -- --nocapture
+        run: make test-e2e
 
       - name: Contract generates
         run: make types
