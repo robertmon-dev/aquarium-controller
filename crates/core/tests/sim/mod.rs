@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -9,18 +11,24 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use aquarium_core::adapters::outbound::memory::{InMemoryWaterLevelStore, VolatilePumpStore};
-use aquarium_core::application::{pump_loop, PumpController, PumpService, PumpTiming};
+use aquarium_core::application::{
+    pump_loop, PumpController, PumpService, PumpTiming, WaterLevelSampler,
+};
 use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::domain::pump::{PumpId, PumpSettings, PumpsStatus};
 use aquarium_core::domain::water::{
     WaterLevelReading, WaterLevelRole, WaterLevelSnapshot, WaterLevelState,
 };
 use aquarium_core::ports::inbound::PumpControl;
-use aquarium_core::ports::outbound::{Clock, PumpOutputs, WaterLevelSink};
+use aquarium_core::ports::outbound::{
+    Clock, PumpOutputs, PumpRecord, PumpStore, WaterLevelPins, WaterLevelSink, WaterLevelSource,
+};
+use aquarium_core::protocol::xkc_y25::{FilterConfig, Polarity};
 
-use crate::common::{body, get, raw, start_with_pump_control, TOKEN};
+use crate::common::{body, get, raw, serve_pump_control, TOKEN};
 
 pub const STEP: Duration = Duration::from_millis(100);
+pub const COARSE_STEP: Duration = Duration::from_secs(1);
 pub const BASE_EPOCH: u64 = 1_795_341_480;
 
 pub const TIMING: PumpTiming = PumpTiming {
@@ -30,6 +38,50 @@ pub const TIMING: PumpTiming = PumpTiming {
     checkpoint_interval: Duration::from_secs(10),
     runtime_flush: Duration::from_secs(600),
 };
+
+pub const COARSE_TIMING: PumpTiming = PumpTiming {
+    level_stale: Duration::from_secs(3),
+    ..TIMING
+};
+
+pub const FIRMWARE_FILTER: FilterConfig = FilterConfig {
+    debounce_samples: 10,
+    flap_window_samples: 300,
+    flap_max_transitions: 60,
+};
+
+#[derive(Debug, Clone)]
+pub struct Lcg(u64);
+
+impl Lcg {
+    pub const fn new(seed: u64) -> Self {
+        Self(seed ^ 0x9E37_79B9_7F4A_7C15)
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 32) as u32
+    }
+
+    pub fn unit(&mut self) -> f64 {
+        f64::from(self.next_u32()) / (f64::from(u32::MAX) + 1.0)
+    }
+
+    pub fn range(&mut self, low: f64, high: f64) -> f64 {
+        low + (high - low) * self.unit()
+    }
+
+    pub fn chance(&mut self, probability: f64) -> bool {
+        self.unit() < probability
+    }
+
+    pub fn coin(&mut self) -> bool {
+        self.next_u32() >> 31 == 1
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Mount {
@@ -136,8 +188,14 @@ impl Layout {
         self.return_area_l_per_cm() + self.baffled_area_l_per_cm()
     }
 
-    fn baffled_capacity_l(&self) -> f64 {
+    pub fn baffled_capacity_l(&self) -> f64 {
         self.baffled_area_l_per_cm() * self.baffle_cm
+    }
+
+    pub fn full_system_l(&self) -> f64 {
+        self.tank_weir_l
+            + self.baffled_capacity_l()
+            + self.return_operating_cm * self.return_area_l_per_cm()
     }
 
     pub fn buffer_to_sump_pump_l(&self) -> f64 {
@@ -186,6 +244,7 @@ pub enum Fault {
     StuckWet,
     StuckDry,
     Faulty,
+    Flapping,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,16 +263,23 @@ pub struct Aquarium {
     pub weir_blocked: bool,
     pub faults: [Option<Fault>; WaterLevelRole::COUNT],
     pub outage: bool,
+    pub sensing: bool,
+    pub boots: u32,
+    pub wave_cm: f64,
     pub drained_l: f64,
     pub added_l: f64,
     pub evaporated_l: f64,
+    pub supplied_l: f64,
     pub spilled_l: f64,
     pub tank_spilled_l: f64,
     pub return_dry_s: f64,
     pub makeup_dry_s: f64,
     pub drain_dry_s: f64,
+    pub solute_mg: f64,
+    pub makeup_mg_l: f64,
     pub t_s: f64,
     pub log: Vec<(f64, Event)>,
+    rng: Lcg,
     wet: [Option<bool>; WaterLevelRole::COUNT],
     initial_l: f64,
 }
@@ -230,16 +296,23 @@ impl Aquarium {
             weir_blocked: false,
             faults: [None; WaterLevelRole::COUNT],
             outage: false,
+            sensing: true,
+            boots: 0,
+            wave_cm: 0.0,
             drained_l: 0.0,
             added_l: 0.0,
             evaporated_l: 0.0,
+            supplied_l: 0.0,
             spilled_l: 0.0,
             tank_spilled_l: 0.0,
             return_dry_s: 0.0,
             makeup_dry_s: 0.0,
             drain_dry_s: 0.0,
+            solute_mg: 0.0,
+            makeup_mg_l: 0.0,
             t_s: 0.0,
             log: Vec::new(),
+            rng: Lcg::new(1),
             wet: [None; WaterLevelRole::COUNT],
             initial_l: 0.0,
         };
@@ -248,17 +321,38 @@ impl Aquarium {
         aquarium
     }
 
+    pub fn seed(&mut self, seed: u64) {
+        self.rng = Lcg::new(seed);
+    }
+
     pub fn stored_l(&self) -> f64 {
         self.tank_l + self.sump_l() + self.reservoir_l
     }
 
     pub fn balance_error_l(&self) -> f64 {
         self.stored_l() + self.drained_l + self.evaporated_l + self.spilled_l + self.tank_spilled_l
+            - self.supplied_l
             - self.initial_l
     }
 
     pub fn sump_l(&self) -> f64 {
         self.baffled_l + self.return_l
+    }
+
+    pub fn system_l(&self) -> f64 {
+        self.tank_l + self.sump_l()
+    }
+
+    pub fn deficit_l(&self) -> f64 {
+        self.layout.full_system_l() - self.system_l()
+    }
+
+    pub fn concentration_mg_l(&self) -> f64 {
+        self.solute_mg / self.system_l()
+    }
+
+    pub fn dissolve(&mut self, mg_per_l: f64) {
+        self.solute_mg = mg_per_l * self.system_l();
     }
 
     pub fn return_level_cm(&self) -> f64 {
@@ -296,6 +390,20 @@ impl Aquarium {
         self.track_sensors();
     }
 
+    pub fn evaporate_tank(&mut self, litres: f64) {
+        self.tank_l -= litres;
+        self.evaporated_l += litres;
+        self.track_sensors();
+    }
+
+    pub fn refill_reservoir(&mut self, to_l: f64) -> f64 {
+        let added = (to_l - self.reservoir_l).max(0.0);
+        self.reservoir_l += added;
+        self.supplied_l += added;
+        self.track_sensors();
+        added
+    }
+
     pub fn pump_on(&self, id: PumpId) -> bool {
         self.pumps[id.index()]
     }
@@ -324,6 +432,12 @@ impl Aquarium {
         }
     }
 
+    pub fn power_off(&mut self) {
+        for id in PumpId::ALL {
+            self.set_pump(id, false);
+        }
+    }
+
     pub fn first_after(&self, event: Event, after_s: f64) -> Option<f64> {
         self.log
             .iter()
@@ -345,6 +459,27 @@ impl Aquarium {
             .count()
     }
 
+    pub fn runs(&self, id: PumpId, after_s: f64) -> Vec<(f64, f64)> {
+        let mut runs = Vec::new();
+        let mut started = None;
+
+        for &(at, event) in &self.log {
+            match event {
+                Event::Pump(pump, true) if pump == id => started = Some(at),
+                Event::Pump(pump, false) if pump == id => {
+                    if let Some(from) = started.take() {
+                        if from >= after_s {
+                            runs.push((from, at));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        runs
+    }
+
     pub fn step(&mut self, dt: f64) {
         let layout = self.layout;
         self.t_s += dt;
@@ -355,6 +490,7 @@ impl Aquarium {
             self.reservoir_l -= moved;
             self.return_l += moved;
             self.added_l += moved;
+            self.solute_mg += moved * self.makeup_mg_l;
             self.makeup_dry_s += dt * (1.0 - moved / capacity);
         }
 
@@ -370,6 +506,7 @@ impl Aquarium {
         if self.pump_on(PumpId::Drain) {
             let capacity = layout.drain_l_per_s() * dt;
             let moved = capacity.min((self.tank_l - layout.drain_intake_l).max(0.0));
+            self.solute_mg -= moved * self.concentration_mg_l();
             self.tank_l -= moved;
             self.drained_l += moved;
             self.drain_dry_s += dt * (1.0 - moved / capacity);
@@ -377,7 +514,9 @@ impl Aquarium {
 
         if self.weir_blocked {
             if self.tank_l > layout.tank_max_l {
-                self.tank_spilled_l += self.tank_l - layout.tank_max_l;
+                let excess = self.tank_l - layout.tank_max_l;
+                self.solute_mg -= excess * self.concentration_mg_l();
+                self.tank_spilled_l += excess;
                 self.tank_l = layout.tank_max_l;
             }
         } else if self.tank_l > layout.tank_weir_l {
@@ -405,26 +544,63 @@ impl Aquarium {
         let level = self.return_level_cm();
         if level > layout.sump_height_cm {
             let excess = (level - layout.sump_height_cm) * layout.total_area_l_per_cm();
+            self.solute_mg -= excess * self.concentration_mg_l();
             self.return_l -= excess;
             self.spilled_l += excess;
         }
     }
 
-    fn truth(&self, role: WaterLevelRole) -> bool {
+    fn mount(&self, role: WaterLevelRole) -> Option<Mount> {
         let layout = &self.layout;
-        let mounted = |mount: Mount| self.level_at(mount.chamber) >= mount.height_cm;
 
         match role {
-            WaterLevelRole::SumpPump => mounted(layout.sump_pump),
-            WaterLevelRole::SumpBiological => mounted(layout.sump_biological),
-            WaterLevelRole::SumpMechanical => mounted(layout.sump_mechanical),
-            WaterLevelRole::SumpReturnLevel => mounted(layout.sump_return_level),
+            WaterLevelRole::SumpPump => Some(layout.sump_pump),
+            WaterLevelRole::SumpBiological => Some(layout.sump_biological),
+            WaterLevelRole::SumpMechanical => Some(layout.sump_mechanical),
+            WaterLevelRole::SumpReturnLevel => Some(layout.sump_return_level),
+            _ => None,
+        }
+    }
+
+    pub fn surface_distance_cm(&self, role: WaterLevelRole) -> Option<f64> {
+        self.mount(role)
+            .map(|mount| self.level_at(mount.chamber) - mount.height_cm)
+    }
+
+    fn truth(&self, role: WaterLevelRole) -> bool {
+        let layout = &self.layout;
+
+        if let Some(mount) = self.mount(role) {
+            return self.level_at(mount.chamber) >= mount.height_cm;
+        }
+
+        match role {
             WaterLevelRole::MainTank => {
                 self.tank_l > layout.tank_weir_l + layout.main_tank_margin_l
             }
             WaterLevelRole::SumpReserve => self.reservoir_l >= layout.reserve_wet_l,
             WaterLevelRole::ReservoirReady => self.reservoir_l >= layout.reservoir_ready_l,
             WaterLevelRole::ReservoirFull => self.reservoir_l >= layout.reservoir_full_l,
+            _ => unreachable!("mounted roles are handled above"),
+        }
+    }
+
+    pub fn raw_wet(&mut self, role: WaterLevelRole) -> bool {
+        match self.faults[role.index()] {
+            Some(Fault::StuckWet) => true,
+            Some(Fault::StuckDry) => false,
+            Some(Fault::Flapping) => self.rng.coin(),
+            Some(Fault::Faulty) | None => {
+                let in_waves = self
+                    .surface_distance_cm(role)
+                    .is_some_and(|distance| distance.abs() < self.wave_cm);
+
+                if in_waves {
+                    self.rng.coin()
+                } else {
+                    self.truth(role)
+                }
+            }
         }
     }
 
@@ -433,16 +609,12 @@ impl Aquarium {
         let wet = match fault {
             Some(Fault::StuckWet) => true,
             Some(Fault::StuckDry) => false,
-            Some(Fault::Faulty) | None => self.truth(role),
+            Some(Fault::Faulty | Fault::Flapping) | None => self.truth(role),
         };
 
         WaterLevelReading {
             role,
-            state: if wet {
-                WaterLevelState::Wet
-            } else {
-                WaterLevelState::Dry
-            },
+            state: state(wet),
             faulty: fault == Some(Fault::Faulty),
         }
     }
@@ -463,6 +635,16 @@ impl Aquarium {
     pub fn snapshot(&self) -> WaterLevelSnapshot {
         WaterLevelSnapshot {
             sensors: WaterLevelRole::ALL.map(|role| self.reading(role)),
+        }
+    }
+
+    pub fn raw_snapshot(&mut self) -> WaterLevelSnapshot {
+        WaterLevelSnapshot {
+            sensors: WaterLevelRole::ALL.map(|role| WaterLevelReading {
+                role,
+                state: state(self.raw_wet(role)),
+                faulty: self.faults[role.index()] == Some(Fault::Faulty),
+            }),
         }
     }
 
@@ -488,6 +670,14 @@ impl Aquarium {
     }
 }
 
+fn state(wet: bool) -> WaterLevelState {
+    if wet {
+        WaterLevelState::Wet
+    } else {
+        WaterLevelState::Dry
+    }
+}
+
 pub type Water = Arc<Mutex<Aquarium>>;
 
 pub struct SimOutputs(Water);
@@ -499,17 +689,102 @@ impl PumpOutputs for SimOutputs {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zone {
+    Utc,
+    Warsaw,
+}
+
+impl Zone {
+    pub fn offset_s(self, epoch: u64) -> u64 {
+        match self {
+            Self::Utc => 0,
+            Self::Warsaw if summer_time(epoch) => 7200,
+            Self::Warsaw => 3600,
+        }
+    }
+
+    pub fn local(self, epoch: u64) -> u64 {
+        epoch + self.offset_s(epoch)
+    }
+}
+
+pub fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let month = i64::from(month);
+    let shifted = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * shifted + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+fn ymd(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (
+        yoe + era * 400 + i64::from(month <= 2),
+        month as u32,
+        day as u32,
+    )
+}
+
+fn last_sunday(year: i64, month: u32) -> i64 {
+    let last = days_from_civil(year, month, 31);
+    last - (last + 4).rem_euclid(7)
+}
+
+fn summer_time(epoch: u64) -> bool {
+    let (year, _, _) = ymd((epoch / 86_400) as i64);
+    let start = last_sunday(year, 3) * 86_400 + 3600;
+    let end = last_sunday(year, 10) * 86_400 + 3600;
+    (start..end).contains(&(epoch as i64))
+}
+
+pub fn utc(year: i64, month: u32, day: u32, hour: u64, minute: u64) -> u64 {
+    days_from_civil(year, month, day) as u64 * 86_400 + hour * 3600 + minute * 60
+}
+
+pub fn civil(epoch: u64) -> CivilTime {
+    let days = (epoch / 86_400) as i64;
+    let seconds = epoch % 86_400;
+    let (_, month, day) = ymd(days);
+
+    CivilTime {
+        minute: ((seconds / 60) % 60) as u8,
+        hour: (seconds / 3600) as u8,
+        day: day as u8,
+        month: month as u8,
+        weekday: (days + 4).rem_euclid(7) as u8,
+    }
+}
+
 pub struct SimClock {
     origin: Instant,
+    base: u64,
+    zone: Zone,
     boot: Mutex<Instant>,
     synced: AtomicBool,
 }
 
 impl SimClock {
     pub fn new() -> Self {
+        Self::starting(BASE_EPOCH, Zone::Utc)
+    }
+
+    pub fn starting(base: u64, zone: Zone) -> Self {
         let now = Instant::now();
         Self {
             origin: now,
+            base,
+            zone,
             boot: Mutex::new(now),
             synced: AtomicBool::new(true),
         }
@@ -523,34 +798,27 @@ impl SimClock {
     pub fn sync(&self) {
         self.synced.store(true, Ordering::Relaxed);
     }
-}
 
-pub fn civil(epoch: u64) -> CivilTime {
-    let days = (epoch / 86_400) as i64;
-    let seconds = epoch % 86_400;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    pub fn lose_sync(&self) {
+        self.synced.store(false, Ordering::Relaxed);
+    }
 
-    CivilTime {
-        minute: ((seconds / 60) % 60) as u8,
-        hour: (seconds / 3600) as u8,
-        day: day as u8,
-        month: month as u8,
-        weekday: (days + 4).rem_euclid(7) as u8,
+    pub fn is_synced(&self) -> bool {
+        self.synced.load(Ordering::Relaxed)
+    }
+
+    pub fn true_epoch(&self) -> u64 {
+        self.base + self.origin.elapsed().as_secs()
+    }
+
+    pub fn true_local(&self) -> CivilTime {
+        civil(self.zone.local(self.true_epoch()))
     }
 }
 
 impl Clock for SimClock {
     fn epoch_seconds(&self) -> Option<u64> {
-        self.synced
-            .load(Ordering::Relaxed)
-            .then(|| BASE_EPOCH + self.origin.elapsed().as_secs())
+        self.is_synced().then(|| self.true_epoch())
     }
 
     fn uptime_seconds(&self) -> u64 {
@@ -571,49 +839,248 @@ impl Clock for SimClock {
     }
 
     fn local_civil_time(&self) -> Option<CivilTime> {
-        self.epoch_seconds().map(civil)
+        self.epoch_seconds()
+            .map(|epoch| civil(self.zone.local(epoch)))
     }
 }
 
-pub type Service = PumpService<Arc<VolatilePumpStore>, Arc<SimClock>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreOp {
+    pub record: PumpRecord,
+    pub erase: bool,
+    pub applied: bool,
+    pub tombstone: bool,
+}
+
+#[derive(Default)]
+pub struct SimStore {
+    inner: VolatilePumpStore,
+    budget: Mutex<Option<usize>>,
+    frozen: AtomicBool,
+    ops: Mutex<Vec<StoreOp>>,
+}
+
+impl SimStore {
+    pub fn fail_after(&self, ops: usize) {
+        *self.budget.lock().expect("store poisoned") = Some(ops);
+    }
+
+    pub fn frozen(&self) -> bool {
+        self.frozen.load(Ordering::Relaxed)
+    }
+
+    pub fn thaw(&self) {
+        *self.budget.lock().expect("store poisoned") = None;
+        self.frozen.store(false, Ordering::Relaxed);
+    }
+
+    pub fn ops(&self) -> Vec<StoreOp> {
+        self.ops.lock().expect("store poisoned").clone()
+    }
+
+    pub fn op_count(&self) -> usize {
+        self.ops.lock().expect("store poisoned").len()
+    }
+
+    pub fn get(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.inner.get(record)
+    }
+
+    pub fn holds_checkpoint(&self) -> bool {
+        self.inner
+            .get(PumpRecord::Checkpoint)
+            .is_some_and(|bytes| bytes != b"null")
+    }
+
+    fn admit(&self, record: PumpRecord, erase: bool, tombstone: bool) -> bool {
+        let mut ops = self.ops.lock().expect("store poisoned");
+        let within = self
+            .budget
+            .lock()
+            .expect("store poisoned")
+            .is_none_or(|budget| ops.len() < budget);
+        let applied = within && !self.frozen();
+
+        if !applied {
+            self.frozen.store(true, Ordering::Relaxed);
+        }
+
+        ops.push(StoreOp {
+            record,
+            erase,
+            applied,
+            tombstone,
+        });
+        applied
+    }
+}
+
+impl PumpStore for SimStore {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.inner.load(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        if self.admit(record, false, bytes == b"null") {
+            self.inner.store(record, bytes)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        if self.admit(record, true, false) {
+            self.inner.erase(record)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Sensors {
+    Raw,
+    Filtered(FilterConfig),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    pub step: Duration,
+    pub timing: PumpTiming,
+    pub epoch: u64,
+    pub zone: Zone,
+    pub sensors: Sensors,
+    pub driver: bool,
+    pub http: bool,
+}
+
+impl Options {
+    pub const DEFAULT: Self = Self {
+        step: STEP,
+        timing: TIMING,
+        epoch: BASE_EPOCH,
+        zone: Zone::Utc,
+        sensors: Sensors::Raw,
+        driver: true,
+        http: true,
+    };
+
+    pub const COARSE: Self = Self {
+        step: COARSE_STEP,
+        timing: COARSE_TIMING,
+        ..Self::DEFAULT
+    };
+
+    pub const fn manual(self) -> Self {
+        Self {
+            driver: false,
+            http: false,
+            ..self
+        }
+    }
+}
+
+struct SimPins(Water);
+
+impl WaterLevelPins for SimPins {
+    fn read_raw(&mut self) -> [(WaterLevelRole, bool); WaterLevelRole::COUNT] {
+        let mut aquarium = self.0.lock().expect("aquarium poisoned");
+        WaterLevelRole::ALL.map(|role| (role, !aquarium.raw_wet(role)))
+    }
+}
+
+type Sampler = WaterLevelSampler<SimPins, Arc<InMemoryWaterLevelStore>>;
+
+struct Publisher {
+    water: Water,
+    levels: Arc<InMemoryWaterLevelStore>,
+    sensors: Sensors,
+    sampler: Option<(u32, Sampler)>,
+}
+
+impl Publisher {
+    fn advance(&mut self, dt: f64) {
+        self.water.lock().expect("aquarium poisoned").step(dt);
+        self.publish();
+    }
+
+    fn publish(&mut self) {
+        let boots = {
+            let aquarium = self.water.lock().expect("aquarium poisoned");
+            if aquarium.outage || !aquarium.sensing {
+                return;
+            }
+            aquarium.boots
+        };
+
+        match self.sensors {
+            Sensors::Raw => {
+                let snapshot = self.water.lock().expect("aquarium poisoned").raw_snapshot();
+                self.levels.publish(snapshot);
+            }
+            Sensors::Filtered(filter) => {
+                if self.sampler.as_ref().is_none_or(|(seen, _)| *seen != boots) {
+                    self.sampler = Some((
+                        boots,
+                        WaterLevelSampler::new(
+                            SimPins(Arc::clone(&self.water)),
+                            Arc::clone(&self.levels),
+                            Polarity::ActiveLow,
+                            filter,
+                        ),
+                    ));
+                }
+
+                if let Some((_, sampler)) = &mut self.sampler {
+                    sampler.tick();
+                }
+            }
+        }
+    }
+}
+
+fn spawn_driver(mut publisher: Publisher, step: Duration) {
+    tokio::task::spawn_local(async move {
+        let mut ticker = tokio::time::interval(step);
+        ticker.tick().await;
+        publisher.publish();
+
+        loop {
+            ticker.tick().await;
+            publisher.advance(step.as_secs_f64());
+        }
+    });
+}
+
+pub type Service = PumpService<Arc<SimStore>, Arc<SimClock>>;
 
 pub struct Sim {
     pub water: Water,
     pub clock: Arc<SimClock>,
-    pub store: Arc<VolatilePumpStore>,
+    pub store: Arc<SimStore>,
     pub service: Arc<Service>,
     pub addr: SocketAddr,
+    pub options: Options,
     levels: Arc<InMemoryWaterLevelStore>,
+    manual: Option<Mutex<Publisher>>,
     control: JoinHandle<()>,
+    server: Option<JoinHandle<()>>,
 }
 
-fn spawn_driver(water: Water, levels: Arc<InMemoryWaterLevelStore>) {
-    tokio::task::spawn_local(async move {
-        let mut ticker = tokio::time::interval(STEP);
-        ticker.tick().await;
-        levels.publish(water.lock().expect("aquarium poisoned").snapshot());
-
-        loop {
-            ticker.tick().await;
-            let snapshot = {
-                let mut aquarium = water.lock().expect("aquarium poisoned");
-                aquarium.step(STEP.as_secs_f64());
-                (!aquarium.outage).then(|| aquarium.snapshot())
-            };
-
-            if let Some(snapshot) = snapshot {
-                levels.publish(snapshot);
-            }
-        }
-    });
+struct Booted {
+    service: Arc<Service>,
+    control: JoinHandle<()>,
+    addr: SocketAddr,
+    server: Option<JoinHandle<()>>,
 }
 
 async fn boot(
     water: &Water,
     clock: &Arc<SimClock>,
-    store: &Arc<VolatilePumpStore>,
+    store: &Arc<SimStore>,
     levels: &Arc<InMemoryWaterLevelStore>,
-) -> (Arc<Service>, JoinHandle<()>, SocketAddr) {
+    options: &Options,
+) -> Booted {
     let service = Arc::new(PumpService::new(
         PumpSettings::DEFAULT,
         Arc::clone(store),
@@ -622,17 +1089,31 @@ async fn boot(
     ));
 
     let control = tokio::task::spawn_local(pump_loop(
-        PumpController::new(SimOutputs(Arc::clone(water)), Arc::clone(&service), TIMING),
+        PumpController::new(
+            SimOutputs(Arc::clone(water)),
+            Arc::clone(&service),
+            options.timing,
+        ),
         levels.subscribe(),
         service.change_signal(),
         Arc::new(Notify::new()),
-        TIMING,
+        options.timing,
         Arc::new(AtomicU32::new(0)),
     ));
 
-    let addr = start_with_pump_control(Arc::clone(&service)).await;
+    let (addr, server) = if options.http {
+        let (addr, server) = serve_pump_control(Arc::clone(&service)).await;
+        (addr, Some(server))
+    } else {
+        (SocketAddr::from(([127, 0, 0, 1], 0)), None)
+    };
 
-    (service, control, addr)
+    Booted {
+        service,
+        control,
+        addr,
+        server,
+    }
 }
 
 fn code(response: &str) -> u16 {
@@ -644,22 +1125,47 @@ fn code(response: &str) -> u16 {
 
 impl Sim {
     pub async fn start(layout: Layout) -> Self {
-        let water = Arc::new(Mutex::new(Aquarium::new(layout)));
-        let levels = Arc::new(InMemoryWaterLevelStore::new());
-        let clock = Arc::new(SimClock::new());
-        let store = Arc::new(VolatilePumpStore::default());
+        Self::start_with(layout, Options::DEFAULT).await
+    }
 
-        spawn_driver(Arc::clone(&water), Arc::clone(&levels));
-        let (service, control, addr) = boot(&water, &clock, &store, &levels).await;
+    pub async fn start_with(layout: Layout, options: Options) -> Self {
+        Self::start_on(Aquarium::new(layout), options).await
+    }
+
+    pub async fn start_on(aquarium: Aquarium, options: Options) -> Self {
+        let water = Arc::new(Mutex::new(aquarium));
+        let levels = Arc::new(InMemoryWaterLevelStore::new());
+        let clock = Arc::new(SimClock::starting(options.epoch, options.zone));
+        let store = Arc::new(SimStore::default());
+
+        let mut publisher = Publisher {
+            water: Arc::clone(&water),
+            levels: Arc::clone(&levels),
+            sensors: options.sensors,
+            sampler: None,
+        };
+
+        let manual = if options.driver {
+            spawn_driver(publisher, options.step);
+            None
+        } else {
+            publisher.publish();
+            Some(Mutex::new(publisher))
+        };
+
+        let booted = boot(&water, &clock, &store, &levels, &options).await;
 
         Self {
             water,
             clock,
             store,
-            service,
-            addr,
+            service: booted.service,
+            addr: booted.addr,
+            options,
             levels,
-            control,
+            manual,
+            control: booted.control,
+            server: booted.server,
         }
     }
 
@@ -667,21 +1173,82 @@ impl Sim {
         self.water.lock().expect("aquarium poisoned")
     }
 
-    pub async fn restart(&mut self, outage: Duration, synced: bool) {
-        self.control.abort();
-        self.water().fail_safe();
-        tokio::time::sleep(outage).await;
-        self.clock.reboot(synced);
+    pub fn published(&self) -> WaterLevelSnapshot {
+        self.levels.levels()
+    }
 
-        let (service, control, addr) =
-            boot(&self.water, &self.clock, &self.store, &self.levels).await;
-        self.service = service;
-        self.control = control;
-        self.addr = addr;
+    pub fn crash(&mut self, power_lost: bool) {
+        self.control.abort();
+        if let Some(server) = self.server.take() {
+            server.abort();
+        }
+
+        let mut water = self.water();
+        water.sensing = false;
+        if power_lost {
+            water.power_off();
+        } else {
+            water.fail_safe();
+        }
+    }
+
+    pub async fn boot_up(&mut self, synced: bool) {
+        {
+            let mut water = self.water();
+            water.fail_safe();
+            water.sensing = true;
+            water.boots += 1;
+        }
+        self.clock.reboot(synced);
+        self.store.thaw();
+
+        let booted = boot(
+            &self.water,
+            &self.clock,
+            &self.store,
+            &self.levels,
+            &self.options,
+        )
+        .await;
+        self.service = booted.service;
+        self.control = booted.control;
+        self.addr = booted.addr;
+        self.server = booted.server;
+    }
+
+    pub async fn restart(&mut self, outage: Duration, synced: bool) {
+        self.crash(false);
+        self.run_for(outage).await;
+        self.boot_up(synced).await;
+    }
+
+    pub async fn power_cut(&mut self, outage: Duration, synced: bool) {
+        self.crash(true);
+        self.run_for(outage).await;
+        self.boot_up(synced).await;
+    }
+
+    pub async fn step(&self) {
+        tokio::time::sleep(self.options.step).await;
+
+        if let Some(publisher) = &self.manual {
+            publisher
+                .lock()
+                .expect("publisher poisoned")
+                .advance(self.options.step.as_secs_f64());
+        }
     }
 
     pub async fn run_for(&self, duration: Duration) {
-        tokio::time::sleep(duration).await;
+        if self.manual.is_none() {
+            tokio::time::sleep(duration).await;
+            return;
+        }
+
+        let deadline = Instant::now() + duration;
+        while Instant::now() + self.options.step <= deadline {
+            self.step().await;
+        }
     }
 
     pub async fn run_until(
@@ -707,7 +1274,11 @@ impl Sim {
                 );
             }
 
-            tokio::time::sleep(STEP).await;
+            if self.manual.is_some() {
+                self.step().await;
+            } else {
+                tokio::time::sleep(STEP.min(self.options.step)).await;
+            }
         }
     }
 
