@@ -106,11 +106,13 @@ GND    ────────────────────────�
 ```
 
 Notes:
-* The GPIO drives the SSR input directly — no resistors. The input has its own current limiter, and its LED path to `−` keeps the line low while the ESP32 resets, so a floating pin cannot switch the relay on.
-* 3.3 V sits at the bottom of the SSR-40 DA's 3–32 V input range. Run `RunMode::SsrProbe` (toggles both outputs every 2 s, no WiFi or HTTP) and confirm the input LED lights brightly and a mains-side load actually switches. If a clone stays dim or misses, drive the input through an NPN or logic-level N-MOSFET from 5 V instead.
+* The GPIO drives the SSR input directly, with no transistor. Fit a 10 kΩ pull-down from each SSR input `3 (+)` to GND: during reset and boot the GPIO floats until the firmware drives it LOW after initialisation, and the pull-down keeps the SSR off in that window instead of relying on the input's LED path.
+* 3.3 V sits at the bottom of the SSR-40 DA's 3–32 V input range. Run `RunMode::SsrProbe` (no WiFi or HTTP): it switches one channel at a time — tank SSR on for 2 s, off for 2 s, then the sump SSR — and logs which channel and GPIO it drives, so swapped wiring shows up as the wrong heater responding. Confirm the input LED lights brightly and a mains-side load actually switches. If a clone stays dim or misses, drive the input through an NPN or logic-level N-MOSFET from 5 V instead.
 * An SSR usually fails shorted, which keeps a heater on regardless of firmware. Keep each heater's own thermostat set 1–2 °C above the target as the last line of defence.
 * Mount the SSRs on a heatsink: the triac drops about 1–1.5 V at load current.
-* Firmware safeguards: a reading at or above `cutoff_celsius` or a missing reading turns a heater off even under a manual ON override, and both heaters switch off if no telemetry snapshot arrives for 6 s. Targets, hysteresis and the cutoff live in NVS and are set over `PATCH /api/heaters/settings`; overrides live in RAM and do not survive a reboot.
+* Firmware safeguards: a reading at or above `cutoff_celsius` or a missing reading turns a heater off even under a manual ON override, and a heater switches off once its last temperature measurement is 6 s old, however often telemetry is republished. A timed override ends on time, without waiting for the next reading. A GPIO write the driver refuses is reported as `fault: output_error`; if turning a heater off fails, the status keeps showing it as possibly on and the firmware retries OFF on every tick. Targets, hysteresis and the cutoff live in NVS and are set over `PATCH /api/heaters/settings`; overrides live in RAM and do not survive a reboot.
+* Servicing: unplug a heater from its outlet before emptying the chamber it sits in, and keep it unplugged until the chamber is refilled. A manual OFF from the app is not a lockout: it lives in RAM, so a restart or power cut brings the heater back under automatic control, and a dry heater with water still below its probe may switch on.
+* With both temperature probes missing at boot the controller still starts (API, pumps): both heaters stay off with `sensor_fault` and the firmware retries the 1-Wire bus every 5 s, backing off to once a minute, and checks the probes' power mode before trusting their readings again.
 * Enable control with `components.heaters` in `crates/firmware/src/settings.rs`.
 
 ### Pump relay module (4-channel, 5 V, optocoupled)
@@ -254,6 +256,7 @@ make flash         # build release, flash the board, attach the serial monitor
 * `make smoke IP=192.168.1.50` — end-to-end probe of a flashed device (auth, telemetry, SSE, lighting override lifecycle)
 * `make telemetry IP=...` / `make events IP=...` — pretty-print one snapshot, or follow the SSE stream
 * `make erase` — wipe the whole flash, NVS included
+* `make erase-nvs` — wipe only the NVS partition; the service step when the firmware reports the partition as unusable
 * `make clean` / `make clean-idf` — drop cargo artifacts, or also the ESP-IDF build tree
 * `make types` — regenerate the TypeScript contract from the Rust DTOs
 * `make types-check` — regenerate it and verify the mobile client still type-checks against it
@@ -286,6 +289,8 @@ Everything that is not a secret is a `const` in `crates/firmware/src/settings.rs
 `Settings.timezone` (a POSIX TZ string, default `CET-1CEST,M3.5.0,M10.5.0/3`) sets the local time used by the lighting schedule and the pump cron schedules.
 
 Calibration is the exception: `sensors.calibration` holds only the **defaults used when NVS is empty**. Once a calibration has been written over the API it comes from flash, and editing the constants no longer changes what the device uses. `make erase` wipes NVS — and with it both the calibration and the stored WiFi credentials.
+
+The firmware never erases NVS on its own. If the partition cannot be opened (for example `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND` after a firmware change), it leaves the data untouched, logs the error code on the serial console every 30 s, and boots in a degraded mode: heaters regulate on the `settings.rs` defaults, calibration uses its defaults, every settings change is refused with `500`, and pump automation stays stopped with all relays released. To recover, read out anything worth keeping, then run `make erase-nvs` (or `espflash erase-parts --partition-table crates/firmware/partitions.csv nvs`) and reflash or restart; settings, calibration, pump schedules and WiFi data start from scratch.
 
 ## HTTP API
 
