@@ -34,6 +34,7 @@ const valid = {
     operation_kind: null,
     operation_state: "idle",
     circulation_starved: false,
+    level_sensors_suspect: false,
   },
   lighting: {
     profile: "daylight",
@@ -47,6 +48,15 @@ const valid = {
 describe("assertTelemetry", () => {
   it("accepts a snapshot carrying the fields the app reads", () => {
     expect(assertTelemetry(valid).timestamp_epoch_s).toBe(1);
+  });
+
+  it("accepts an unreadable wifi signal as null", () => {
+    const snapshot = {
+      ...valid,
+      system_health: { ...valid.system_health, wifi_rssi_dbm: null },
+    };
+
+    expect(assertTelemetry(snapshot).system_health.wifi_rssi_dbm).toBeNull();
   });
 
   it("accepts a null tank temperature", () => {
@@ -88,13 +98,22 @@ describe("assertTelemetry", () => {
     ).toThrow(/pumps\.operation_state/);
   });
 
-  it("rejects pumps without the starved-circulation flag", () => {
-    const { circulation_starved, ...pumps } = valid.pumps;
+  it("accepts pumps from firmware without the starved or suspect flags", () => {
+    const { circulation_starved, level_sensors_suspect, ...pumps } =
+      valid.pumps;
     void circulation_starved;
+    void level_sensors_suspect;
 
-    expect(() => assertTelemetry({ ...valid, pumps })).toThrow(
-      /pumps\.circulation_starved/,
-    );
+    expect(assertTelemetry({ ...valid, pumps }).pumps.return).toBe(true);
+  });
+
+  it("rejects a non-boolean suspect harness flag", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        pumps: { ...valid.pumps, level_sensors_suspect: "yes" },
+      }),
+    ).toThrow(/pumps\.level_sensors_suspect/);
   });
 
   it("rejects an unknown heater mode", () => {
@@ -107,6 +126,18 @@ describe("assertTelemetry", () => {
     };
 
     expect(() => assertTelemetry(snapshot)).toThrow(/heaters\.tank\.mode/);
+  });
+
+  it("accepts a heater whose output could not be driven", () => {
+    const snapshot = {
+      ...valid,
+      heaters: {
+        ...valid.heaters,
+        tank: { ...valid.heaters.tank, active: true, fault: "output_error" },
+      },
+    };
+
+    expect(assertTelemetry(snapshot)).toBe(snapshot);
   });
 
   it("rejects an unknown system mode", () => {

@@ -275,4 +275,128 @@ describe("createClient calibration", () => {
     expect(url).toBe("http://10.0.0.2:80/api/heaters/tank/override");
     expect(init.method).toBe("DELETE");
   });
+
+  const channel = {
+    on: true,
+    mode: "auto",
+    override_expires_in_s: null,
+    fault: null,
+    blocked_by: null,
+    runtime_s: 12,
+    runtime_reset_at: null,
+  };
+
+  const pumpsStatus = {
+    channels: {
+      return: channel,
+      uv: channel,
+      makeup: { ...channel, on: false, blocked_by: "interlock" },
+      drain: { ...channel, on: true, fault: "output_error" },
+    },
+    operation: {
+      kind: "water_change",
+      state: "refilling",
+      phase_remaining_s: 40,
+      drain_ran_s: 60,
+      settle_ran_s: 30,
+      refill_ran_s: 0,
+      drained_l: 25,
+      refilled_l: null,
+    },
+    last_top_off: null,
+    last_water_change: {
+      kind: "water_change",
+      started_at: null,
+      drain_ran_s: 60,
+      settle_ran_s: 30,
+      refill_ran_s: 250,
+      result: "sump_full",
+      resumed: false,
+    },
+    last_skipped: {
+      kind: "top_off",
+      index: 0,
+      reason: "storage",
+      blocked_by: null,
+      at: 1700000000,
+    },
+    circulation_starved: false,
+    level_sensors_suspect: true,
+    return_held_after_drain: true,
+    invalidation_pending: false,
+  };
+
+  const pumpSettings = {
+    top_off: [{ cron: "0 8 * * *", duration_s: 60 }],
+    water_change: [
+      { cron: "30 2 * * sun", drain_s: 112, settle_s: 30, refill_s: 600 },
+    ],
+    flow_lph: { makeup: 600, drain: null },
+    resume_window_s: 600,
+    refill_stop_sensor: "sump_return_level",
+    min_water_change_gap_h: 12,
+    reservoir_ready_l: null,
+  };
+
+  const noPatch = {
+    top_off: null,
+    water_change: null,
+    flow_lph: null,
+    resume_window_s: null,
+    min_water_change_gap_h: null,
+  };
+
+  it("accepts a well-formed pump status and settings", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(pumpsStatus))
+      .mockResolvedValueOnce(jsonResponse(pumpSettings))
+      .mockResolvedValueOnce(jsonResponse(pumpSettings));
+    const client = createClient({ device, fetchImpl });
+
+    await expect(client.pumps()).resolves.toEqual(pumpsStatus);
+    await expect(client.pumpSettings()).resolves.toEqual(pumpSettings);
+    await expect(
+      client.patchPumpSettings({ ...noPatch, resume_window_s: 600 }),
+    ).resolves.toEqual(pumpSettings);
+  });
+
+  it.each([
+    [
+      "pump status",
+      (client: ReturnType<typeof createClient>) => client.pumps(),
+    ],
+    [
+      "pump settings",
+      (client: ReturnType<typeof createClient>) => client.pumpSettings(),
+    ],
+    [
+      "patched pump settings",
+      (client: ReturnType<typeof createClient>) =>
+        client.patchPumpSettings(noPatch),
+    ],
+  ])("rejects an empty object as %s", async (_label, call) => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}));
+    const client = createClient({ device, fetchImpl });
+
+    await expect(call(client)).rejects.toMatchObject({ kind: "malformed" });
+  });
+
+  it("names the malformed pump status fields", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ...pumpsStatus,
+        channels: {
+          ...pumpsStatus.channels,
+          drain: { ...channel, fault: "on_fire" },
+        },
+      }),
+    );
+    const client = createClient({ device, fetchImpl });
+
+    await expect(client.pumps()).rejects.toMatchObject({
+      kind: "malformed",
+      detail: expect.stringContaining("channels.drain.fault"),
+    });
+  });
 });

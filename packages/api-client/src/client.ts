@@ -22,6 +22,11 @@ import type {
   TankTelemetryDto,
   WaterChangePlan,
 } from "./generated";
+import {
+  assertChannelStatus,
+  assertPumpSettings,
+  assertPumpsStatus,
+} from "./schema";
 import { request, type Transport } from "./transport";
 
 export type OverridablePump = Extract<PumpId, "return" | "uv">;
@@ -122,21 +127,25 @@ export const createClient = (transport: Transport): DeviceClient => {
         method: "DELETE",
       }),
 
-    pumps: () => request<PumpsStatus>(transport, "/api/pumps"),
+    pumps: () =>
+      request<unknown>(transport, "/api/pumps").then(assertPumpsStatus),
 
-    pumpSettings: () => request<PumpSettings>(transport, "/api/pumps/settings"),
+    pumpSettings: () =>
+      request<unknown>(transport, "/api/pumps/settings").then(
+        assertPumpSettings,
+      ),
 
     patchPumpSettings: (body) =>
-      request<PumpSettings>(transport, "/api/pumps/settings", {
+      request<unknown>(transport, "/api/pumps/settings", {
         method: "PATCH",
         body: JSON.stringify(body),
-      }),
+      }).then(assertPumpSettings),
 
     setPumpOverride: (id, body) =>
-      request<ChannelStatus>(transport, `/api/pumps/${id}/override`, {
+      request<unknown>(transport, `/api/pumps/${id}/override`, {
         method: "PUT",
         body: JSON.stringify(body),
-      }),
+      }).then(assertChannelStatus),
 
     clearPumpOverride: (id) =>
       request<void>(transport, `/api/pumps/${id}/override`, {
