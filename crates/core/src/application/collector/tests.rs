@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use crate::domain::calibration::{Calibration, PhCalibration};
+use crate::domain::cron::CivilTime;
 use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{
@@ -98,6 +99,9 @@ impl Clock for FakeClock {
     }
     fn local_month(&self) -> Option<u8> {
         self.month
+    }
+    fn local_civil_time(&self) -> Option<CivilTime> {
+        None
     }
 }
 
