@@ -14,7 +14,8 @@ use tokio::sync::Semaphore;
 use tracing::{info, warn};
 
 use crate::ports::inbound::{
-    CalibrationControl, HeaterControl, LightingControl, ProbeVoltageQuery, TelemetryQuery,
+    CalibrationControl, HeaterControl, LightingControl, ProbeVoltageQuery, PumpControl,
+    TelemetryQuery,
 };
 
 const HTTP_BUFFER_BYTES: usize = 2048;
@@ -26,12 +27,13 @@ pub struct HttpConfig {
     pub cors_origin: &'static str,
 }
 
-pub async fn run<Q, L, C, H>(
+pub async fn run<Q, L, C, H, P>(
     listener: TcpListener,
     telemetry: Arc<Q>,
     lighting: Arc<L>,
     calibration: Arc<C>,
     heaters: Arc<H>,
+    pumps: Arc<P>,
     config: HttpConfig,
 ) -> !
 where
@@ -39,12 +41,14 @@ where
     L: LightingControl + 'static,
     C: CalibrationControl + 'static,
     H: HeaterControl + 'static,
+    P: PumpControl + 'static,
 {
     let router: &'static _ = Box::leak(Box::new(routes::router(
         telemetry,
         lighting,
         calibration,
         heaters,
+        pumps,
         config.token,
         config.sse_keepalive,
         config.cors_origin,
