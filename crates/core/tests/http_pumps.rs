@@ -11,7 +11,7 @@ use tokio::time::Instant;
 
 use aquarium_core::domain::pump::{
     ChannelFault, ChannelMode, ChannelStatus, LevelConditions, OperationResult, OperationState,
-    PumpSettings, PumpsStatus,
+    PumpId, PumpSettings, PumpsStatus,
 };
 use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::ports::inbound::PumpControl;
@@ -419,6 +419,13 @@ async fn refill_blockers_explain_themselves() {
                 r#"{"drain_s":10,"refill_s":10}"#,
             );
             assert_status(&raw(addr, &water_change).await, 202);
+            let levels = Some(LevelConditions {
+                sump_full: true,
+                ..HEALTHY
+            });
+            pumps.observe(levels, Duration::ZERO, Instant::now());
+            pumps.record(PumpId::Drain, true, None, None);
+            pumps.observe(levels, Duration::from_secs(1), Instant::now());
             assert_status(
                 &raw(addr, &body("DELETE", WATER_CHANGE, Some(TOKEN), "")).await,
                 204,
