@@ -22,7 +22,10 @@ const SENSORS: [TranslationKey, keyof WaterLevelMetricsDto][] = [
   ["water.mechanical", "sump_mechanical"],
   ["water.biological", "sump_biological"],
   ["water.pump", "sump_pump"],
+  ["water.returnChamber", "sump_return_level"],
   ["water.reserve", "sump_reserve"],
+  ["water.reservoirReady", "reservoir_ready"],
+  ["water.reservoirFull", "reservoir_full"],
 ];
 
 function variantOf(entry: WaterLevelEntryDto): ChipVariant {

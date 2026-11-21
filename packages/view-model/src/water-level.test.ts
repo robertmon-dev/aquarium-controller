@@ -11,18 +11,55 @@ const healthy: WaterLevelMetricsDto = {
   sump_pump: { wet: true, faulty: false },
   main_tank: { wet: true, faulty: false },
   sump_reserve: { wet: false, faulty: false },
+  sump_return_level: { wet: true, faulty: false },
+  reservoir_ready: { wet: false, faulty: false },
+  reservoir_full: { wet: false, faulty: false },
   sensors_healthy: true,
 };
 
 describe("waterLevelCard", () => {
-  it("returns the five sensors in a stable order", () => {
+  it("returns the eight sensors in a stable order", () => {
     expect(waterLevelCard(healthy, t).chips.map((c) => c.label)).toEqual([
       "main tank",
       "mechanical",
       "biological",
       "pump",
+      "return chamber",
       "reserve",
+      "reservoir ready",
+      "reservoir full",
     ]);
+  });
+
+  it("labels the return chamber and reservoir sensors in polish", () => {
+    const labels = waterLevelCard(healthy, translator("pl")).chips.map(
+      (c) => c.label,
+    );
+
+    expect(labels).toEqual(
+      expect.arrayContaining([
+        "komora pompy",
+        "zapas na podmianę",
+        "zbiornik pełny",
+      ]),
+    );
+  });
+
+  it("shows the reservoir and return chamber sensors with their own state", () => {
+    const chips = waterLevelCard(
+      { ...healthy, reservoir_full: { wet: true, faulty: true } },
+      t,
+    ).chips;
+
+    expect(chips.find((c) => c.label === "return chamber")?.variant).toBe(
+      "wet",
+    );
+    expect(chips.find((c) => c.label === "reservoir ready")?.variant).toBe(
+      "dry",
+    );
+    expect(chips.find((c) => c.label === "reservoir full")?.variant).toBe(
+      "faulty",
+    );
   });
 
   it("maps wet and dry to distinct chip variants", () => {
