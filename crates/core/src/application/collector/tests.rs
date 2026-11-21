@@ -1154,6 +1154,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
         drain: false,
         operation_kind: Some(OperationKind::TopOff),
         operation_state: OperationState::Refilling,
+        circulation_starved: true,
     };
 
     TelemetryCollector::new(
