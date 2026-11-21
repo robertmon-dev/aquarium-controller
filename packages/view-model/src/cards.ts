@@ -1,4 +1,4 @@
-import type { TankTelemetryDto } from "@aquarium/api-client";
+import type { OperationState, TankTelemetryDto } from "@aquarium/api-client";
 import type { Translate } from "@aquarium/i18n";
 import type { Metric, StatusTone } from "./semantics";
 import {
@@ -232,6 +232,42 @@ export function systemCard(s: TankTelemetryDto, t: Translate): CardData {
         label: t("cards.system.uptime"),
         value: formatDuration(uptime_seconds),
       },
+    ],
+  };
+}
+
+const OPERATION_LABELS = {
+  idle: "cards.pumps.circulating",
+  draining: "cards.pumps.draining",
+  settling: "cards.pumps.settling",
+  refilling: "cards.pumps.refilling",
+  resuming: "cards.pumps.resuming",
+  suspended: "cards.pumps.suspended",
+} as const satisfies Record<OperationState, Parameters<Translate>[0]>;
+
+export function pumpsCard(s: TankTelemetryDto, t: Translate): CardData {
+  const pumps = s.pumps;
+  const toppingOff =
+    pumps.operation_kind === "top_off" && pumps.operation_state === "refilling";
+
+  const statusLabel = toppingOff
+    ? t("cards.pumps.toppingOff")
+    : pumps.operation_state !== "idle"
+      ? t(OPERATION_LABELS[pumps.operation_state])
+      : pumps.return
+        ? t("cards.pumps.circulating")
+        : t("cards.pumps.stopped");
+
+  return {
+    title: t("cards.pumps.title"),
+    status:
+      pumps.return && pumps.operation_state !== "suspended" ? "ok" : "degraded",
+    statusLabel,
+    metrics: [
+      { label: t("cards.pumps.return"), value: onOff(t, pumps.return) },
+      { label: t("cards.pumps.uv"), value: onOff(t, pumps.uv) },
+      { label: t("cards.pumps.makeup"), value: onOff(t, pumps.makeup) },
+      { label: t("cards.pumps.drain"), value: onOff(t, pumps.drain) },
     ],
   };
 }

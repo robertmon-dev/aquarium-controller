@@ -5,6 +5,7 @@ import {
   co2Card,
   filtrationCard,
   lightingCard,
+  pumpsCard,
   systemCard,
   tdsCard,
   temperatureCard,
@@ -70,6 +71,14 @@ const snapshot: TankTelemetryDto = {
       override_expires_in_s: null,
       target_celsius: 26,
     },
+  },
+  pumps: {
+    return: true,
+    uv: true,
+    makeup: false,
+    drain: false,
+    operation_kind: null,
+    operation_state: "idle",
   },
   leak_detected: false,
 };
@@ -277,5 +286,81 @@ describe("tdsCard", () => {
 
     expect(card.status).toBe("ok");
     expect(card.metrics[0]?.value).toBe("0 ppm");
+  });
+});
+
+describe("pumpsCard", () => {
+  it("reads as circulating when the return pump runs", () => {
+    const card = pumpsCard(snapshot, t);
+
+    expect(card.status).toBe("ok");
+    expect(card.statusLabel).toBe("circulating");
+    expect(card.metrics.map((metric) => metric.value)).toEqual([
+      "on",
+      "on",
+      "off",
+      "off",
+    ]);
+  });
+
+  it("is degraded when circulation stopped", () => {
+    const card = pumpsCard(
+      { ...snapshot, pumps: { ...snapshot.pumps, return: false, uv: false } },
+      t,
+    );
+
+    expect(card.status).toBe("degraded");
+    expect(card.statusLabel).toBe("circulation stopped");
+  });
+
+  it("names the water change phase", () => {
+    const card = pumpsCard(
+      {
+        ...snapshot,
+        pumps: {
+          ...snapshot.pumps,
+          drain: true,
+          operation_kind: "water_change",
+          operation_state: "draining",
+        },
+      },
+      t,
+    );
+
+    expect(card.statusLabel).toBe("draining");
+  });
+
+  it("calls a refilling top-off a top-off", () => {
+    const card = pumpsCard(
+      {
+        ...snapshot,
+        pumps: {
+          ...snapshot.pumps,
+          makeup: true,
+          operation_kind: "top_off",
+          operation_state: "refilling",
+        },
+      },
+      t,
+    );
+
+    expect(card.statusLabel).toBe("topping off");
+  });
+
+  it("is degraded while an operation waits to be resumed", () => {
+    const card = pumpsCard(
+      {
+        ...snapshot,
+        pumps: {
+          ...snapshot.pumps,
+          operation_kind: "water_change",
+          operation_state: "suspended",
+        },
+      },
+      t,
+    );
+
+    expect(card.status).toBe("degraded");
+    expect(card.statusLabel).toBe("suspended");
   });
 });

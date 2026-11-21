@@ -26,6 +26,7 @@ export {
   co2Card,
   filtrationCard,
   lightingCard,
+  pumpsCard,
   RATED_MAX_PPM,
   systemCard,
   tdsCard,
