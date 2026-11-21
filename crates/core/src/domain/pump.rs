@@ -601,6 +601,9 @@ pub struct Operation {
 
     #[serde(default)]
     pub refill_wall_ms: u64,
+
+    #[serde(skip)]
+    pub refill_armed: bool,
 }
 
 pub const fn refill_timeout_s(refill_s: u32) -> u32 {
@@ -623,6 +626,7 @@ impl Operation {
             started_at,
             resumed: false,
             refill_wall_ms: 0,
+            refill_armed: false,
         }
     }
 
@@ -648,6 +652,7 @@ impl Operation {
 
         if self.phase == Phase::Refilling {
             self.refill_wall_ms += wall_ms;
+            self.refill_armed |= ran_ms > 0;
         }
 
         let timed_out =
@@ -661,6 +666,7 @@ impl Operation {
             Phase::Settling if done => {
                 self.phase = Phase::Refilling;
                 self.refill_wall_ms = 0;
+                self.refill_armed = false;
                 Step::PhaseChanged
             }
             Phase::Refilling if levels.reservoir_empty => {
@@ -669,7 +675,7 @@ impl Operation {
             Phase::Refilling if levels.tank_overflow => Step::Finished(OperationResult::Overflow),
             Phase::Refilling
                 if levels.sump_full
-                    && (self.plan.kind == OperationKind::TopOff || self.ran_ms[slot] > 0) =>
+                    && (self.plan.kind == OperationKind::TopOff || self.refill_armed) =>
             {
                 Step::Finished(OperationResult::SumpFull)
             }
@@ -685,6 +691,7 @@ impl Operation {
         }
 
         self.resumed = true;
+        self.refill_armed = false;
     }
 
     pub fn ready_to_resume(&self, levels: Option<LevelConditions>) -> Result<(), Blocker> {

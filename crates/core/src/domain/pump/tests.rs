@@ -1080,3 +1080,30 @@ fn only_the_normally_closed_circulation_channels_fail_safe_on() {
     assert!(!PumpId::Makeup.fail_safe_on());
     assert!(!PumpId::Drain.fail_safe_on());
 }
+
+#[test]
+fn a_resumed_refill_waits_for_the_makeup_pump_before_a_full_sump_ends_it() {
+    let full = LevelConditions {
+        sump_full: true,
+        ..HEALTHY
+    };
+    let mut operation = Operation::start(plan(1, 0, 60), None);
+    operation.advance(SECOND, SECOND, Some(HEALTHY));
+    operation.advance(0, 0, Some(HEALTHY));
+    assert_eq!(operation.phase, Phase::Refilling);
+    operation.advance(5 * SECOND, 5 * SECOND, Some(HEALTHY));
+
+    let mut resumed: Operation =
+        serde_json::from_slice(&serde_json::to_vec(&operation).expect("encode")).expect("decode");
+    resumed.resume();
+
+    assert_eq!(resumed.advance(0, SECOND, Some(full)), Step::Continue);
+    assert_eq!(
+        resumed.advance(SECOND, SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(
+        resumed.advance(0, SECOND, Some(full)),
+        Step::Finished(OperationResult::SumpFull)
+    );
+}
