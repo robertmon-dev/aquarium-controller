@@ -4079,3 +4079,38 @@ fn water_change_activity_follows_only_a_water_change() {
         .expect("cancelled");
     assert!(!rig.service.water_change_active());
 }
+
+#[test]
+fn a_resuming_water_change_is_active() {
+    use crate::ports::outbound::WaterChangeActivity;
+
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 20), Some(EPOCH - 10));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+    rig.service.set_supervision(Supervision::Unavailable);
+
+    rig.run(3, Some(&healthy()));
+
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Resuming
+    );
+    assert!(rig.service.water_change_active());
+}
+
+#[test]
+fn a_suspended_water_change_is_not_active() {
+    use crate::ports::outbound::WaterChangeActivity;
+
+    let store = Arc::new(VolatilePumpStore::default());
+    seed_checkpoint(&store, interrupted_drain(EPOCH - 9000), Some(EPOCH - 8000));
+    let mut rig = Rig::build(store, TestClock::synced(EPOCH), None);
+
+    rig.run(5, Some(&healthy()));
+
+    assert_eq!(
+        rig.service.status().operation.state,
+        OperationState::Suspended
+    );
+    assert!(!rig.service.water_change_active());
+}
