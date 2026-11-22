@@ -244,6 +244,7 @@ struct State {
     water_change_ended: Option<(Instant, OperationResult)>,
     return_held_after_drain: bool,
     supervision: Supervision,
+    started_before_boot: [Option<u64>; 2],
 }
 
 impl State {
@@ -556,6 +557,21 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             }
             None => (Activity::Idle, stored_history(&store), None),
         };
+        let resuming = match &activity {
+            Activity::Resuming(checkpoint) => Some(&checkpoint.operation),
+            _ => None,
+        };
+        let started_before_boot = [OperationKind::TopOff, OperationKind::WaterChange].map(|kind| {
+            let resumed = resuming
+                .filter(|operation| operation.plan.kind == kind)
+                .and_then(|operation| operation.started_at);
+            let recorded = match kind {
+                OperationKind::TopOff => last.top_off,
+                OperationKind::WaterChange => last.water_change,
+            }
+            .and_then(|record| record.started_at);
+            resumed.max(recorded)
+        });
 
         Self {
             state: Mutex::new(State {
@@ -580,6 +596,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 water_change_ended: None,
                 return_held_after_drain,
                 supervision: Supervision::Off,
+                started_before_boot,
             }),
             store,
             clock,
@@ -814,6 +831,10 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 ));
             }
         }
+
+        due.retain(|(kind, _, _)| {
+            state.started_before_boot[kind_slot(*kind)].is_none_or(|started| started / 60 != minute)
+        });
 
         let mut started = false;
 
@@ -1573,6 +1594,13 @@ pub struct PumpController<O, S, C> {
     last_checkpoint: Option<Instant>,
     last_flush: Option<Instant>,
     possibly_on: [bool; 4],
+}
+
+const fn kind_slot(kind: OperationKind) -> usize {
+    match kind {
+        OperationKind::TopOff => 0,
+        OperationKind::WaterChange => 1,
+    }
 }
 
 const fn opposite_mover(id: PumpId) -> Option<PumpId> {

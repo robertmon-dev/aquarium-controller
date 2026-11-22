@@ -106,6 +106,31 @@ fn warsaw_offsets_follow_the_eu_rules() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn followup_reboot_in_the_same_minute_does_not_repeat_a_completed_top_off() {
+    LocalSet::new()
+        .run_until(async {
+            let due = utc(2026, 10, 24, 0, 30);
+            let settings = r#"{"top_off":[{"cron":"30 2 * * *","duration_s":3}]}"#;
+            let mut sim = start(due - 15, settings).await;
+            let first = run_until_epoch(&sim, due + 10, &[due - 10]).await;
+            assert_eq!(first.top_offs.len(), 1);
+            assert_eq!(first.top_offs[0].result, OperationResult::Completed);
+
+            sim.restart(std::time::Duration::from_secs(2), false).await;
+            sim.run_for(std::time::Duration::from_secs(3)).await;
+            sim.clock.sync();
+            run_until_epoch(&sim, due + 45, &[]).await;
+
+            assert_eq!(
+                sim.water().count(Event::Pump(PumpId::Makeup, true)),
+                1,
+                "the same scheduled minute switched the pump on twice"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn dst_fall_back_fires_a_0230_top_off_once() {
     LocalSet::new()
         .run_until(async {
