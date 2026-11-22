@@ -7,20 +7,22 @@ use std::time::Duration;
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
+    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore, NoLeakSensor,
 };
 use aquarium_core::application::heater::probe_heaters;
 use aquarium_core::application::{
-    export_loop, heater_loop, pump_loop, CalibrationService, HeaterController, HeaterService,
-    MetricsExporter, PumpController, PumpService, TelemetryCollector, TelemetryConfig,
-    TelemetrySources, WaterLevelSampler,
+    export_loop, heater_loop, pump_loop, reservoir_loop, CalibrationService, HeaterController,
+    HeaterService, MetricsExporter, PumpController, PumpService, ReservoirController,
+    ReservoirService, TelemetryCollector, TelemetryConfig, TelemetrySources, WaterLevelSampler,
 };
 use aquarium_core::domain::pump::{OperationEvent, PumpId, Supervision};
+use aquarium_core::domain::reservoir::{FillEvent, ReservoirChannel};
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, PumpStore, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureReader, TemperatureSampleSink, WaterLevelPins, WaterLevelSink, WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, PumpStore, ReservoirStatusSource, ReservoirStore,
+    SystemHealthProvider, TdsReader, TdsSampleSink, TelemetrySink, TemperatureReader,
+    TemperatureSampleSink, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -47,8 +49,10 @@ use aquarium_controller::adapters::outbound::influx::InfluxWriter;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::nvs_heater::NvsHeaterSettings;
 use aquarium_controller::adapters::outbound::nvs_pump::NvsPumpStore;
+use aquarium_controller::adapters::outbound::nvs_reservoir::NvsReservoirStore;
 use aquarium_controller::adapters::outbound::pump_storage::PumpStorage;
-use aquarium_controller::adapters::outbound::relay::RelayOutputs;
+use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
+use aquarium_controller::adapters::outbound::reservoir_storage::ReservoirStorage;
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
@@ -161,8 +165,16 @@ async fn run() -> anyhow::Result<()> {
             SETTINGS.pumps.contacts,
         )
         .context("Failed to initialize the pump relay outputs")?;
+        let mut barrel = ReservoirRelayOutputs::new(
+            peripherals.pins.gpio40,
+            peripherals.pins.gpio41,
+            peripherals.pins.gpio42,
+            peripherals.pins.gpio47,
+            SETTINGS.reservoir.contacts,
+        )
+        .context("Failed to initialize the barrel relay outputs")?;
 
-        return probe_relays(&mut relays).await;
+        return probe_relays(&mut relays, &mut barrel).await;
     }
 
     let relays = if components.pumps.is_initialized() {
@@ -175,6 +187,21 @@ async fn run() -> anyhow::Result<()> {
                 SETTINGS.pumps.contacts,
             )
             .context("Failed to initialize the pump relay outputs")?,
+        )
+    } else {
+        None
+    };
+
+    let barrel_relays = if components.reservoir.is_initialized() {
+        Some(
+            ReservoirRelayOutputs::new(
+                peripherals.pins.gpio40,
+                peripherals.pins.gpio41,
+                peripherals.pins.gpio42,
+                peripherals.pins.gpio47,
+                SETTINGS.reservoir.contacts,
+            )
+            .context("Failed to initialize the barrel relay outputs")?,
         )
     } else {
         None
@@ -333,7 +360,7 @@ async fn run() -> anyhow::Result<()> {
     };
     let pumps = Arc::new(PumpService::new(
         SETTINGS.pumps.defaults.clone(),
-        match nvs_partition {
+        match nvs_partition.clone() {
             Some(partition) => PumpStorage::Nvs(
                 NvsPumpStore::new(partition).context("Failed to open the pump namespace in NVS")?,
             ),
@@ -345,21 +372,54 @@ async fn run() -> anyhow::Result<()> {
     let pumps_republish = Arc::new(Notify::new());
     let pump_heartbeat = Arc::new(AtomicU32::new(0));
 
+    let (fill_events, fill_events_rx) = if influx_exporting {
+        let (sender, receiver) = mpsc::unbounded_channel::<FillEvent>();
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+    let reservoir_nvs =
+        nvs_partition.and_then(|partition| match NvsReservoirStore::new(partition) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                error!(%error, "Reservoir NVS namespace unavailable, barrel relays held released");
+                None
+            }
+        });
+    let reservoir_automated = components.reservoir.is_running()
+        && reservoir_nvs.is_some()
+        && components.water_level.is_running()
+        && components.tds.is_running()
+        && components.telemetry.is_running();
+    let reservoir = Arc::new(ReservoirService::new(
+        SETTINGS.reservoir.defaults,
+        reservoir_nvs.map_or(ReservoirStorage::Unavailable, ReservoirStorage::Nvs),
+        Arc::clone(&clock),
+        fill_events,
+        SETTINGS.reservoir.timing,
+    ));
+    let reservoir_republish = Arc::new(Notify::new());
+    let reservoir_heartbeat = Arc::new(AtomicU32::new(0));
     let pumps_automated = components.pumps.is_running() && nvs_available;
 
+    let mut supervised: Vec<Arc<dyn Supervised>> = Vec::new();
     let mut heartbeats = Vec::new();
     if heater_task.is_some() {
         heartbeats.push(Arc::clone(&heater_heartbeat));
     }
     if pumps_automated && relays.is_some() {
         heartbeats.push(Arc::clone(&pump_heartbeat));
+        supervised.push(pumps.clone());
+    }
+    if reservoir_automated {
+        heartbeats.push(Arc::clone(&reservoir_heartbeat));
+        supervised.push(reservoir.clone());
     }
 
     let watchdog_task = if heartbeats.is_empty() {
-        pumps.set_supervision(Supervision::Off);
         None
     } else {
-        pumps.set_supervision(Supervision::Unavailable);
+        supervise(&supervised, Supervision::Unavailable);
         let config = TWDTConfig {
             duration: WATCHDOG_TIMEOUT,
             panic_on_trigger: true,
@@ -367,9 +427,9 @@ async fn run() -> anyhow::Result<()> {
         };
 
         match TWDTDriver::new(peripherals.twdt, &config) {
-            Ok(driver) => Some(main_watchdog(driver, heartbeats, Arc::clone(&pumps))),
+            Ok(driver) => Some(main_watchdog(driver, heartbeats, supervised)),
             Err(error) => {
-                error!(%error, "Watchdog unavailable, new drain and makeup runs are refused");
+                error!(%error, "Watchdog unavailable, pump and barrel supervision unavailable");
                 None
             }
         }
@@ -392,6 +452,35 @@ async fn run() -> anyhow::Result<()> {
         }
         (Some(outputs), false) => {
             info!("Pump relays held released but not controlled");
+            (None, Some(outputs))
+        }
+        (None, _) => (None, None),
+    };
+
+    let (reservoir_task, _idle_barrel_relays) = match (barrel_relays, reservoir_automated) {
+        (Some(outputs), true) => {
+            info!("Barrel control running");
+            (
+                Some(reservoir_loop(
+                    ReservoirController::new(
+                        outputs,
+                        Arc::clone(&reservoir),
+                        SETTINGS.reservoir.timing,
+                    ),
+                    levels.subscribe(),
+                    store.subscribe_tds(),
+                    NoLeakSensor,
+                    pumps_automated.then(|| Arc::clone(&pumps)),
+                    reservoir.change_signal(),
+                    Arc::clone(&reservoir_republish),
+                    SETTINGS.reservoir.timing,
+                    Arc::clone(&reservoir_heartbeat),
+                )),
+                None,
+            )
+        }
+        (Some(outputs), false) => {
+            info!("Barrel relays held released but not controlled");
             (None, Some(outputs))
         }
         (None, _) => (None, None),
@@ -438,6 +527,7 @@ async fn run() -> anyhow::Result<()> {
                 calibration: Arc::clone(&calibration),
                 heaters: Arc::clone(&heaters),
                 pumps: Arc::clone(&pumps),
+                reservoir: Arc::clone(&reservoir),
             },
             Arc::clone(&store),
             TelemetryConfig {
@@ -456,6 +546,7 @@ async fn run() -> anyhow::Result<()> {
             lighting.change_signal(),
             Arc::clone(&heaters_republish),
             Arc::clone(&pumps_republish),
+            reservoir_republish,
         )),
         (Some(_), false) => {
             info!("Telemetry collector built but not sampling");
@@ -480,6 +571,7 @@ async fn run() -> anyhow::Result<()> {
                     ),
                     store.subscribe(),
                     pump_events_rx.context("pump events are not wired for the Influx export")?,
+                    fill_events_rx.context("fill events are not wired for the Influx export")?,
                 ))
             } else {
                 info!("InfluxDB worker started but not exporting");
@@ -513,6 +605,7 @@ async fn run() -> anyhow::Result<()> {
             Arc::clone(&calibration),
             Arc::clone(&heaters),
             Arc::clone(&pumps),
+            Arc::clone(&reservoir),
             HttpConfig {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
@@ -537,6 +630,7 @@ async fn run() -> anyhow::Result<()> {
         optional(server),
         optional(heater_task),
         optional(pump_task),
+        optional(reservoir_task),
         optional(wifi_loop),
         optional(health_loop),
         optional(nvs_alarm),
@@ -554,7 +648,7 @@ async fn nvs_unavailable_alarm(error: EspError) {
         error!(
             %error,
             "NVS partition unusable and left untouched: defaults in use, nothing is saved, \
-             pump automation stopped; erase it deliberately as described in the README"
+             pump and barrel automation stopped; erase it deliberately as described in the README"
         );
     }
 }
@@ -568,20 +662,42 @@ async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
     }
 }
 
-async fn main_watchdog<S: PumpStore, C: Clock>(
+trait Supervised {
+    fn set_supervision(&self, supervision: Supervision);
+}
+
+impl<S: PumpStore, C: Clock> Supervised for PumpService<S, C> {
+    fn set_supervision(&self, supervision: Supervision) {
+        PumpService::set_supervision(self, supervision);
+    }
+}
+
+impl<S: ReservoirStore, C: Clock> Supervised for ReservoirService<S, C> {
+    fn set_supervision(&self, supervision: Supervision) {
+        ReservoirService::set_supervision(self, supervision);
+    }
+}
+
+fn supervise(services: &[Arc<dyn Supervised>], supervision: Supervision) {
+    for service in services {
+        service.set_supervision(supervision);
+    }
+}
+
+async fn main_watchdog(
     mut driver: TWDTDriver<'static>,
     heartbeats: Vec<Arc<AtomicU32>>,
-    pumps: Arc<PumpService<S, C>>,
+    supervised: Vec<Arc<dyn Supervised>>,
 ) {
     let mut subscription = match driver.watch_current_task() {
         Ok(subscription) => subscription,
         Err(error) => {
-            error!(%error, "Watchdog could not watch the main task, new drain and makeup runs are refused");
+            error!(%error, "Watchdog could not watch the main task, pump and barrel supervision unavailable");
             return;
         }
     };
 
-    pumps.set_supervision(Supervision::Active);
+    supervise(&supervised, Supervision::Active);
     info!(
         timeout_s = WATCHDOG_TIMEOUT.as_secs(),
         loops = heartbeats.len(),
@@ -608,6 +724,7 @@ async fn main_watchdog<S: PumpStore, C: Clock>(
             .zip(&last_beats)
             .any(|(beat, last)| beat == last)
         {
+            supervise(&supervised, Supervision::Unavailable);
             warn!("A control loop heartbeat stalled, watchdog not fed");
             continue;
         }
@@ -615,10 +732,10 @@ async fn main_watchdog<S: PumpStore, C: Clock>(
         last_beats = beats;
 
         match subscription.feed() {
-            Ok(()) => pumps.set_supervision(Supervision::Active),
+            Ok(()) => supervise(&supervised, Supervision::Active),
             Err(error) => {
                 error!(%error, "Watchdog feed failed");
-                pumps.set_supervision(Supervision::Unavailable);
+                supervise(&supervised, Supervision::Unavailable);
             }
         }
     }
@@ -638,22 +755,24 @@ where
     }
 }
 
-async fn sensor_task<R, C, H, S, O, W, A, K, T, P>(
-    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T, P>,
+async fn sensor_task<R, C, H, S, O, W, A, K, T, P, V>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V>,
     lighting_changed: Arc<Notify>,
     heaters_changed: Arc<Notify>,
     pumps_changed: Arc<Notify>,
+    reservoir_changed: Arc<Notify>,
 ) where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink,
+    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink + TdsSampleSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
     T: HeaterStatusSource,
     P: PumpStatusSource,
+    V: ReservoirStatusSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -664,6 +783,7 @@ async fn sensor_task<R, C, H, S, O, W, A, K, T, P>(
             _ = lighting_changed.notified() => collector.republish(),
             _ = heaters_changed.notified() => collector.republish(),
             _ = pumps_changed.notified() => collector.republish(),
+            _ = reservoir_changed.notified() => collector.republish(),
         }
     }
 }
@@ -707,20 +827,54 @@ async fn probe_adc(front_end: &mut AnalogFrontEnd<'_>) -> anyhow::Result<()> {
     }
 }
 
-async fn probe_relays(relays: &mut RelayOutputs<'_>) -> anyhow::Result<()> {
+const BARREL_PROBE: [(ReservoirChannel, bool); 8] = [
+    (ReservoirChannel::RoValve, true),
+    (ReservoirChannel::Booster, true),
+    (ReservoirChannel::Booster, false),
+    (ReservoirChannel::RoValve, false),
+    (ReservoirChannel::TapValve, true),
+    (ReservoirChannel::TapValve, false),
+    (ReservoirChannel::Mixer, true),
+    (ReservoirChannel::Mixer, false),
+];
+
+async fn probe_relays(
+    relays: &mut RelayOutputs<'_>,
+    barrel: &mut ReservoirRelayOutputs<'_>,
+) -> anyhow::Result<()> {
     let mut ticker = tokio::time::interval(PROBE_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    info!("Relay probe: IN1 GPIO5 return, IN2 GPIO6 uv, IN3 GPIO7 makeup, IN4 GPIO16 drain");
+    info!(
+        "Relay probe: module 1 IN1 GPIO5 return, IN2 GPIO6 uv, IN3 GPIO7 makeup, IN4 GPIO16 drain"
+    );
+    info!("Relay probe: module 2 IN1 GPIO40 ro_valve, IN2 GPIO41 booster, IN3 GPIO42 tap_valve, IN4 GPIO47 mixer");
 
     loop {
         for id in PumpId::ALL {
             for coil in [true, false] {
                 ticker.tick().await;
-
                 match relays.set_coil(id, coil) {
                     Ok(()) => info!(channel = id.name(), coil, "relay"),
                     Err(reason) => error!(channel = id.name(), reason, "relay"),
+                }
+            }
+        }
+
+        for (channel, coil) in BARREL_PROBE {
+            ticker.tick().await;
+            match barrel.set_coil(channel, coil) {
+                Ok(()) => info!(channel = channel.name(), coil, "barrel relay"),
+                Err(reason) => {
+                    for output in [
+                        ReservoirChannel::Booster,
+                        ReservoirChannel::RoValve,
+                        ReservoirChannel::TapValve,
+                        ReservoirChannel::Mixer,
+                    ] {
+                        let _ = barrel.set_coil(output, false);
+                    }
+                    anyhow::bail!("barrel relay probe stopped at {}: {reason}", channel.name());
                 }
             }
         }
