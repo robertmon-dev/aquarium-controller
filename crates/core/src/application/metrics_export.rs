@@ -6,6 +6,7 @@ use tokio::time::Instant;
 
 use crate::domain::metrics::TankTelemetryDto;
 use crate::domain::pump::OperationEvent;
+use crate::domain::reservoir::FillEvent;
 use crate::ports::outbound::metrics_export::{ExportError, MetricsWriter};
 use crate::protocol::line_protocol;
 
@@ -44,6 +45,10 @@ where
 
     pub fn enqueue_operation(&mut self, event: &OperationEvent) -> bool {
         self.push(line_protocol::encode_operation(event))
+    }
+
+    pub fn enqueue_fill(&mut self, event: &FillEvent) -> bool {
+        self.push(line_protocol::encode_fill(event))
     }
 
     fn push(&mut self, encoded: Option<String>) -> bool {
@@ -119,6 +124,7 @@ pub async fn export_loop<W: MetricsWriter>(
     mut exporter: MetricsExporter<W>,
     mut snapshots: watch::Receiver<TankTelemetryDto>,
     mut events: mpsc::UnboundedReceiver<OperationEvent>,
+    mut fills: mpsc::UnboundedReceiver<FillEvent>,
 ) {
     loop {
         let retry_at = exporter.next_attempt_at();
@@ -134,6 +140,9 @@ pub async fn export_loop<W: MetricsWriter>(
             }
             Some(event) = events.recv() => {
                 exporter.enqueue_operation(&event);
+            }
+            Some(event) = fills.recv() => {
+                exporter.enqueue_fill(&event);
             }
             () = sleep_until_some(retry_at), if retry_at.is_some() => {}
         }
