@@ -16,3 +16,13 @@ pub struct TemperatureSample {
 pub trait TemperatureSampleSink {
     fn publish_temperature(&self, sample: TemperatureSample);
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TdsSample {
+    pub ppm: Option<f32>,
+    pub measured_at: Instant,
+}
+
+pub trait TdsSampleSink {
+    fn publish_tds(&self, sample: TdsSample);
+}
