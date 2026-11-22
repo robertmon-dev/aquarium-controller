@@ -141,5 +141,17 @@ impl FromStr for OverrideTarget {
     }
 }
 
+pub const MAX_OVERRIDE_S: u32 = 600;
+
+pub fn validate_override(on: bool, duration_s: Option<u32>) -> Result<(), &'static str> {
+    match (on, duration_s) {
+        (_, Some(seconds)) if !(1..=MAX_OVERRIDE_S).contains(&seconds) => {
+            Err("an override lasts 1 to 600 s")
+        }
+        (true, None) => Err("an ON override needs duration_s"),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests;

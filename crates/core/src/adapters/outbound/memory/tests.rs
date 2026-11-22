@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use super::{InMemoryTelemetryStore, VolatilePumpStore};
+use super::{InMemoryTelemetryStore, VolatilePumpStore, VolatileReservoirStore};
 use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
 use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
     ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink, TemperatureSample,
     TemperatureSampleSink,
 };
+use tokio::time::Instant;
 
 fn snapshot_with_uptime(uptime: u64) -> TankTelemetryDto {
     let mut s = TankTelemetryDto::empty();
@@ -413,4 +414,32 @@ fn the_volatile_pump_store_keeps_records_apart() {
 
     store.erase(PumpRecord::Settings).expect("erase");
     assert_eq!(store.load(PumpRecord::Settings), None);
+}
+
+#[test]
+fn the_tds_channel_hands_out_the_latest_sample() {
+    use crate::ports::outbound::{TdsSample, TdsSampleSink};
+
+    let store = InMemoryTelemetryStore::new();
+    let receiver = store.subscribe_tds();
+    assert_eq!(*receiver.borrow(), None);
+
+    let sample = TdsSample {
+        ppm: Some(150.0),
+        measured_at: Instant::now(),
+    };
+    store.publish_tds(sample);
+    assert_eq!(*receiver.borrow(), Some(sample));
+}
+
+#[test]
+fn the_volatile_reservoir_store_keeps_records_apart() {
+    use crate::ports::outbound::{ReservoirRecord, ReservoirStore};
+
+    let store = VolatileReservoirStore::default();
+    store.store(ReservoirRecord::Fault, b"x").expect("stored");
+    assert_eq!(store.load(ReservoirRecord::Fault), Some(b"x".to_vec()));
+    assert_eq!(store.load(ReservoirRecord::Running), None);
+    store.erase(ReservoirRecord::Fault).expect("erased");
+    assert_eq!(store.load(ReservoirRecord::Fault), None);
 }
