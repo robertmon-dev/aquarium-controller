@@ -429,6 +429,7 @@ pub struct Observation {
     phase: Option<Phase>,
     return_forced_off: bool,
     uv_forced_off: bool,
+    supervision_unavailable: bool,
     changed: bool,
 }
 
@@ -762,6 +763,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             phase: state.phase(),
             return_forced_off,
             uv_forced_off,
+            supervision_unavailable: state.supervision == Supervision::Unavailable,
             changed,
         }
     }
@@ -1616,6 +1618,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             uv_forced_off: observed.uv_forced_off,
             phase: observed.phase,
             return_held_after_drain,
+            supervision_unavailable: observed.supervision_unavailable,
         });
 
         let mut driven: [(bool, Option<ChannelFault>); 4] = [(false, None); 4];

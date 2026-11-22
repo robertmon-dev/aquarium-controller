@@ -142,6 +142,23 @@ fn the_refill_stop_sensor_reports_a_full_sump() {
 }
 
 #[test]
+fn lost_supervision_keeps_the_makeup_off_while_refilling() {
+    let decisions = decide(DecisionInput {
+        phase: Some(Phase::Refilling),
+        supervision_unavailable: true,
+        ..input(Some(HEALTHY))
+    });
+
+    assert!(!decisions[2].on);
+    assert_eq!(
+        decisions[2].blocked_by,
+        Some(Blocker::SupervisionUnavailable)
+    );
+    assert!(decisions[0].on);
+    assert!(decisions[1].on);
+}
+
+#[test]
 fn makeup_stops_on_a_full_sump_or_a_return_override() {
     let refilling = DecisionInput {
         phase: Some(Phase::Refilling),

@@ -197,6 +197,7 @@ pub struct DecisionInput {
     pub uv_forced_off: bool,
     pub phase: Option<Phase>,
     pub return_held_after_drain: bool,
+    pub supervision_unavailable: bool,
 }
 
 pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
@@ -220,6 +221,9 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
 
     let makeup = match input.levels {
         None => ChannelDecision::blocked(Blocker::LevelsUnavailable),
+        Some(_) if input.supervision_unavailable => {
+            ChannelDecision::blocked(Blocker::SupervisionUnavailable)
+        }
         Some(levels) if levels.reservoir_empty => ChannelDecision::blocked(Blocker::ReservoirEmpty),
         Some(levels) if levels.tank_overflow => ChannelDecision::blocked(Blocker::TankOverflow),
         Some(levels) if levels.sump_full => ChannelDecision::blocked(Blocker::SumpFull),

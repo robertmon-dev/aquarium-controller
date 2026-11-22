@@ -3674,6 +3674,30 @@ fn unavailable_supervision_refuses_new_water_movers() {
 }
 
 #[test]
+fn regression_losing_supervision_while_settling_keeps_makeup_off() {
+    let mut bench = Bench::new();
+    let levels = healthy();
+    bench.service.set_supervision(Supervision::Active);
+    bench.tick(&levels);
+    bench.service.start_water_change(PLAN).expect("accepted");
+    bench.tick(&levels);
+    bench.run(u64::from(PLAN.drain_s), &levels);
+    assert_eq!(
+        bench.service.status().operation.state,
+        OperationState::Settling
+    );
+    assert!(!bench.outputs.switched_on(PumpId::Makeup));
+
+    bench.service.set_supervision(Supervision::Unavailable);
+    bench.run(u64::from(PLAN.settle_s + PLAN.refill_s), &levels);
+
+    assert!(
+        !bench.outputs.switched_on(PumpId::Makeup),
+        "makeup switched on after watchdog supervision was lost"
+    );
+}
+
+#[test]
 fn a_scheduled_window_without_supervision_is_skipped_with_that_reason() {
     let mut rig = Rig::new();
     let healthy = healthy();
