@@ -137,6 +137,18 @@ Notes:
 * Enable control with `components.pumps` in `crates/firmware/src/settings.rs`.
 * The relay pins are driven low once the firmware initialises the relay module (`components.pumps` not `Off`). Before that, and with `pumps: Off`, they float, which the module reads as released — the same physical fail-safe.
 
+### Barrel relays (module 2)
+
+The second four-channel module shares the ESP32 ground and uses the same 5 V supply, VCC/JD-VCC jumper and High trigger setting as the pump module. Wire all four loads to normally open contacts. Both inlet valves are normally closed and the booster sits upstream of the RO membrane.
+
+```text
+supply ─┬─ RO valve (GPIO40) ─ booster (GPIO41) ─ RO membrane ─┐
+        └─ tap valve (GPIO42) ────────────────────────────────┴─ barrel
+                                                                 mixer (GPIO47), TDS (A0)
+```
+
+`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 are reserved for the white and RGB LED MOSFETs. GPIO38 is reserved for a future leak sensor.
+
 ### XKC-Y25 water-level sensors
 
 Eight non-contact sensors read the water through the glass. Each one has its own GPIO; they share only the supply.
@@ -186,6 +198,10 @@ Notes:
 | Pump relay IN2 — UV lamp (NC) | `GPIO6` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
 | Pump relay IN3 — makeup pump (NO) | `GPIO7` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
 | Pump relay IN4 — drain pump (NO) | `GPIO16` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
+| Barrel relay IN1 — RO valve | `GPIO40` | active-high output, NO contact |
+| Barrel relay IN2 — booster | `GPIO41` | active-high output, NO contact |
+| Barrel relay IN3 — tap valve | `GPIO42` | active-high output, NO contact |
+| Barrel relay IN4 — mixer | `GPIO47` | active-high output, NO contact |
 
 Board configuration lives in `sdkconfig.defaults`: 240 MHz, 8 MiB flash, octal PSRAM at 80 MHz, and a 128 KiB main-task stack (one `picoserve` connection costs roughly 78 KiB of stack on that task).
 
@@ -219,6 +235,7 @@ The panel refuses to capture a point while the reading is still moving. That gat
 * **Calibration over the API, persisted in NVS:** buffer points, the top-up tank temperature and the TDS factor are set from the apps and survive a reboot. The write goes to flash before the value takes effect, so a calibration that cannot be stored is refused rather than silently lost at the next power cycle.
 * **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, and pump control.
 * **Lighting overrides:** set a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit channel percentages, optionally time-boxed; overrides republish telemetry immediately rather than waiting for the next sample tick.
+* **Makeup barrel.** The second relay module fills the barrel with RO or mixes RO and tap water to a target TDS. Telemetry includes the barrel state. InfluxDB receives snapshots in `aquarium_reservoir` and fill records in `aquarium_reservoir_fill`.
 * **Pumps, UV, top-off and water changes:** four relay channels (return pump, UV lamp, makeup pump, drain pump) with water-level interlocks, cron-scheduled or on-demand top-offs and water changes, OFF overrides, runtime counters, and checkpoints in NVS so an interrupted operation resumes after a restart.
 * **InfluxDB 2.x export:** optional, compile-time gated on the `INFLUX_*` variables being present. Snapshots are buffered and batched, with bounded retry backoff, on a dedicated worker.
 * **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
@@ -290,7 +307,9 @@ Everything that is not a secret is a `const` in `crates/firmware/src/settings.rs
 
 Calibration is the exception: `sensors.calibration` holds only the **defaults used when NVS is empty**. Once a calibration has been written over the API it comes from flash, and editing the constants no longer changes what the device uses. `make erase` wipes NVS — and with it both the calibration and the stored WiFi credentials.
 
-The firmware never erases NVS on its own. If the partition cannot be opened (for example `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND` after a firmware change), it leaves the data untouched, logs the error code on the serial console every 30 s, and boots in a degraded mode: heaters regulate on the `settings.rs` defaults, calibration uses its defaults, every settings change is refused with `500`, and pump automation stays stopped with all relays released. To recover, read out anything worth keeping, then run `make erase-nvs` (or `espflash erase-parts --partition-table crates/firmware/partitions.csv nvs`) and reflash or restart; settings, calibration, pump schedules and WiFi data start from scratch.
+The firmware never erases NVS on its own. If the partition cannot be opened (for example `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND` after a firmware change), it leaves the data untouched, logs the error code on the serial console every 30 s, and boots in a degraded mode: heaters regulate on the `settings.rs` defaults, calibration uses its defaults, settings writes fail (`503` for the barrel), and pump and barrel automation stay stopped with their relays released. To recover, read out anything worth keeping, then run `make erase-nvs` (or `espflash erase-parts --partition-table crates/firmware/partitions.csv nvs`) and reflash or restart; settings, calibration, pump schedules and WiFi data start from scratch.
+
+Barrel control is opt-in. Set `components.reservoir`, `water_level`, `tds` and `telemetry` to `Running` and keep NVS available. In `Initialized` the barrel relays stay LOW. A running barrel controller also requires active watchdog supervision to energize an output.
 
 ## HTTP API
 
@@ -324,6 +343,12 @@ All routes sit behind a bearer-token layer: `Authorization: Bearer <API_TOKEN>`.
 | `POST` | `/api/water-change` | Start a water change from `drain_s`, `settle_s` and `refill_s` (`202`); `400` on an invalid plan or a drain larger than `reservoir_ready_l`, `409` while another operation runs, `423` when blocked or water levels are unavailable |
 | `POST` | `/api/water-change/resume` | Resume a suspended water change (`202`); `409` when none is suspended, `423` when blocked |
 | `DELETE` | `/api/water-change` | Cancel the water change (`204`) |
+| `GET` | `/api/reservoir` | Channel states, interlocks, runtime, active fill, last result, fault and restart holds |
+| `GET` / `PATCH` | `/api/reservoir/settings` | Read or update settings in NVS. Set `target_tds_ppm` to `null` for RO only |
+| `PUT` / `DELETE` | `/api/reservoir/{ro\|tap\|mixer}/override` | Set an override with `{"on":true,"duration_s":60}` or clear it (`204`). An OFF override without a duration lasts until cleared or rebooted |
+| `POST` | `/api/reservoir/{channel}/runtime/reset` | Zero the counter for `ro_valve`, `booster`, `tap_valve` or `mixer` (`204`) |
+| `POST` / `DELETE` | `/api/reservoir/fill` | Start a manual fill (`202`) or cancel it (`204`) |
+| `DELETE` | `/api/reservoir/fault` | Clear the persistent lockout (`204`) |
 
 ```bash
 curl -H "Authorization: Bearer $API_TOKEN" http://192.168.1.50/api/telemetry
@@ -382,7 +407,7 @@ Pump safeguards: a dry `sump_pump` chamber stops the return pump and the UV lamp
 * **Boot:** the water-level sampler publishes nothing until every sensor has given `debounce_samples` agreeing readings (about 1 s), so the pump loop sees no levels at first and the return pump keeps running instead of reacting to the filters' starting value.
 * **Restarts:** an operation interrupted by a restart resumes if the checkpoint is younger than `resume_window_s`, and is suspended otherwise. A wet or faulty tank overflow or sump flood sensor blocks both automatic and manual drain resumption. An operation resumes automatically at most once. After a second interruption it stays suspended until resumed over the API. While the checkpoint cannot be stored, the drain pump stays off (`storage_unavailable`) and continues once a checkpoint write succeeds, so a restart repeats at most one checkpoint interval of draining.
 * **Cancellation:** the controller replaces the live checkpoint with a finished record that includes the drain history, then archives it. If storage cannot record the cancellation, the operation stops locally and repeated `DELETE` requests for it return `503` until cancellation is durable. A reboot can recover the 12-hour gap from the finished record even while the history key is unwritable.
-* **Watchdog:** with `components.pumps` running, the firmware reconfigures the ESP-IDF task watchdog to a 10 s timeout that panics and reboots. The main task is subscribed and fed every 2 s, but only while the pump loop's heartbeat keeps advancing, so a stalled pump loop or a blocked main task resets the board and leaves the relays to their fail-safe contacts. While supervision is unavailable, new top-offs and water changes are refused and the makeup pump stays off (`supervision_unavailable`), also in a running operation, so a water change that reaches its refill ends with `refill_timeout`.
+* **Watchdog:** with `components.pumps` running, the firmware reconfigures the ESP-IDF task watchdog to a 10 s timeout that panics and reboots. The main task is subscribed and fed every 2 s, but only while the heartbeats of all running control loops keep advancing, so a stalled pump loop or a blocked main task resets the board and leaves the relays to their fail-safe contacts. While supervision is unavailable, new top-offs and water changes are refused and the makeup pump stays off (`supervision_unavailable`), also in a running operation, so a water change that reaches its refill ends with `refill_timeout`.
 
 Cron schedules are evaluated in local time (`Settings.timezone`), and need an SNTP-synchronised clock to fire. SNTP starts only with WiFi (`components.wifi` not `Off`), so without WiFi the schedules never fire. A window fires at most once per local minute (date, hour and minute) within 24 h, so the repeated hour when daylight saving time ends, or SNTP stepping the clock back, does not fire it again. A restart within the minute in which a window already started its operation does not fire it again either. A clock step forward skips the windows in between without a `last_skipped` record.
 
@@ -392,6 +417,46 @@ A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `tem
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).
+
+### Barrel fill operation and API responses
+
+* `auto_fill` defaults to false. Once enabled, it starts a fill after the full sensor has been continuously dry for `refill_debounce_s` (default 10 min). Wet, faulty or unavailable readings reset the timer.
+* With a target TDS, RO primes an empty barrel until the mixer is submerged. After mixing, a fresh TDS reading below target selects a tap pulse. At or above target the controller selects RO. At full level it stops the inlets and checks the mixed water against the tolerance.
+* During a water change both inlets and the booster stop. The mixer can keep running and the fill can continue afterwards. Each inlet defaults to 90 min of cumulative use followed by at least 15 min of rest.
+* Measure `empty_fill_s` with RO alone. If combined valve-open time exceeds 120% of that value while the full sensor is dry, all outputs stop and NVS retains an `overtime` fault. A detected leak also locks all outputs. Inspect the cause before clearing a fault.
+* An interrupted fill sets `held_after_reboot` until an accepted manual fill. An automatic fill ending in `timeout`, `blocked`, `tds_unavailable` or `aborted` sets `auto_latched`. An accepted manual fill or a healthy wet full sensor clears that latch.
+
+For each request, the controller returns the first applicable refusal in order.
+
+| Manual fill request | HTTP | Response body |
+|---|---|---|
+| Fill already running | 409 | `a barrel fill is already running` |
+| Stored fault | 423 | `the barrel fill is locked by a fault; clear it with DELETE /api/reservoir/fault` |
+| Wet leak sensor | 423 | `the leak sensor is wet` |
+| Watchdog unavailable | 423 | `the controller watchdog is not supervising the barrel` |
+| Levels unavailable | 423 | `barrel level readings are unavailable` |
+| Uncertain inlet output | 423 | `the other inlet valve may still be open` |
+| Full or faulty full sensor | 423 | `the barrel is full` |
+| Water change running | 423 | `a water change is running; the barrel fills after it` |
+| TDS target set and no fresh reading in 30 s | 423 | `no fresh TDS reading for the target` |
+| Start marker write failed | 503 | `the fill could not be recorded` |
+| Accepted | 202 | Empty |
+
+| Override request | HTTP | Response body |
+|---|---|---|
+| Unknown target | 404 | |
+| ON without a duration | 400 | `an ON override needs duration_s` |
+| Duration outside 1–600 s | 400 | `an override lasts 1 to 600 s` |
+| ON during a fill | 409 | `a barrel fill is running; cancel it before overriding` |
+| ON with a stored fault, wet leak sensor, missing supervision or unavailable levels | 423 | Same reason as for a manual fill |
+| Inlet ON with uncertain output or the other inlet forced on | 423 | `the other inlet valve may still be open` |
+| Inlet ON when full | 423 | `the barrel is full` |
+| Inlet ON during a water change | 423 | `a water change is running; the barrel fills after it` |
+| Inlet ON during its rest period | 423 | `the inlet is resting after a long run` |
+| Mixer ON when empty | 423 | `the barrel is empty, the mixer would run dry` |
+| Accepted ON or OFF | 200 | Updated barrel status |
+
+Cancelling an idle or active fill returns `204`. If NVS cannot retire the marker it returns `503` with `cancelled, but not recorded; the controller keeps retrying`. Clearing a fault returns `204`, including when already clear, `423 the leak sensor is wet` during a leak, or `503 the fault could not be cleared in storage` on a write failure.
 
 ## Project Structure
 
