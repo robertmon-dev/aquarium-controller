@@ -3886,6 +3886,143 @@ fn the_blind_return_hold_window_survives_a_restart() {
 }
 
 #[test]
+fn regression_a_recent_aborted_drain_keeps_the_return_off_before_clock_sync() {
+    let mut rig = Rig::new();
+    abort_a_water_change(&mut rig);
+    let record = rig
+        .service
+        .status()
+        .last_water_change
+        .expect("aborted drain");
+    assert!(record.finished_at.is_some());
+
+    let mut restarted = Rig::build(rig.store, TestClock::unsynced(), None);
+    restarted.run(1, None);
+    assert!(
+        !restarted.pins()[PumpId::Return.index()],
+        "the return switched on before the clock or level readings recovered"
+    );
+    assert!(restarted.service.status().return_held_after_drain);
+}
+
+#[test]
+fn regression_an_active_return_hold_survives_reboot_after_thirty_minutes() {
+    let mut rig = Rig::new();
+    abort_a_water_change(&mut rig);
+    rig.run(31 * 60, None);
+    assert!(rig.service.status().return_held_after_drain);
+    assert!(!rig.pins()[PumpId::Return.index()]);
+
+    let epoch = rig.clock.epoch_seconds().expect("synchronized clock");
+    let mut restarted = Rig::build(rig.store, TestClock::synced(epoch), None);
+    restarted.run(1, None);
+    assert!(
+        !restarted.pins()[PumpId::Return.index()],
+        "reboot released the hold while the same sensor outage continued"
+    );
+    assert!(restarted.service.status().return_held_after_drain);
+
+    restarted.run(31, Some(&running_sump()));
+    assert!(!restarted.service.status().return_held_after_drain);
+    assert!(restarted.pins()[PumpId::Return.index()]);
+}
+
+#[test]
+fn the_return_hold_is_stored_when_set_and_when_released() {
+    let mut rig = Rig::new();
+    abort_a_water_change(&mut rig);
+
+    rig.run(1, None);
+    assert_eq!(
+        decode::<bool>(&rig.store, PumpRecord::ReturnHold),
+        Some(true)
+    );
+
+    rig.run(1, Some(&running_sump()));
+    assert_eq!(
+        decode::<bool>(&rig.store, PumpRecord::ReturnHold),
+        Some(false)
+    );
+}
+
+#[test]
+fn storage_without_a_return_hold_starts_unheld() {
+    let mut rig = Rig::new();
+
+    rig.run(5, None);
+
+    assert!(!rig.service.status().return_held_after_drain);
+    assert!(rig.pins()[PumpId::Return.index()]);
+    assert_eq!(decode::<bool>(&rig.store, PumpRecord::ReturnHold), None);
+}
+
+#[derive(Default)]
+struct HoldRefusingStore {
+    inner: VolatilePumpStore,
+    refuse: std::sync::atomic::AtomicBool,
+}
+
+impl PumpStore for HoldRefusingStore {
+    fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
+        self.inner.load(record)
+    }
+
+    fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        if record == PumpRecord::ReturnHold && self.refuse.load(Ordering::Relaxed) {
+            return Err("flash refused the write");
+        }
+        self.inner.store(record, bytes)
+    }
+
+    fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
+        self.inner.erase(record)
+    }
+}
+
+#[test]
+fn a_refused_return_hold_write_is_retried() {
+    let store = Arc::new(HoldRefusingStore::default());
+    let clock = TestClock::synced(EPOCH);
+    let service = Arc::new(PumpService::new(
+        PumpSettings::DEFAULT,
+        Arc::clone(&store),
+        Arc::clone(&clock),
+        None,
+    ));
+    let outputs = RecordingOutputs::default();
+    let mut controller = PumpController::new(outputs.clone(), Arc::clone(&service), timing());
+    let mut now = Instant::now();
+    let mut run = |seconds: u64, levels: Option<&WaterLevelSnapshot>| {
+        for _ in 0..seconds {
+            now += Duration::from_secs(1);
+            clock.advance(1);
+            controller.tick(levels, now);
+        }
+    };
+
+    run(5, Some(&running_sump()));
+    service.start_water_change(PLAN).expect("idle");
+    run(1, Some(&running_sump()));
+    service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+    store.refuse.store(true, Ordering::Relaxed);
+    run(3, None);
+
+    assert!(service.status().return_held_after_drain);
+    assert!(!outputs.state()[PumpId::Return.index()]);
+    assert!(store.inner.get(PumpRecord::ReturnHold).is_none());
+
+    store.refuse.store(false, Ordering::Relaxed);
+    run(1, None);
+
+    assert_eq!(
+        store.inner.get(PumpRecord::ReturnHold).as_deref(),
+        Some(&b"true"[..])
+    );
+}
+
+#[test]
 fn a_history_without_an_end_time_still_loads() {
     let store = Arc::new(VolatilePumpStore::default());
     store.put(

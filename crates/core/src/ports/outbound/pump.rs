@@ -13,10 +13,11 @@ pub enum PumpRecord {
     Checkpoint,
     Runtime,
     LastOperations,
+    ReturnHold,
 }
 
 impl PumpRecord {
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 6;
 
     pub const fn index(self) -> usize {
         match self {
@@ -25,6 +26,7 @@ impl PumpRecord {
             Self::Checkpoint => 2,
             Self::Runtime => 3,
             Self::LastOperations => 4,
+            Self::ReturnHold => 5,
         }
     }
 
@@ -35,6 +37,7 @@ impl PumpRecord {
             Self::Checkpoint => "pump_op",
             Self::Runtime => "pump_rt",
             Self::LastOperations => "pump_last",
+            Self::ReturnHold => "pump_hold",
         }
     }
 }

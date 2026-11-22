@@ -191,6 +191,7 @@ struct Pending {
     checkpoint: bool,
     last: bool,
     overrides: bool,
+    hold: bool,
     events: Vec<OperationEvent>,
 }
 
@@ -537,6 +538,8 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         let settings = stored_settings(&store, defaults);
         let overrides = stored_overrides(&store);
         let runtime = load::<S, RuntimeCounters>(&store, PumpRecord::Runtime).unwrap_or_default();
+        let return_held_after_drain =
+            load::<S, bool>(&store, PumpRecord::ReturnHold).unwrap_or(false);
         let stored = load::<S, Option<StoredOperation>>(&store, PumpRecord::Checkpoint).flatten();
         let (activity, last, pending_finish) = match stored {
             Some(StoredOperation::Finished(record)) => (
@@ -575,7 +578,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 level_sensors_suspect: false,
                 pending_finish,
                 water_change_ended: None,
-                return_held_after_drain: false,
+                return_held_after_drain,
                 supervision: Supervision::Off,
             }),
             store,
@@ -924,6 +927,14 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             self.persist(PumpRecord::Overrides, &state.stored_overrides());
         }
 
+        if pending.hold {
+            if let Err(reason) = self.write(PumpRecord::ReturnHold, &state.return_held_after_drain)
+            {
+                tracing::warn!(reason, "return pump hold will be retried");
+                state.pending.hold = true;
+            }
+        }
+
         if let Some(events) = &self.events {
             for event in pending.events {
                 let _ = events.send(event);
@@ -1011,8 +1022,9 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             }
             if state.return_held_after_drain {
                 tracing::info!("level readings are back, the return pump is released");
+                state.return_held_after_drain = false;
+                state.pending.hold = true;
             }
-            state.return_held_after_drain = false;
             return false;
         }
 
@@ -1035,14 +1047,15 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             let ended_recently = state.water_change_ended.is_some_and(|(ended, result)| {
                 unfinished(result) && now.saturating_duration_since(ended) < BLIND_RETURN_HOLD
             });
+            let booted_recently = self.clock.uptime_seconds() < BLIND_RETURN_HOLD.as_secs();
             let recorded_recently = state.last.water_change.is_some_and(|record| {
                 unfinished(record.result)
-                    && record
-                        .finished_at
-                        .zip(epoch)
-                        .is_some_and(|(finished, epoch)| {
+                    && match epoch {
+                        Some(epoch) => record.finished_at.is_some_and(|finished| {
                             epoch.saturating_sub(finished) < BLIND_RETURN_HOLD.as_secs()
-                        })
+                        }),
+                        None => booted_recently,
+                    }
             });
 
             if draining || ended_recently || recorded_recently {
@@ -1050,6 +1063,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                     "level readings lost right after a drain, holding the return pump off"
                 );
                 state.return_held_after_drain = true;
+                state.pending.hold = true;
             }
         }
 
