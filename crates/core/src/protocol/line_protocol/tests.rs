@@ -5,6 +5,10 @@ use crate::domain::pump::{
     OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState,
     PumpsTelemetry, Supervision,
 };
+use crate::domain::reservoir::{
+    FillEvent, FillFault, FillPhase, FillRecord, FillResult, FillTrigger, ReservoirTelemetry,
+    RunningMarker,
+};
 
 fn populated() -> TankTelemetryDto {
     let mut dto = TankTelemetryDto::empty();
@@ -624,4 +628,78 @@ fn an_incomplete_refill_is_tagged() {
 
     let encoded = encode_operation(&event).expect("encodes");
     assert!(encoded.contains(",result=incomplete "), "{encoded}");
+}
+
+#[test]
+fn the_reservoir_line_carries_channels_phase_and_flags() {
+    let mut dto = populated();
+    dto.reservoir = ReservoirTelemetry {
+        ro_valve: true,
+        booster: true,
+        phase: FillPhase::Dosing,
+        tds_ppm: Some(148.5),
+        fault: Some(FillFault::Overtime),
+        ..ReservoirTelemetry::UNAVAILABLE
+    };
+
+    let encoded = encode(&dto).expect("encodes");
+    let line = encoded
+        .lines()
+        .find(|line| line.starts_with("aquarium_reservoir "))
+        .expect("a reservoir line");
+
+    for field in [
+        "ro_valve=true",
+        "booster=true",
+        "tap_valve=false",
+        "mixer=false",
+        "fill_phase=4i",
+        "fault=true",
+        "auto_latched=false",
+    ] {
+        assert!(line.contains(field), "missing {field} in: {line}");
+    }
+}
+
+#[test]
+fn a_finished_fill_is_tagged_with_its_result_and_trigger() {
+    let event = FillEvent {
+        record: FillRecord {
+            trigger: FillTrigger::Auto,
+            started_at: Some(1_750_000_000),
+            finished_at: Some(1_750_003_600),
+            result: FillResult::Overtime,
+            final_tds_ppm: None,
+            ro_s: 3000,
+            tap_s: 40,
+            mix_s: 600,
+            ro_pulses: 12,
+            tap_pulses: 8,
+            duration_s: 3600,
+        },
+        ro_l: Some(50.0),
+        tap_l: None,
+    };
+
+    let encoded = encode_fill(&event).expect("encodes");
+    assert!(
+        encoded.starts_with("aquarium_reservoir_fill,result=overtime,trigger=auto "),
+        "{encoded}"
+    );
+    assert!(encoded.contains("ro_s=3000i"), "{encoded}");
+    assert!(encoded.ends_with(" 1750003600"), "{encoded}");
+}
+
+#[test]
+fn a_fill_finished_before_clock_sync_is_not_exported() {
+    let mut event = FillEvent {
+        record: FillRecord::interrupted(RunningMarker {
+            trigger: FillTrigger::Manual,
+            started_at: None,
+        }),
+        ro_l: None,
+        tap_l: None,
+    };
+    event.record.finished_at = None;
+    assert_eq!(encode_fill(&event), None);
 }

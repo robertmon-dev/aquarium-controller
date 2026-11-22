@@ -4,6 +4,7 @@ use crate::domain::metrics::{LightingProfile, SystemMode, TankTelemetryDto, Wate
 use crate::domain::pump::{
     OperationEvent, OperationKind, OperationResult, OperationState, PumpsTelemetry, Supervision,
 };
+use crate::domain::reservoir::{FillEvent, FillTrigger};
 
 struct Fields(String);
 
@@ -190,6 +191,55 @@ fn pumps(snapshot: &TankTelemetryDto) -> Fields {
     fields
 }
 
+fn reservoir(snapshot: &TankTelemetryDto) -> Fields {
+    let reservoir = &snapshot.reservoir;
+    let mut fields = Fields::new();
+    fields.boolean("ro_valve", reservoir.ro_valve);
+    fields.boolean("booster", reservoir.booster);
+    fields.boolean("tap_valve", reservoir.tap_valve);
+    fields.boolean("mixer", reservoir.mixer);
+    fields.integer("fill_phase", reservoir.phase.code());
+    fields.optional_float("tds_ppm", reservoir.tds_ppm);
+    fields.boolean("water_change_active", reservoir.water_change_active);
+    fields.boolean("held_after_reboot", reservoir.held_after_reboot);
+    fields.boolean("auto_latched", reservoir.auto_latched);
+    fields.boolean("fault", reservoir.fault.is_some());
+    fields
+}
+
+fn trigger_name(trigger: FillTrigger) -> &'static str {
+    match trigger {
+        FillTrigger::Manual => "manual",
+        FillTrigger::Auto => "auto",
+    }
+}
+
+pub fn encode_fill(event: &FillEvent) -> Option<String> {
+    let record = event.record;
+    let timestamp_s = record.finished_at?;
+
+    let mut fields = Fields::new();
+    fields.optional_float("final_tds_ppm", record.final_tds_ppm);
+    fields.integer("ro_s", record.ro_s);
+    fields.integer("tap_s", record.tap_s);
+    fields.integer("mix_s", record.mix_s);
+    fields.integer("ro_pulses", record.ro_pulses);
+    fields.integer("tap_pulses", record.tap_pulses);
+    fields.integer("duration_s", record.duration_s);
+    fields.optional_float("ro_l", event.ro_l);
+    fields.optional_float("tap_l", event.tap_l);
+
+    line(
+        &format!(
+            "aquarium_reservoir_fill,result={},trigger={}",
+            record.result.name(),
+            trigger_name(record.trigger)
+        ),
+        fields,
+        timestamp_s,
+    )
+}
+
 fn supervision_name(supervision: Supervision) -> &'static str {
     match supervision {
         Supervision::Active => "active",
@@ -283,6 +333,7 @@ pub fn encode(snapshot: &TankTelemetryDto) -> Option<String> {
     ));
     lines.extend(line("aquarium_ato", ato(snapshot), timestamp_s));
     lines.extend(line("aquarium_pumps", pumps(snapshot), timestamp_s));
+    lines.extend(line("aquarium_reservoir", reservoir(snapshot), timestamp_s));
 
     for (tag, entry) in sensors
         .into_iter()
