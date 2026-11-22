@@ -17,8 +17,8 @@ use crate::domain::pump::{
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureError, TemperatureReader, TemperatureSample, TemperatureSampleSink,
+    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TdsSample, TdsSampleSink,
+    TelemetrySink, TemperatureError, TemperatureReader, TemperatureSample, TemperatureSampleSink,
     TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
@@ -309,6 +309,7 @@ struct RecordingSink {
     snapshots: Mutex<Vec<TankTelemetryDto>>,
     volts: Mutex<Vec<ProbeVoltagesDto>>,
     temperatures: Mutex<Vec<TemperatureSample>>,
+    tds: Mutex<Vec<TdsSample>>,
 }
 
 impl RecordingSink {
@@ -348,6 +349,12 @@ impl TelemetrySink for &RecordingSink {
 impl TemperatureSampleSink for &RecordingSink {
     fn publish_temperature(&self, sample: TemperatureSample) {
         self.temperatures.lock().unwrap().push(sample);
+    }
+}
+
+impl TdsSampleSink for &RecordingSink {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.tds.lock().unwrap().push(sample);
     }
 }
 
@@ -1496,4 +1503,46 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
     .await;
 
     assert_eq!(sink.last().pumps, pumps);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sample_publishes_the_tds_reading_with_its_measurement_time() {
+    let sink = RecordingSink::default();
+    let mut subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(2.16),
+        FakeCalibration::standard(),
+    );
+    let before = Instant::now();
+
+    subject.sample().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    subject.republish();
+
+    let samples = sink.tds.lock().unwrap().clone();
+    assert_eq!(
+        samples.len(),
+        1,
+        "a republish must not refresh the TDS sample"
+    );
+    let expected = tds::convert(2.16, 25.0, 1.0).expect("valid").ppm.as_ppm();
+    assert_close(samples[0].ppm.expect("a reading"), expected);
+    assert!(samples[0].measured_at >= before);
+    assert!(samples[0].measured_at <= before + Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn a_missing_tds_probe_publishes_an_empty_sample() {
+    let sink = RecordingSink::default();
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::nothing_attached(),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.tds.lock().unwrap()[0].ppm, None);
 }

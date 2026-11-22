@@ -10,9 +10,9 @@ use crate::domain::metrics::{
 use crate::domain::pump::{LevelConditions, OperationKind};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureReader, TemperatureSample, TemperatureSampleSink, TemperatureSensorRole,
-    WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TdsSample, TdsSampleSink,
+    TelemetrySink, TemperatureReader, TemperatureSample, TemperatureSampleSink,
+    TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
@@ -56,7 +56,7 @@ where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink,
+    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink + TdsSampleSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
@@ -85,6 +85,14 @@ where
         self.sink.publish_temperature(TemperatureSample {
             tank_celsius: self.last.tank,
             sump_celsius: self.last.sump,
+            measured_at,
+        });
+
+        let calibration = self.sources.calibration.calibration();
+        self.sink.publish_tds(TdsSample {
+            ppm: self
+                .resolve_tds(self.last.tds_volts, &calibration)
+                .map(|reading| reading.ppm.as_ppm()),
             measured_at,
         });
 
