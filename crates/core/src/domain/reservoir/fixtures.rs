@@ -1,5 +1,6 @@
 use crate::domain::reservoir::{
-    Fill, FillInput, FillPhase, FillStep, FillTrigger, ReservoirConditions, ReservoirSettings,
+    Fill, FillInput, FillPhase, FillPlan, FillStep, FillTrigger, ReservoirConditions,
+    ReservoirSettings,
 };
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 
@@ -45,41 +46,35 @@ pub(super) fn barrel(empty: bool, full: bool) -> ReservoirConditions {
     }
 }
 
+pub(super) fn plan() -> FillPlan {
+    TARGET.fill_plan()
+}
+
 pub(super) fn step(
     fill: &mut Fill,
     conditions: ReservoirConditions,
     ms: u64,
     ran: [bool; 3],
     tds: Option<f32>,
-    settings: &ReservoirSettings,
 ) -> FillStep {
-    fill.advance(
-        FillInput {
-            conditions,
-            elapsed_ms: ms,
-            delivered: [ran[0], ran[1]],
-            mixed: ran[2],
-            tds,
-        },
-        settings,
-    )
+    fill.advance(FillInput {
+        conditions,
+        elapsed_ms: ms,
+        delivered: [ran[0], ran[1]],
+        mixed: ran[2],
+        tds,
+    })
 }
 
 pub(super) const IDLE: [bool; 3] = [false, false, false];
 pub(super) const RO_ON: [bool; 3] = [true, false, false];
 pub(super) const MIXING: [bool; 3] = [false, false, true];
+pub(super) const TAP_MIXING: [bool; 3] = [false, true, true];
 
-pub(super) fn measuring(settings: &ReservoirSettings) -> Fill {
-    let mut fill = Fill::start(FillTrigger::Manual, None);
-    step(&mut fill, barrel(false, false), 0, IDLE, None, settings);
-    step(
-        &mut fill,
-        barrel(false, false),
-        60_000,
-        MIXING,
-        None,
-        settings,
-    );
+pub(super) fn measuring(plan: FillPlan) -> Fill {
+    let mut fill = Fill::start(FillTrigger::Manual, None, plan);
+    step(&mut fill, barrel(false, false), 0, IDLE, None);
+    step(&mut fill, barrel(false, false), 60_000, MIXING, None);
     assert_eq!(fill.phase(), FillPhase::Measuring);
     fill
 }
