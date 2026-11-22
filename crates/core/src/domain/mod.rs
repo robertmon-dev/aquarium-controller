@@ -4,4 +4,5 @@ pub mod heater;
 pub mod light;
 pub mod metrics;
 pub mod pump;
+pub mod reservoir;
 pub mod water;
