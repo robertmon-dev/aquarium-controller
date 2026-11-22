@@ -69,8 +69,9 @@ where
 
     pub async fn flush_ready(&mut self) {
         while self.ready(Instant::now()) {
-            if self.flush().await.is_err() {
-                break;
+            match self.flush().await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
             }
         }
     }

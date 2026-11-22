@@ -172,6 +172,37 @@ async fn a_permanent_rejection_discards_the_batch() {
 }
 
 #[tokio::test]
+async fn regression_zero_batch_flush_returns_control() {
+    const CHILD: &str = "AQUARIUM_TEST_ZERO_BATCH_CHILD";
+
+    if std::env::var_os(CHILD).is_some() {
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(3));
+            std::process::exit(124);
+        });
+        let writer = FakeWriter::default();
+        let mut subject = exporter(&writer, 10, 0);
+        subject.enqueue(&dated(1_750_000_000));
+        subject.flush_ready().await;
+        return;
+    }
+
+    let path = std::any::type_name_of_val(&regression_zero_batch_flush_returns_control);
+    let (_, test_name) = path.split_once("::").expect("test module path");
+    let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", test_name])
+        .env(CHILD, "1")
+        .status()
+        .expect("run isolated flush");
+    assert_ne!(
+        child.code(),
+        Some(124),
+        "zero-sized batch stalled flush_ready"
+    );
+    assert!(child.success(), "isolated flush failed: {child}");
+}
+
+#[tokio::test]
 async fn a_batch_is_capped_at_the_configured_size() {
     let writer = FakeWriter::default();
     let mut subject = exporter(&writer, 10, 2);
