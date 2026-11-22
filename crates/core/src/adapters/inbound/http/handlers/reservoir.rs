@@ -181,7 +181,7 @@ pub async fn clear_fault<R: ReservoirControl>(
     }
 }
 
-pub const fn blocker_reason(blocker: ReservoirBlocker) -> &'static str {
+const fn blocker_reason(blocker: ReservoirBlocker) -> &'static str {
     match blocker {
         ReservoirBlocker::SupervisionUnavailable => {
             "the controller watchdog is not supervising the barrel"
