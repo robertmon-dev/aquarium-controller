@@ -21,7 +21,7 @@ use crate::domain::pump::{
 use crate::domain::water::{HarnessWatch, WaterLevelRole, WaterLevelSnapshot};
 use crate::ports::inbound::{CancelError, PumpControl, PumpSettingsError, StartError};
 use crate::ports::outbound::{
-    Clock, LevelSample, PumpOutputs, PumpRecord, PumpStatusSource, PumpStore,
+    Clock, LevelSample, PumpOutputs, PumpRecord, PumpStatusSource, PumpStore, WaterChangeActivity,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -1475,6 +1475,18 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
 
         self.notify.notify_one();
         outcome
+    }
+}
+
+impl<S: PumpStore, C: Clock> WaterChangeActivity for PumpService<S, C> {
+    fn water_change_active(&self) -> bool {
+        match &self.lock().activity {
+            Activity::Running(operation) => operation.plan.kind == OperationKind::WaterChange,
+            Activity::Resuming(checkpoint) => {
+                checkpoint.operation.plan.kind == OperationKind::WaterChange
+            }
+            Activity::Idle | Activity::Suspended(_) => false,
+        }
     }
 }
 

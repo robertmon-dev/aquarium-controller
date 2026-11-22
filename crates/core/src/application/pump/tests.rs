@@ -4057,3 +4057,25 @@ fn a_history_without_an_end_time_still_loads() {
     assert_eq!(record.refill_ran_s, 30);
     assert_eq!(record.finished_at, None);
 }
+
+#[test]
+fn water_change_activity_follows_only_a_water_change() {
+    use crate::ports::outbound::WaterChangeActivity;
+
+    let mut rig = Rig::new();
+    rig.run(5, Some(&healthy()));
+    assert!(!rig.service.water_change_active());
+
+    rig.service.start_top_off(60).expect("top-off");
+    assert!(!rig.service.water_change_active());
+    rig.service
+        .cancel(OperationKind::TopOff)
+        .expect("cancelled");
+
+    rig.service.start_water_change(PLAN).expect("water change");
+    assert!(rig.service.water_change_active());
+    rig.service
+        .cancel(OperationKind::WaterChange)
+        .expect("cancelled");
+    assert!(!rig.service.water_change_active());
+}
