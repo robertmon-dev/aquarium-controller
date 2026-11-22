@@ -157,7 +157,6 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
 
     let drain = match input.levels {
         None => ChannelDecision::blocked(Blocker::LevelsUnavailable),
-        Some(levels) if levels.sump_low => ChannelDecision::blocked(Blocker::SumpLow),
         Some(_) if input.phase == Some(Phase::Draining) && input.drain_unrecorded => {
             ChannelDecision::blocked(Blocker::StorageUnavailable)
         }
