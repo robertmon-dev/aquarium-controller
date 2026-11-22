@@ -58,6 +58,51 @@ const valid = {
 };
 
 describe("assertTelemetry", () => {
+  const reservoir = {
+    ro_valve: true,
+    booster: true,
+    tap_valve: false,
+    mixer: true,
+    phase: "dosing",
+    tds_ppm: 148.5,
+    target_tds_ppm: 150,
+    elapsed_s: 600,
+    water_change_active: false,
+    held_after_reboot: false,
+    auto_latched: false,
+    fault: null,
+    supervision: "active",
+    last_result: "completed",
+  };
+
+  it("accepts telemetry without a reservoir section from older firmware", () => {
+    expect(assertTelemetry(valid).reservoir).toBeUndefined();
+  });
+
+  it("accepts a reservoir section", () => {
+    expect(assertTelemetry({ ...valid, reservoir }).reservoir?.phase).toBe(
+      "dosing",
+    );
+  });
+
+  it("accepts an unreadable fault record", () => {
+    expect(
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...reservoir, fault: "unreadable" },
+      }).reservoir?.fault,
+    ).toBe("unreadable");
+  });
+
+  it("names the malformed reservoir field", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...reservoir, phase: "boiling" },
+      }),
+    ).toThrow(/reservoir\.phase/);
+  });
+
   it("accepts a snapshot carrying the fields the app reads", () => {
     expect(assertTelemetry(valid).timestamp_epoch_s).toBe(1);
   });
