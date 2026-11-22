@@ -330,8 +330,8 @@ impl VolatileReservoirStore {
 }
 
 impl ReservoirStore for VolatileReservoirStore {
-    fn load(&self, record: ReservoirRecord) -> Option<Vec<u8>> {
-        self.get(record)
+    fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str> {
+        Ok(self.get(record))
     }
 
     fn store(&self, record: ReservoirRecord, bytes: &[u8]) -> Result<(), &'static str> {

@@ -444,8 +444,11 @@ fn the_volatile_reservoir_store_keeps_records_apart() {
 
     let store = VolatileReservoirStore::default();
     store.store(ReservoirRecord::Fault, b"x").expect("stored");
-    assert_eq!(store.load(ReservoirRecord::Fault), Some(b"x".to_vec()));
-    assert_eq!(store.load(ReservoirRecord::Running), None);
+    assert_eq!(
+        store.load(ReservoirRecord::Fault).unwrap(),
+        Some(b"x".to_vec())
+    );
+    assert_eq!(store.load(ReservoirRecord::Running).unwrap(), None);
     store.erase(ReservoirRecord::Fault).expect("erased");
-    assert_eq!(store.load(ReservoirRecord::Fault), None);
+    assert_eq!(store.load(ReservoirRecord::Fault).unwrap(), None);
 }
