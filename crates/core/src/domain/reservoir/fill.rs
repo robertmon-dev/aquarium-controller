@@ -3,22 +3,11 @@ use serde::{Deserialize, Serialize};
 use super::channels::Inlet;
 use super::conditions::ReservoirConditions;
 use super::decision::Demand;
-use super::outcome::{FillRecord, FillResult};
-use super::settings::ReservoirSettings;
-use super::status::FillStatus;
+use super::outcome::{FillRecord, FillResult, FillTrigger};
 
 pub const EMPTY_AGAIN_MS: u64 = 10_000;
 
 pub const TDS_WAIT_MS: u64 = 30_000;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-export", ts(export))]
-pub enum FillTrigger {
-    Manual,
-    Auto,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,7 +34,27 @@ impl FillPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FillStage {
+pub struct FillPlan {
+    pub(super) target_tds_ppm: Option<u16>,
+    pub(super) tolerance_ppm: u16,
+    pub(super) tap_pulse_ms: u64,
+    pub(super) ro_pulse_ms: u64,
+    pub(super) mix_ms: u64,
+    pub(super) max_duration_ms: u64,
+    pub(super) overtime_ms: u64,
+}
+
+impl FillPlan {
+    pub(super) const fn pulse_ms(&self, inlet: Inlet) -> u64 {
+        match inlet {
+            Inlet::Ro => self.ro_pulse_ms,
+            Inlet::Tap => self.tap_pulse_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FillStage {
     Priming,
     Mixing,
     Measuring,
@@ -70,28 +79,35 @@ pub enum FillStep {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fill {
-    pub trigger: FillTrigger,
-    pub started_at: Option<u64>,
-    pub stage: FillStage,
-    pub finishing: bool,
-    pub stage_ms: u64,
-    pub wall_ms: u64,
-    pub inlet_ms: [u64; 2],
-    pub mix_ms: u64,
-    pub pulses: [u32; 2],
-    pub empty_ms: u64,
-    pub last_tds: Option<f32>,
+    trigger: FillTrigger,
+    started_at: Option<u64>,
+    plan: FillPlan,
+    stage: FillStage,
+    finishing: bool,
+    stage_ms: u64,
+    wall_ms: u64,
+    inlet_ms: [u64; 2],
+    mix_ms: u64,
+    pulses: [u32; 2],
+    empty_ms: u64,
+    last_tds: Option<f32>,
 }
 
 const fn seconds(ms: u64) -> u32 {
-    (ms / 1000) as u32
+    let seconds = ms / 1000;
+    if seconds > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        seconds as u32
+    }
 }
 
 impl Fill {
-    pub const fn start(trigger: FillTrigger, started_at: Option<u64>) -> Self {
+    pub const fn start(trigger: FillTrigger, started_at: Option<u64>, plan: FillPlan) -> Self {
         Self {
             trigger,
             started_at,
+            plan,
             stage: FillStage::Priming,
             finishing: false,
             stage_ms: 0,
@@ -102,6 +118,34 @@ impl Fill {
             empty_ms: 0,
             last_tds: None,
         }
+    }
+
+    pub const fn trigger(&self) -> FillTrigger {
+        self.trigger
+    }
+
+    pub const fn started_at(&self) -> Option<u64> {
+        self.started_at
+    }
+
+    pub const fn last_tds(&self) -> Option<f32> {
+        self.last_tds
+    }
+
+    pub const fn pulses(&self) -> [u32; 2] {
+        self.pulses
+    }
+
+    pub const fn finishing(&self) -> bool {
+        self.finishing
+    }
+
+    pub const fn elapsed_s(&self) -> u32 {
+        seconds(self.wall_ms)
+    }
+
+    pub const fn inlet_s(&self, inlet: Inlet) -> u32 {
+        seconds(self.inlet_ms[inlet.index()])
     }
 
     pub const fn phase(&self) -> FillPhase {
@@ -137,7 +181,7 @@ impl Fill {
         }
     }
 
-    pub fn advance(&mut self, input: FillInput, settings: &ReservoirSettings) -> FillStep {
+    pub fn advance(&mut self, input: FillInput) -> FillStep {
         let conditions = input.conditions;
         let elapsed = input.elapsed_ms;
         self.wall_ms += elapsed;
@@ -153,10 +197,10 @@ impl Fill {
         if conditions.leaking() {
             return FillStep::Finished(FillResult::Leak);
         }
-        if !conditions.full && self.inlet_ms[0] + self.inlet_ms[1] > settings.overtime_ms() {
+        if !conditions.full && self.inlet_ms.iter().sum::<u64>() > self.plan.overtime_ms {
             return FillStep::Finished(FillResult::Overtime);
         }
-        if self.wall_ms > settings.max_duration_s as u64 * 1000 {
+        if self.wall_ms > self.plan.max_duration_ms {
             return FillStep::Finished(FillResult::Timeout);
         }
         self.empty_ms = if conditions.empty && self.stage != FillStage::Priming {
@@ -169,12 +213,12 @@ impl Fill {
         }
 
         match self.stage {
-            FillStage::Priming => self.prime(conditions, settings),
+            FillStage::Priming => self.prime(conditions),
             FillStage::Mixing => {
                 if input.mixed {
                     self.stage_ms += elapsed;
                 }
-                if self.stage_ms >= settings.mix_s as u64 * 1000 {
+                if self.stage_ms >= self.plan.mix_ms {
                     self.enter(FillStage::Measuring)
                 } else {
                     FillStep::Continue
@@ -185,7 +229,7 @@ impl Fill {
                 match input.tds {
                     Some(tds) => {
                         self.last_tds = Some(tds);
-                        self.after_measuring(tds, conditions, settings)
+                        self.after_measuring(tds, conditions)
                     }
                     None if self.stage_ms >= TDS_WAIT_MS => {
                         FillStep::Finished(FillResult::TdsUnavailable)
@@ -198,9 +242,9 @@ impl Fill {
                     self.stage_ms += elapsed;
                 }
                 if conditions.full {
-                    self.reach_full(settings)
-                } else if settings.target_tds_ppm.is_some()
-                    && self.stage_ms >= settings.pulse_ms(inlet)
+                    self.reach_full()
+                } else if self.plan.target_tds_ppm.is_some()
+                    && self.stage_ms >= self.plan.pulse_ms(inlet)
                 {
                     self.enter(FillStage::Mixing)
                 } else {
@@ -210,38 +254,33 @@ impl Fill {
         }
     }
 
-    fn prime(&mut self, conditions: ReservoirConditions, settings: &ReservoirSettings) -> FillStep {
+    fn prime(&mut self, conditions: ReservoirConditions) -> FillStep {
         if conditions.full {
-            return self.reach_full(settings);
+            return self.reach_full();
         }
         if conditions.empty {
             return FillStep::Continue;
         }
-        match settings.target_tds_ppm {
-            None => self.dose(Inlet::Ro),
+        match self.plan.target_tds_ppm {
+            None => self.enter(FillStage::Dosing(Inlet::Ro)),
             Some(_) => self.enter(FillStage::Mixing),
         }
     }
 
-    fn reach_full(&mut self, settings: &ReservoirSettings) -> FillStep {
-        if settings.target_tds_ppm.is_none() {
+    fn reach_full(&mut self) -> FillStep {
+        if self.plan.target_tds_ppm.is_none() {
             return FillStep::Finished(FillResult::Completed);
         }
         self.finishing = true;
         self.enter(FillStage::Mixing)
     }
 
-    fn after_measuring(
-        &mut self,
-        tds: f32,
-        conditions: ReservoirConditions,
-        settings: &ReservoirSettings,
-    ) -> FillStep {
-        let Some(target) = settings.target_tds_ppm else {
+    fn after_measuring(&mut self, tds: f32, conditions: ReservoirConditions) -> FillStep {
+        let Some(target) = self.plan.target_tds_ppm else {
             return FillStep::Finished(FillResult::Completed);
         };
         let target = f32::from(target);
-        let tolerance = f32::from(settings.tolerance_ppm);
+        let tolerance = f32::from(self.plan.tolerance_ppm);
 
         if self.finishing || conditions.full {
             return FillStep::Finished(if (tds - target).abs() <= tolerance {
@@ -277,24 +316,12 @@ impl Fill {
             finished_at,
             result,
             final_tds_ppm: self.last_tds.or(latest_tds),
-            ro_s: seconds(self.inlet_ms[Inlet::Ro.index()]),
-            tap_s: seconds(self.inlet_ms[Inlet::Tap.index()]),
+            ro_s: self.inlet_s(Inlet::Ro),
+            tap_s: self.inlet_s(Inlet::Tap),
             mix_s: seconds(self.mix_ms),
             ro_pulses: self.pulses[Inlet::Ro.index()],
             tap_pulses: self.pulses[Inlet::Tap.index()],
             duration_s: seconds(self.wall_ms),
-        }
-    }
-
-    pub const fn status(&self) -> FillStatus {
-        FillStatus {
-            phase: self.phase(),
-            dosing: self.dosing(),
-            trigger: self.trigger,
-            elapsed_s: seconds(self.wall_ms),
-            tds_ppm: self.last_tds,
-            ro_s: seconds(self.inlet_ms[0]),
-            tap_s: seconds(self.inlet_ms[1]),
         }
     }
 }
