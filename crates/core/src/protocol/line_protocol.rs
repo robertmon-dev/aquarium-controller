@@ -214,6 +214,7 @@ fn result_name(result: OperationResult) -> &'static str {
         OperationResult::Aborted => "aborted",
         OperationResult::InterruptedByReboot => "interrupted_by_reboot",
         OperationResult::RefillTimeout => "refill_timeout",
+        OperationResult::DrainTimeout => "drain_timeout",
         OperationResult::Incomplete => "incomplete",
     }
 }

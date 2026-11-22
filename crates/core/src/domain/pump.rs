@@ -599,6 +599,7 @@ pub enum OperationResult {
     InterruptedByReboot,
     RefillTimeout,
     Incomplete,
+    DrainTimeout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -664,13 +665,20 @@ pub struct Operation {
     #[serde(default)]
     pub drain_switched: bool,
 
+    #[serde(default)]
+    pub drain_wall_ms: u64,
+
     #[serde(skip)]
     pub refill_armed: bool,
 }
 
 pub const fn refill_timeout_s(refill_s: u32) -> u32 {
-    let doubled = refill_s.saturating_mul(2);
-    let graced = refill_s.saturating_add(REFILL_TIMEOUT_GRACE_S);
+    phase_timeout_s(refill_s)
+}
+
+pub const fn phase_timeout_s(target_s: u32) -> u32 {
+    let doubled = target_s.saturating_mul(2);
+    let graced = target_s.saturating_add(REFILL_TIMEOUT_GRACE_S);
 
     if doubled > graced {
         doubled
@@ -689,6 +697,7 @@ impl Operation {
             resumed: false,
             refill_wall_ms: 0,
             drain_switched: false,
+            drain_wall_ms: 0,
             refill_armed: false,
         }
     }
@@ -717,19 +726,26 @@ impl Operation {
         self.ran_ms[slot] += ran_ms;
         let done = self.ran_ms[slot] >= u64::from(self.plan.target_s(self.phase)) * 1000;
 
-        if self.phase == Phase::Refilling {
-            self.refill_wall_ms += wall_ms;
-            self.refill_armed |= ran_ms > 0;
+        match self.phase {
+            Phase::Draining => self.drain_wall_ms += wall_ms,
+            Phase::Refilling => {
+                self.refill_wall_ms += wall_ms;
+                self.refill_armed |= ran_ms > 0;
+            }
+            Phase::Settling => {}
         }
 
         let timed_out =
             self.refill_wall_ms > u64::from(refill_timeout_s(self.plan.refill_s)) * 1000;
+        let drain_timed_out =
+            self.drain_wall_ms > u64::from(phase_timeout_s(self.plan.drain_s)) * 1000;
 
         match self.phase {
             Phase::Draining if done => {
                 self.phase = Phase::Settling;
                 Step::PhaseChanged
             }
+            Phase::Draining if drain_timed_out => Step::Finished(OperationResult::DrainTimeout),
             Phase::Settling if done => {
                 self.phase = Phase::Refilling;
                 self.refill_wall_ms = 0;

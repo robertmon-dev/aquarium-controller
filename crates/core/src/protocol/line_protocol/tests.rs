@@ -543,6 +543,15 @@ fn a_refill_timeout_is_tagged() {
 }
 
 #[test]
+fn a_drain_timeout_is_tagged() {
+    let mut event = finished_water_change();
+    event.record.result = OperationResult::DrainTimeout;
+
+    let encoded = encode_operation(&event).expect("encodes");
+    assert!(encoded.contains(",result=drain_timeout "), "{encoded}");
+}
+
+#[test]
 fn starved_circulation_is_a_pump_field() {
     let mut dto = populated();
     dto.pumps.circulation_starved = true;

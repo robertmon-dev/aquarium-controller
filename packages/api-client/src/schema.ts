@@ -145,6 +145,7 @@ const operationRecordGuard = z.object({
     "interrupted_by_reboot",
     "refill_timeout",
     "incomplete",
+    "drain_timeout",
   ]),
   resumed: z.boolean(),
   finished_at: z.number().nullable().exactOptional(),

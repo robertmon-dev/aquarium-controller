@@ -867,7 +867,7 @@ fn wall_time_counts_only_while_refilling() {
     let mut operation = Operation::start(plan(2, 2, 60), None);
 
     assert_eq!(
-        operation.advance(0, 500 * SECOND, Some(HEALTHY)),
+        operation.advance(0, 300 * SECOND, Some(HEALTHY)),
         Step::Continue
     );
     assert_eq!(operation.refill_wall_ms, 0);
@@ -924,6 +924,60 @@ fn a_checkpoint_without_refill_wall_time_loads_as_zero() {
 
     assert_eq!(decoded.operation.refill_wall_ms, 0);
     assert_eq!(decoded.operation.ran_ms[Phase::Refilling.index()], 4200);
+}
+
+#[test]
+fn a_drain_that_never_runs_times_out_on_wall_time() {
+    let mut operation = Operation::start(plan(60, 2, 60), None);
+
+    assert_eq!(
+        operation.advance(0, u64::from(phase_timeout_s(60)) * SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(
+        operation.advance(0, 1, Some(HEALTHY)),
+        Step::Finished(OperationResult::DrainTimeout)
+    );
+    assert_eq!(
+        operation.record(OperationResult::DrainTimeout).drain_ran_s,
+        0
+    );
+}
+
+#[test]
+fn a_running_drain_settles_before_the_wall_time_budget() {
+    let mut operation = Operation::start(plan(600, 2, 60), None);
+
+    assert_eq!(
+        operation.advance(599 * SECOND, 599 * SECOND, Some(HEALTHY)),
+        Step::Continue
+    );
+    assert_eq!(
+        operation.advance(SECOND, 700 * SECOND, Some(HEALTHY)),
+        Step::PhaseChanged
+    );
+    assert_eq!(operation.phase, Phase::Settling);
+}
+
+#[test]
+fn a_checkpoint_without_drain_wall_time_loads_as_zero() {
+    let mut operation = Operation::start(plan(60, 2, 60), Some(42));
+    operation.advance(4200, 4200, Some(HEALTHY));
+    let mut json = serde_json::to_value(Checkpoint {
+        operation,
+        checkpoint_at: Some(50),
+    })
+    .expect("encode");
+    json["operation"]
+        .as_object_mut()
+        .expect("operation object")
+        .remove("drain_wall_ms")
+        .expect("drain_wall_ms stored");
+
+    let decoded: Checkpoint = serde_json::from_value(json).expect("decode");
+
+    assert_eq!(decoded.operation.drain_wall_ms, 0);
+    assert_eq!(decoded.operation.ran_ms[Phase::Draining.index()], 4200);
 }
 
 #[test]
