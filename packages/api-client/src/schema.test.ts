@@ -85,6 +85,30 @@ describe("assertTelemetry", () => {
     );
   });
 
+  it("checks the dosing inlet and individual relay diagnostics", () => {
+    const relay = { on: false, blocked_by: "interlock", output_error: true };
+    const channels = {
+      ro_valve: relay,
+      booster: relay,
+      tap_valve: relay,
+      mixer: relay,
+    };
+    const sample = { ...reservoir, dosing_water: "tap", channels };
+    const telemetry = assertTelemetry({ ...valid, reservoir: sample });
+    expect(telemetry.reservoir?.channels?.ro_valve.output_error).toBe(true);
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...sample, dosing_water: "mixer" },
+      }),
+    ).toThrow(/reservoir\.dosing_water/);
+
+    const broken = { ...channels, mixer: { ...relay, blocked_by: "unknown" } };
+    expect(() =>
+      assertTelemetry({ ...valid, reservoir: { ...sample, channels: broken } }),
+    ).toThrow(/reservoir\.channels\.mixer\.blocked_by/);
+  });
+
   it("accepts an unreadable fault record", () => {
     expect(
       assertTelemetry({
