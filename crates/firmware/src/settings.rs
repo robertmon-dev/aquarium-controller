@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use aquarium_core::application::PumpTiming;
+use aquarium_core::application::{PumpTiming, ReservoirTiming};
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
 use aquarium_core::domain::pump::PumpSettings;
+use aquarium_core::domain::reservoir::ReservoirSettings;
 use aquarium_core::protocol::ads1115::{Channel, DataRate, Gain, DEFAULT_ADDRESS};
 use aquarium_core::secret::Secret;
 use esp_idf_svc::wifi::AuthMethod;
@@ -42,6 +43,7 @@ pub struct ComponentSettings {
     pub tds: ComponentMode,
     pub heaters: ComponentMode,
     pub pumps: ComponentMode,
+    pub reservoir: ComponentMode,
     pub health: ComponentMode,
 }
 
@@ -65,6 +67,14 @@ pub struct Settings {
     pub influx: Option<InfluxSettings>,
     pub heaters: HeaterControlSettings,
     pub pumps: PumpControlSettings,
+    pub reservoir: ReservoirControlSettings,
+}
+
+#[derive(Debug)]
+pub struct ReservoirControlSettings {
+    pub contacts: [Contact; 4],
+    pub timing: ReservoirTiming,
+    pub defaults: ReservoirSettings,
 }
 
 #[derive(Debug)]
@@ -146,6 +156,7 @@ impl Settings {
                 tds: ComponentMode::Off,
                 heaters: ComponentMode::Off,
                 pumps: ComponentMode::Off,
+                reservoir: ComponentMode::Off,
                 health: ComponentMode::Running,
             },
             wifi: WifiSettings {
@@ -209,6 +220,11 @@ impl Settings {
                     cutoff_celsius: 30.0,
                 },
                 watchdog: Duration::from_secs(6),
+            },
+            reservoir: ReservoirControlSettings {
+                contacts: [Contact::NormallyOpen; 4],
+                timing: ReservoirTiming::DEFAULT,
+                defaults: ReservoirSettings::DEFAULT,
             },
             pumps: PumpControlSettings {
                 contacts: [
