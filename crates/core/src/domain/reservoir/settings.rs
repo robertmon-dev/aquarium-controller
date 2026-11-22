@@ -1,10 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use super::channels::Inlet;
 use super::duty::DutyLimits;
+use super::fill::{FillPlan, TDS_WAIT_MS};
 use crate::domain::pump::nullable;
 
-pub const MAX_OVERRIDE_S: u32 = 600;
 pub const MAX_TDS_PPM: u16 = 2000;
 pub const MAX_FLOW_LPH: u32 = 10_000;
 pub const OVERTIME_PCT: u64 = 120;
@@ -68,7 +67,7 @@ impl ReservoirSettings {
         tap_pulse_s: 5,
         ro_pulse_s: 120,
         mix_s: 60,
-        max_duration_s: 14_400,
+        max_duration_s: 25_200,
         inlet_max_on_s: 5400,
         inlet_rest_s: 900,
         flow_lph: InletFlows {
@@ -143,8 +142,10 @@ impl ReservoirSettings {
                 "flow must be between 1 and 10000 L/h",
             )?;
         }
-        if self.max_duration_s < self.empty_fill_s {
-            return Err("max_duration_s must not be shorter than empty_fill_s");
+        if self.max_duration_ms() <= self.required_duration_ms() {
+            return Err(
+                "max_duration_s must exceed the overtime budget plus forced inlet rests and mixing between pulses",
+            );
         }
         Ok(())
     }
@@ -153,16 +154,45 @@ impl ReservoirSettings {
         self.empty_fill_s as u64 * 1000 * OVERTIME_PCT / 100
     }
 
-    pub const fn pulse_ms(&self, inlet: Inlet) -> u64 {
-        let seconds = match inlet {
-            Inlet::Ro => self.ro_pulse_s,
-            Inlet::Tap => self.tap_pulse_s,
-        };
-        seconds as u64 * 1000
+    const fn max_duration_ms(&self) -> u64 {
+        self.max_duration_s as u64 * 1000
     }
-}
 
-impl ReservoirSettings {
+    fn forced_rests_ms(&self) -> u64 {
+        let max_on_ms = self.inlet_max_on_s as u64 * 1000;
+        self.overtime_ms()
+            .checked_div(max_on_ms)
+            .unwrap_or(0)
+            .saturating_mul(self.inlet_rest_s as u64 * 1000)
+    }
+
+    fn pulse_cycles_ms(&self) -> u64 {
+        if self.target_tds_ppm.is_none() {
+            return 0;
+        }
+        let ro_pulse_ms = self.ro_pulse_s as u64 * 1000;
+        let pulses = self.overtime_ms().div_ceil(ro_pulse_ms.max(1));
+        2 * pulses.saturating_mul(self.mix_s as u64 * 1000 + TDS_WAIT_MS)
+    }
+
+    fn required_duration_ms(&self) -> u64 {
+        self.overtime_ms()
+            .saturating_add(self.forced_rests_ms())
+            .saturating_add(self.pulse_cycles_ms())
+    }
+
+    pub const fn fill_plan(&self) -> FillPlan {
+        FillPlan {
+            target_tds_ppm: self.target_tds_ppm,
+            tolerance_ppm: self.tolerance_ppm,
+            tap_pulse_ms: self.tap_pulse_s as u64 * 1000,
+            ro_pulse_ms: self.ro_pulse_s as u64 * 1000,
+            mix_ms: self.mix_s as u64 * 1000,
+            max_duration_ms: self.max_duration_ms(),
+            overtime_ms: self.overtime_ms(),
+        }
+    }
+
     pub const fn duty(&self) -> DutyLimits {
         DutyLimits {
             max_on_ms: self.inlet_max_on_s as u64 * 1000,
@@ -218,16 +248,6 @@ impl ReservoirSettingsPatch {
             inlet_rest_s: self.inlet_rest_s.unwrap_or(base.inlet_rest_s),
             flow_lph: self.flow_lph.unwrap_or(base.flow_lph),
         }
-    }
-}
-
-pub fn validate_override(on: bool, duration_s: Option<u32>) -> Result<(), &'static str> {
-    match (on, duration_s) {
-        (_, Some(seconds)) if !(1..=MAX_OVERRIDE_S).contains(&seconds) => {
-            Err("an override lasts 1 to 600 s")
-        }
-        (true, None) => Err("an ON override needs duration_s"),
-        _ => Ok(()),
     }
 }
 
