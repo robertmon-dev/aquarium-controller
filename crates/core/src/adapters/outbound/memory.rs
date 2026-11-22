@@ -83,6 +83,18 @@ impl TemperatureSampleSink for Arc<InMemoryTelemetryStore> {
     }
 }
 
+impl TdsSampleSink for InMemoryTelemetryStore {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.tds.send_replace(Some(sample));
+    }
+}
+
+impl TdsSampleSink for Arc<InMemoryTelemetryStore> {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.as_ref().publish_tds(sample);
+    }
+}
+
 impl ProbeVoltageSink for InMemoryTelemetryStore {
     fn publish_volts(&self, ph: Option<f32>, tds: Option<f32>, sampled_at_epoch_s: u64) {
         *self.probes.lock().expect("probe voltage mutex poisoned") = ProbeVoltagesDto {
@@ -306,21 +318,6 @@ impl PumpStore for VolatilePumpStore {
     }
 }
 
-#[cfg(test)]
-mod tests;
-
-impl TdsSampleSink for InMemoryTelemetryStore {
-    fn publish_tds(&self, sample: TdsSample) {
-        self.tds.send_replace(Some(sample));
-    }
-}
-
-impl TdsSampleSink for Arc<InMemoryTelemetryStore> {
-    fn publish_tds(&self, sample: TdsSample) {
-        self.as_ref().publish_tds(sample);
-    }
-}
-
 #[derive(Default)]
 pub struct VolatileReservoirStore {
     records: Mutex<[Option<Vec<u8>>; ReservoirRecord::COUNT]>,
@@ -364,3 +361,6 @@ impl ReservoirStatusSource for NoReservoir {
         ReservoirTelemetry::UNAVAILABLE
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::time::Instant;
+
 use super::{InMemoryTelemetryStore, VolatilePumpStore, VolatileReservoirStore};
 use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
 use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
@@ -7,7 +9,6 @@ use crate::ports::outbound::{
     ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink, TemperatureSample,
     TemperatureSampleSink,
 };
-use tokio::time::Instant;
 
 fn snapshot_with_uptime(uptime: u64) -> TankTelemetryDto {
     let mut s = TankTelemetryDto::empty();
@@ -424,12 +425,17 @@ fn the_tds_channel_hands_out_the_latest_sample() {
     let receiver = store.subscribe_tds();
     assert_eq!(*receiver.borrow(), None);
 
-    let sample = TdsSample {
+    let first = TdsSample {
         ppm: Some(150.0),
         measured_at: Instant::now(),
     };
-    store.publish_tds(sample);
-    assert_eq!(*receiver.borrow(), Some(sample));
+    let second = TdsSample {
+        ppm: None,
+        measured_at: Instant::now(),
+    };
+    store.publish_tds(first);
+    store.publish_tds(second);
+    assert_eq!(*receiver.borrow(), Some(second));
 }
 
 #[test]
