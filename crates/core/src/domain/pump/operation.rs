@@ -1,3 +1,11 @@
+use serde::{Deserialize, Serialize};
+
+use super::decision::{Blocker, LevelConditions, Phase};
+use super::settings::{FlowRates, WaterChangePlan};
+
+pub const REFILL_TIMEOUT_GRACE_S: u32 = 300;
+pub const MIN_REFILL_SHARE_PCT: u64 = 70;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
@@ -375,3 +383,8 @@ impl LastOperations {
         })
     }
 }
+
+#[cfg(test)]
+mod record_tests;
+#[cfg(test)]
+mod tests;
