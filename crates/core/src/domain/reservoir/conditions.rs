@@ -33,22 +33,5 @@ impl ReservoirConditions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-export", ts(export))]
-pub enum ReservoirBlocker {
-    SupervisionUnavailable,
-    LevelsUnavailable,
-    Leak,
-    Fault,
-    Interlock,
-    ReservoirFull,
-    WaterChange,
-    DutyRest,
-    ReservoirEmpty,
-    TdsUnavailable,
-}
-
 #[cfg(test)]
 mod tests;
