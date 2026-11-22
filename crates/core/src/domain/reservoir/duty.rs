@@ -14,10 +14,12 @@ pub struct DutyMeter {
 impl DutyMeter {
     pub fn advance(&mut self, ran: bool, elapsed_ms: u64, limits: DutyLimits) {
         if self.rest_left_ms > 0 {
-            self.rest_left_ms = self.rest_left_ms.saturating_sub(elapsed_ms);
-            if self.rest_left_ms == 0 {
-                self.worked_ms = 0;
-                self.idle_ms = 0;
+            if !ran {
+                self.rest_left_ms = self.rest_left_ms.saturating_sub(elapsed_ms);
+                if self.rest_left_ms == 0 {
+                    self.worked_ms = 0;
+                    self.idle_ms = 0;
+                }
             }
             return;
         }
@@ -40,11 +42,11 @@ impl DutyMeter {
         self.rest_left_ms > 0
     }
 
-    pub const fn rest_remaining_s(&self) -> Option<u32> {
+    pub fn rest_remaining_s(&self) -> Option<u32> {
         if self.rest_left_ms == 0 {
             None
         } else {
-            Some(self.rest_left_ms.div_ceil(1000) as u32)
+            Some(u32::try_from(self.rest_left_ms.div_ceil(1000)).unwrap_or(u32::MAX))
         }
     }
 }
