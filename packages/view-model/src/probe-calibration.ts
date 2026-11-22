@@ -51,6 +51,23 @@ export function tdsFactorFromReference({
   return (currentFactor * referencePpm) / reportedPpm;
 }
 
+export interface TdsReferenceInput {
+  reportedPpm: number | null;
+  ageSeconds: number | null;
+}
+
+export function canUseTdsReading({
+  reportedPpm,
+  ageSeconds,
+}: TdsReferenceInput): boolean {
+  return (
+    reportedPpm !== null &&
+    reportedPpm > 0 &&
+    ageSeconds !== null &&
+    ageSeconds <= PROBE_FRESHNESS_SECONDS
+  );
+}
+
 export function probeAge(
   sampledAtEpochS: number,
   nowEpochS: number,

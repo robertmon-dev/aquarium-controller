@@ -4,6 +4,7 @@ import { Button, Card, Input, TextDisplay } from "@/components/atoms";
 import { FormField } from "@/components/molecules";
 import { spacing } from "@aquarium/theme";
 import { useT } from "@/i18n/use-locale";
+import { canUseTdsReading } from "@aquarium/view-model";
 import { LiveReading } from "./LiveReading";
 import type { TdsSectionProps } from "./types";
 import type { ReactNode } from "react";
@@ -16,7 +17,10 @@ export const TdsSection = ({
 }: TdsSectionProps): ReactNode => {
   const t = useT();
   const [reference, setReference] = useState("");
-  const hasReading = reportedPpm !== null && reportedPpm > 0;
+  const hasReading = canUseTdsReading({
+    reportedPpm,
+    ageSeconds: live.ageSeconds,
+  });
 
   return (
     <Card variant="outlined" padding="sm" width="full">

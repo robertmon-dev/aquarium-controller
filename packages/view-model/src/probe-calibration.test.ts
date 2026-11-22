@@ -3,6 +3,7 @@ import {
   advanceProbeSamples,
   appendSample,
   canCapturePh,
+  canUseTdsReading,
   PROBE_FRESHNESS_SECONDS,
   probeAge,
   probeStability,
@@ -229,6 +230,27 @@ describe("advanceProbeSamples", () => {
     );
 
     expect(next).toEqual({ ph: [1.5], tds: [0.9] });
+  });
+});
+
+describe("canUseTdsReading", () => {
+  it("allows a positive reading up to the freshness threshold", () => {
+    expect(canUseTdsReading({ reportedPpm: 400, ageSeconds: 2 })).toBe(true);
+    expect(
+      canUseTdsReading({
+        reportedPpm: 400,
+        ageSeconds: PROBE_FRESHNESS_SECONDS,
+      }),
+    ).toBe(true);
+  });
+
+  it("refuses a stale, missing or zero reading", () => {
+    expect(canUseTdsReading({ reportedPpm: 400, ageSeconds: 60 })).toBe(false);
+    expect(canUseTdsReading({ reportedPpm: 400, ageSeconds: null })).toBe(
+      false,
+    );
+    expect(canUseTdsReading({ reportedPpm: null, ageSeconds: 2 })).toBe(false);
+    expect(canUseTdsReading({ reportedPpm: 0, ageSeconds: 2 })).toBe(false);
   });
 });
 

@@ -75,6 +75,7 @@ export {
   advanceProbeSamples,
   appendSample,
   canCapturePh,
+  canUseTdsReading,
   PROBE_FRESHNESS_SECONDS,
   probeAge,
   probeStability,
@@ -86,6 +87,7 @@ export type {
   PhCaptureInput,
   ProbeStability,
   TdsFactorInput,
+  TdsReferenceInput,
 } from "./probe-calibration";
 
 export { useProbeSamples } from "./use-probe-samples";

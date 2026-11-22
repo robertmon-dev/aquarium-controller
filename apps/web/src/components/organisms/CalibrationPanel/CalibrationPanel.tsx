@@ -13,6 +13,7 @@ import {
 import { useT } from "@aquarium/i18n/use-locale";
 import {
   canCapturePh,
+  canUseTdsReading,
   describeCalibrationFailure,
   EM_DASH,
   formatPh,
@@ -110,7 +111,16 @@ export function CalibrationPanel({ transport }: { transport: Transport }) {
     const reference = Number(referencePpm.replace(",", "."));
     const currentFactor = calibration.data?.tds_factor;
 
-    if (reportedPpm === null || currentFactor === undefined) return;
+    const ageSeconds = probes.data
+      ? probeAge(probes.data.sampled_at_epoch_s, nowEpochSeconds())
+      : null;
+    if (
+      reportedPpm === null ||
+      currentFactor === undefined ||
+      !canUseTdsReading({ reportedPpm, ageSeconds })
+    ) {
+      return;
+    }
 
     const factor = tdsFactorFromReference({
       reportedPpm,

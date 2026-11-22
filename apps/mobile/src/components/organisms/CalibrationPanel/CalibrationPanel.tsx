@@ -12,6 +12,7 @@ import {
 } from "@aquarium/api-client";
 import {
   canCapturePh,
+  canUseTdsReading,
   describeCalibrationFailure,
   EM_DASH,
   formatPh,
@@ -114,7 +115,16 @@ export const CalibrationPanel = ({
     const reference = Number(referencePpm.replace(",", "."));
     const currentFactor = calibration.data?.tds_factor;
 
-    if (reportedPpm === null || currentFactor === undefined) return;
+    const ageSeconds = probes.data
+      ? probeAge(probes.data.sampled_at_epoch_s, nowEpochSeconds())
+      : null;
+    if (
+      reportedPpm === null ||
+      currentFactor === undefined ||
+      !canUseTdsReading({ reportedPpm, ageSeconds })
+    ) {
+      return;
+    }
 
     const factor = tdsFactorFromReference({
       reportedPpm,

@@ -212,6 +212,27 @@ describe("CalibrationPanel", () => {
     );
   });
 
+  it("keeps the TDS correction factor when the reference reading is stale", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_750_000_060_000);
+    const { transport } = transportWith(1.52);
+    renderPanel(transport);
+    fireEvent.click(await screen.findByText("calibrate probes"));
+
+    await screen.findByText("400 ppm");
+    await screen.findAllByText(/last read 60s ago/);
+    const factor = screen.getByLabelText<HTMLInputElement>("correction factor");
+    await waitFor(() => expect(Number(factor.value)).toBe(1));
+    fireEvent.change(screen.getByLabelText("reference solution ppm"), {
+      target: { value: "800" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "fills in the factor from the current reading" }),
+    );
+
+    expect(Number(factor.value)).toBe(1);
+  });
+
   it("reports a disconnected probe instead of showing a voltage", async () => {
     const { transport } = transportWith(null);
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, Input } from "@/components/atoms";
 import { useT } from "@aquarium/i18n/use-locale";
+import { canUseTdsReading } from "@aquarium/view-model";
 import { LiveReading } from "./LiveReading";
 import type { TdsSectionProps } from "./types";
 
@@ -13,7 +14,10 @@ export function TdsSection({
 }: TdsSectionProps) {
   const t = useT();
   const [reference, setReference] = useState("");
-  const hasReading = reportedPpm !== null && reportedPpm > 0;
+  const hasReading = canUseTdsReading({
+    reportedPpm,
+    ageSeconds: live.ageSeconds,
+  });
 
   return (
     <section className="calibration__section">
