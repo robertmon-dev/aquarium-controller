@@ -6,6 +6,7 @@ fn soft_failures_latch_automation_and_faults_do_not() {
         FillResult::Timeout,
         FillResult::TdsUnavailable,
         FillResult::Blocked,
+        FillResult::Aborted,
     ] {
         assert!(result.latches_auto());
         assert_eq!(result.fault(), None);
@@ -14,7 +15,6 @@ fn soft_failures_latch_automation_and_faults_do_not() {
         FillResult::Overtime,
         FillResult::Leak,
         FillResult::Completed,
-        FillResult::Aborted,
     ] {
         assert!(!result.latches_auto());
     }
@@ -50,4 +50,12 @@ fn result_names_match_their_serialised_form() {
             format!("\"{}\"", result.name())
         );
     }
+}
+
+#[test]
+fn an_unreadable_fault_record_has_its_own_serialised_name() {
+    assert_eq!(
+        serde_json::to_string(&FillFault::Unreadable).expect("json"),
+        "\"unreadable\""
+    );
 }

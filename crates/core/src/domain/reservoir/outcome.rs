@@ -35,7 +35,10 @@ impl FillResult {
     }
 
     pub const fn latches_auto(self) -> bool {
-        matches!(self, Self::Timeout | Self::TdsUnavailable | Self::Blocked)
+        matches!(
+            self,
+            Self::Timeout | Self::TdsUnavailable | Self::Blocked | Self::Aborted
+        )
     }
 
     pub const fn name(self) -> &'static str {
@@ -60,6 +63,7 @@ impl FillResult {
 pub enum FillFault {
     Overtime,
     Leak,
+    Unreadable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
