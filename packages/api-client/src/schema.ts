@@ -118,6 +118,7 @@ const blocker = z.enum([
   "interlock",
   "levels_unavailable_after_drain",
   "supervision_unavailable",
+  "storage_unavailable",
 ]);
 
 const channelStatusGuard = z.object({

@@ -142,6 +142,23 @@ fn the_refill_stop_sensor_reports_a_full_sump() {
 }
 
 #[test]
+fn an_unrecorded_drain_stays_off_until_its_checkpoint_is_stored() {
+    let draining = DecisionInput {
+        phase: Some(Phase::Draining),
+        ..input(Some(HEALTHY))
+    };
+
+    let unrecorded = decide(DecisionInput {
+        drain_unrecorded: true,
+        ..draining
+    });
+    assert!(!unrecorded[3].on);
+    assert_eq!(unrecorded[3].blocked_by, Some(Blocker::StorageUnavailable));
+
+    assert!(decide(draining)[3].on);
+}
+
+#[test]
 fn lost_supervision_keeps_the_makeup_off_while_refilling() {
     let decisions = decide(DecisionInput {
         phase: Some(Phase::Refilling),

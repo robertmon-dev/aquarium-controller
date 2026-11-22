@@ -244,6 +244,7 @@ struct State {
     water_change_ended: Option<(Instant, OperationResult)>,
     return_held_after_drain: bool,
     supervision: Supervision,
+    checkpoint_failed: bool,
     started_before_boot: [Option<u64>; 2],
 }
 
@@ -432,6 +433,7 @@ pub struct Observation {
     return_forced_off: bool,
     uv_forced_off: bool,
     supervision_unavailable: bool,
+    drain_unrecorded: bool,
     changed: bool,
 }
 
@@ -596,6 +598,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
                 water_change_ended: None,
                 return_held_after_drain,
                 supervision: Supervision::Off,
+                checkpoint_failed: false,
                 started_before_boot,
             }),
             store,
@@ -784,6 +787,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             return_forced_off,
             uv_forced_off,
             supervision_unavailable: state.supervision == Supervision::Unavailable,
+            drain_unrecorded: state.checkpoint_failed,
             changed,
         }
     }
@@ -901,10 +905,11 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
     }
 
-    pub fn checkpoint(&self) {
+    pub fn checkpoint(&self) -> bool {
         let mut state = self.lock();
         state.pending.checkpoint = true;
         self.flush_pending(&mut state);
+        !state.checkpoint_failed
     }
 
     pub fn persist_pending(&self) {
@@ -934,13 +939,17 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
 
         if pending.checkpoint {
             if let Activity::Running(operation) = &state.activity {
-                self.persist(
+                let written = self.write(
                     PumpRecord::Checkpoint,
                     &Checkpoint {
                         operation: operation.clone(),
                         checkpoint_at: self.clock.epoch_seconds(),
                     },
                 );
+                if let Err(reason) = written {
+                    tracing::error!(reason, "pump checkpoint not stored, the drain waits for it");
+                }
+                state.checkpoint_failed = written.is_err();
             }
         }
 
@@ -1021,6 +1030,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             },
         )?;
         state.pending_finish = None;
+        state.checkpoint_failed = false;
         Ok(())
     }
 
@@ -1661,6 +1671,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             phase: observed.phase,
             return_held_after_drain,
             supervision_unavailable: observed.supervision_unavailable,
+            drain_unrecorded: observed.drain_unrecorded,
         });
 
         let mut driven: [(bool, Option<ChannelFault>); 4] = [(false, None); 4];
@@ -1720,8 +1731,16 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
 
         let last_checkpoint = *self.last_checkpoint.get_or_insert(now);
         if now.saturating_duration_since(last_checkpoint) >= self.timing.checkpoint_interval {
-            self.service.checkpoint();
+            let durable = self.service.checkpoint();
             self.last_checkpoint = Some(now);
+
+            if !durable && self.possibly_on[PumpId::Drain.index()] {
+                let (on, fault) = self.drive(PumpId::Drain, false);
+                outputs_changed |= self
+                    .service
+                    .record(PumpId::Drain, on, fault, Some(Blocker::StorageUnavailable))
+                    .changed;
+            }
         }
 
         started || observed.changed || outputs_changed || starvation_changed || suspect_changed

@@ -234,5 +234,6 @@ const fn blocker_reason(blocker: Blocker) -> &'static str {
         Blocker::Interlock => "the opposite water pump may still be running",
         Blocker::LevelsUnavailableAfterDrain => "water levels are unavailable right after a drain",
         Blocker::SupervisionUnavailable => "the controller watchdog is not supervising the pumps",
+        Blocker::StorageUnavailable => "the operation progress could not be stored",
     }
 }

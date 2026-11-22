@@ -136,6 +136,7 @@ pub enum Blocker {
     Interlock,
     LevelsUnavailableAfterDrain,
     SupervisionUnavailable,
+    StorageUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -198,6 +199,7 @@ pub struct DecisionInput {
     pub phase: Option<Phase>,
     pub return_held_after_drain: bool,
     pub supervision_unavailable: bool,
+    pub drain_unrecorded: bool,
 }
 
 pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
@@ -234,6 +236,9 @@ pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
 
     let drain = match input.levels {
         None => ChannelDecision::blocked(Blocker::LevelsUnavailable),
+        Some(_) if input.phase == Some(Phase::Draining) && input.drain_unrecorded => {
+            ChannelDecision::blocked(Blocker::StorageUnavailable)
+        }
         Some(_) => ChannelDecision::running(input.phase == Some(Phase::Draining)),
     };
 

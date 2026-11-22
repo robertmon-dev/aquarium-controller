@@ -56,6 +56,44 @@ fn assert_switched_on_only_when_recorded(sim: &Sim) {
 }
 
 #[tokio::test(start_paused = true)]
+async fn followup_reboot_after_checkpoint_write_errors_respects_the_drain_budget() {
+    LocalSet::new()
+        .run_until(async {
+            let mut sim = start().await;
+            let plan = WaterChangePlan {
+                drain_s: 30,
+                settle_s: 5,
+                refill_s: 120,
+            };
+            sim.service.start_water_change(plan).expect("accepted");
+            sim.run_until(secs(10), "the drain to start", |_, water| water.drained_l > 0.0)
+                .await;
+            sim.store.refuse(Some(checkpoint));
+            sim.run_for(secs(40)).await;
+            let before_cut = sim.water().drained_l;
+            let phase_before_cut = sim.service.status().operation.state;
+
+            sim.crash(true);
+            sim.run_for(secs(2)).await;
+            sim.store.refuse(None);
+            sim.boot_up(true).await;
+            sim.run_for(secs(40)).await;
+
+            let water = sim.water();
+            let allowed_s = f64::from(plan.drain_s)
+                + sim.options.timing.checkpoint_interval.as_secs_f64()
+                + sim.options.step.as_secs_f64();
+            let allowed_l = allowed_s * water.layout.drain_l_per_s();
+            assert!(
+                water.drained_l <= allowed_l,
+                "phase {phase_before_cut:?} with {before_cut:.2} L drained before reboot; total {:.2} L, limit {allowed_l:.2} L",
+                water.drained_l
+            );
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_scheduled_water_change_is_recorded_before_the_drain_switches_on() {
     LocalSet::new()
         .run_until(async {
