@@ -1649,10 +1649,12 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
             }
 
             let return_failed = id == PumpId::Uv && driven[PumpId::Return.index()].1.is_some();
-            let interlocked = opposite_mover(id).is_some_and(|other| {
+            let still_running = |other: PumpId| {
                 let (on, fault) = driven[other.index()];
                 on || fault.is_some()
-            });
+            };
+            let interlocked = opposite_mover(id).is_some_and(still_running)
+                || (id == PumpId::Drain && still_running(PumpId::Return));
 
             if return_failed || interlocked {
                 *decision = ChannelDecision {

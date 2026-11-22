@@ -3346,6 +3346,28 @@ fn regression_a_stalled_drain_releases_circulation() {
 }
 
 #[test]
+fn the_drain_waits_for_a_successful_return_off() {
+    let mut bench = Bench::new();
+    let levels = healthy();
+    bench.service.set_supervision(Supervision::Active);
+    bench.tick(&levels);
+    assert!(bench.outputs.pin(PumpId::Return));
+
+    bench.outputs.refuse_off(Some(PumpId::Return));
+    bench.service.start_water_change(PLAN).expect("accepted");
+    bench.run(5, &levels);
+
+    assert!(!bench.outputs.switched_on(PumpId::Drain));
+    let status = bench.service.status();
+    assert_eq!(status.channels.drain.blocked_by, Some(Blocker::Interlock));
+
+    bench.outputs.refuse_off(None);
+    bench.run(2, &levels);
+    assert!(!bench.outputs.pin(PumpId::Return));
+    assert!(bench.outputs.switched_on(PumpId::Drain));
+}
+
+#[test]
 fn a_drain_that_fails_to_switch_off_keeps_the_makeup_off() {
     let mut bench = Bench::new();
     let healthy = healthy();

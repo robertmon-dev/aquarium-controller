@@ -34,6 +34,26 @@ async fn start(dead: PumpId) -> Sim {
     start_stopping_at(Some(dead), "sump_return_level").await
 }
 
+#[tokio::test(start_paused = true)]
+async fn followup_drain_waits_for_the_return_pump_to_switch_off() {
+    LocalSet::new()
+        .run_until(async {
+            let sim = start_stopping_at(None, "sump_return_level").await;
+            assert!(sim.water().pump_on(PumpId::Return));
+            sim.relays.refuse_off(Some(PumpId::Return));
+            sim.service.start_water_change(PLAN).expect("accepted");
+            sim.run_for(secs(5)).await;
+
+            let water = sim.water();
+            assert!(water.pump_on(PumpId::Return));
+            assert_eq!(
+                water.drained_l, 0.0,
+                "the drain removed water while the return relay refused OFF"
+            );
+        })
+        .await;
+}
+
 async fn start_stopping_at(dead: Option<PumpId>, stop_sensor: &str) -> Sim {
     let sim = Sim::start(Layout::REAL.with_reservoir(RESERVOIR_L)).await;
     let patch: PumpSettingsPatch = serde_json::from_str(&format!(
