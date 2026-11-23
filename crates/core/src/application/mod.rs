@@ -13,3 +13,10 @@ pub use metrics_export::{export_loop, MetricsExporter};
 pub use pump::{pump_loop, PumpController, PumpService, PumpTiming};
 pub use reservoir::{reservoir_loop, ReservoirController, ReservoirService, ReservoirTiming};
 pub use water_level::WaterLevelSampler;
+
+async fn sleep_until_some(at: Option<tokio::time::Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => core::future::pending().await,
+    }
+}

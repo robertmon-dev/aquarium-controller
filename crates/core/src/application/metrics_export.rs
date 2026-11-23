@@ -1,3 +1,4 @@
+use super::sleep_until_some;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -148,13 +149,6 @@ pub async fn export_loop<W: MetricsWriter>(
         }
 
         exporter.flush_ready().await;
-    }
-}
-
-async fn sleep_until_some(at: Option<Instant>) {
-    match at {
-        Some(at) => tokio::time::sleep_until(at).await,
-        None => core::future::pending().await,
     }
 }
 
