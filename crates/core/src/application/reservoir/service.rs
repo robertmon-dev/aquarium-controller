@@ -61,6 +61,15 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
         Arc::clone(&self.notify)
     }
 
+    pub(super) fn next_override_expiry(&self) -> Option<tokio::time::Instant> {
+        self.lock()
+            .overrides
+            .iter()
+            .flatten()
+            .filter_map(|slot| slot.until)
+            .min()
+    }
+
     pub(super) fn record(
         &self,
         channel: ReservoirChannel,
@@ -97,7 +106,14 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
             state.fault_pending = false;
             tracing::info!("barrel fault stored");
         }
+        if state.last_pending {
+            match write(&self.store, ReservoirRecord::Last, &state.last) {
+                Ok(()) => state.last_pending = false,
+                Err(reason) => tracing::warn!(reason, "barrel fill result not stored, retrying"),
+            }
+        }
         if state.invalidation_pending
+            && !state.last_pending
             && !state.fault_pending
             && self.store.erase(ReservoirRecord::Running).is_ok()
         {

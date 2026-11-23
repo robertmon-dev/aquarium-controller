@@ -169,3 +169,43 @@ fn a_saturated_runtime_record_keeps_counting_without_overflow() {
 
     assert_eq!(rig.status().channels.ro_valve.runtime_s, u64::MAX / 1000);
 }
+
+#[test]
+fn a_flash_read_error_on_the_fault_key_locks_the_inlets() {
+    let store = Arc::<FlakyStore>::default();
+    store.fail_fault_read.store(true, Ordering::Relaxed);
+    let rig = Rig::build(store, TestClock::synced(), RO_ONLY);
+    assert_eq!(rig.status().fault.unwrap().fault, FillFault::Unreadable);
+    assert_eq!(
+        rig.start_fill(),
+        Err(FillStartError::Blocked(ReservoirBlocker::Fault))
+    );
+}
+
+#[test]
+fn the_marker_outlives_a_failed_result_write() {
+    let mut rig = Rig::new(RO_ONLY);
+    rig.start_fill().unwrap();
+    rig.run(5);
+    rig.store.refuse_last.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        rig.cancel_fill(),
+        Err(FillCancelError::NotPersisted(_))
+    ));
+    rig.run(1);
+    assert_eq!(rig.relays.pins(), [false; 4]);
+    assert!(rig.store.inner.get(ReservoirRecord::Running).is_some());
+    assert!(matches!(
+        rig.start_fill(),
+        Err(FillStartError::NotPersisted(_))
+    ));
+
+    rig.store.refuse_last.store(false, Ordering::Relaxed);
+    rig.run(1);
+    assert!(!rig.status().invalidation_pending);
+    assert!(rig.store.inner.get(ReservoirRecord::Running).is_none());
+    assert_eq!(
+        rig.reboot().status().last.unwrap().result,
+        FillResult::Aborted
+    );
+}
