@@ -23,17 +23,15 @@ impl EventSource for TelemetryEventSource {
         mut self,
         mut writer: EventWriter<'_, W>,
     ) -> Result<(), W::Error> {
-        {
-            let initial = Box::new(self.rx.borrow_and_update().clone());
-            writer.write_event("telemetry", Json(&*initial)).await?;
-            writer.flush().await?;
-        }
+        let mut snapshot = Box::new(self.rx.borrow_and_update().clone());
+        writer.write_event("telemetry", Json(&*snapshot)).await?;
+        writer.flush().await?;
 
         loop {
             match tokio::time::timeout(self.keepalive, self.rx.changed()).await {
                 Ok(Ok(())) => {
-                    let snapshot = self.rx.borrow_and_update().clone();
-                    writer.write_event("telemetry", Json(&snapshot)).await?;
+                    (*snapshot).clone_from(&self.rx.borrow_and_update());
+                    writer.write_event("telemetry", Json(&*snapshot)).await?;
                     writer.flush().await?;
                 }
                 Ok(Err(_)) => return Ok(()),
