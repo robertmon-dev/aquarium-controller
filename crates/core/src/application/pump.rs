@@ -15,5 +15,6 @@ mod state;
 mod watches;
 
 pub use controller::{pump_loop, PumpController, PumpTiming};
+pub use flood::startup_pump_outputs;
 pub use observe::{Observation, RecordOutcome};
-pub use service::PumpService;
+pub use service::{stored_flood_latch, PumpService};
