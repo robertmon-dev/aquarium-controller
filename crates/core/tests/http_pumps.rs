@@ -534,3 +534,53 @@ async fn a_water_change_is_refused_while_the_reservoir_is_low() {
         })
         .await;
 }
+
+#[tokio::test]
+async fn top_off_and_water_change_answer_only_to_the_barrel_flags() {
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            let top_off = body("POST", TOP_OFF, Some(TOKEN), r#"{"duration_s":60}"#);
+            let water_change = body(
+                "POST",
+                WATER_CHANGE,
+                Some(TOKEN),
+                r#"{"drain_s":10,"refill_s":10}"#,
+            );
+
+            pumps.observe(
+                Some(LevelConditions {
+                    reservoir_empty: true,
+                    reservoir_ready: false,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+            let empty = raw(addr, &top_off).await;
+            assert_status(&empty, 423);
+            assert!(
+                empty.contains("the makeup reservoir is empty"),
+                "got: {empty}"
+            );
+
+            pumps.observe(
+                Some(LevelConditions {
+                    reservoir_ready: false,
+                    ..HEALTHY
+                }),
+                Duration::ZERO,
+                Instant::now(),
+            );
+            let low = raw(addr, &water_change).await;
+            assert_status(&low, 423);
+            assert!(
+                low.contains("the makeup reservoir does not hold enough for a water change"),
+                "got: {low}"
+            );
+
+            assert_status(&raw(addr, &top_off).await, 202);
+        })
+        .await;
+}

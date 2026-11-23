@@ -1,3 +1,4 @@
+use super::sleep_until_some;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -414,13 +415,6 @@ pub async fn heater_loop<O, P>(
         if controller.tick(fresh.as_ref()) || announce {
             republish.notify_one();
         }
-    }
-}
-
-async fn sleep_until_some(at: Option<Instant>) {
-    match at {
-        Some(at) => tokio::time::sleep_until(at).await,
-        None => core::future::pending().await,
     }
 }
 

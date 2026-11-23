@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+mod reservoir;
+
+pub use reservoir::*;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -174,6 +178,7 @@ pub async fn start_with_all(
         calibration,
         heaters,
         pumps,
+        reservoir(),
         config(),
     ));
 
@@ -201,6 +206,7 @@ pub async fn serve_pump_control<P: PumpControl + 'static>(
             )),
             heaters(),
             pumps,
+            reservoir(),
             config(),
         )
         .await;

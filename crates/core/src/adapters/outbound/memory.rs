@@ -7,17 +7,20 @@ use crate::domain::calibration::Calibration;
 use crate::domain::heater::HeaterSettings;
 use crate::domain::light::{LightingOverride, LightingTarget};
 use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
+use crate::domain::reservoir::ReservoirTelemetry;
 use crate::domain::water::WaterLevelSnapshot;
 use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
-    CalibrationPersistence, HeaterPersistence, LevelSample, LightingOverrideSource,
-    ProbeVoltageSink, PumpRecord, PumpStore, TelemetrySink, TemperatureSample,
+    CalibrationPersistence, HeaterPersistence, LeakSource, LevelSample, LightingOverrideSource,
+    ProbeVoltageSink, PumpRecord, PumpStore, ReservoirRecord, ReservoirStatusSource,
+    ReservoirStore, TdsSample, TdsSampleSink, TelemetrySink, TemperatureSample,
     TemperatureSampleSink, WaterLevelSink, WaterLevelSource,
 };
 
 pub struct InMemoryTelemetryStore {
     tx: watch::Sender<TankTelemetryDto>,
     temperature: watch::Sender<Option<TemperatureSample>>,
+    tds: watch::Sender<Option<TdsSample>>,
     probes: Mutex<ProbeVoltagesDto>,
 }
 
@@ -26,12 +29,17 @@ impl InMemoryTelemetryStore {
         Self {
             tx: watch::channel(TankTelemetryDto::empty()).0,
             temperature: watch::channel(None).0,
+            tds: watch::channel(None).0,
             probes: Mutex::new(ProbeVoltagesDto::NEVER_SAMPLED),
         }
     }
 
     pub fn subscribe_temperature(&self) -> watch::Receiver<Option<TemperatureSample>> {
         self.temperature.subscribe()
+    }
+
+    pub fn subscribe_tds(&self) -> watch::Receiver<Option<TdsSample>> {
+        self.tds.subscribe()
     }
 }
 
@@ -72,6 +80,18 @@ impl TemperatureSampleSink for InMemoryTelemetryStore {
 impl TemperatureSampleSink for Arc<InMemoryTelemetryStore> {
     fn publish_temperature(&self, sample: TemperatureSample) {
         self.as_ref().publish_temperature(sample);
+    }
+}
+
+impl TdsSampleSink for InMemoryTelemetryStore {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.tds.send_replace(Some(sample));
+    }
+}
+
+impl TdsSampleSink for Arc<InMemoryTelemetryStore> {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.as_ref().publish_tds(sample);
     }
 }
 
@@ -295,6 +315,50 @@ impl PumpStore for VolatilePumpStore {
     fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
         self.records.lock().expect("pump store mutex poisoned")[record.index()] = None;
         Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct VolatileReservoirStore {
+    records: Mutex<[Option<Vec<u8>>; ReservoirRecord::COUNT]>,
+}
+
+impl VolatileReservoirStore {
+    pub fn get(&self, record: ReservoirRecord) -> Option<Vec<u8>> {
+        self.records.lock().expect("reservoir store mutex poisoned")[record.index()].clone()
+    }
+}
+
+impl ReservoirStore for VolatileReservoirStore {
+    fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str> {
+        Ok(self.get(record))
+    }
+
+    fn store(&self, record: ReservoirRecord, bytes: &[u8]) -> Result<(), &'static str> {
+        self.records.lock().expect("reservoir store mutex poisoned")[record.index()] =
+            Some(bytes.to_vec());
+        Ok(())
+    }
+
+    fn erase(&self, record: ReservoirRecord) -> Result<(), &'static str> {
+        self.records.lock().expect("reservoir store mutex poisoned")[record.index()] = None;
+        Ok(())
+    }
+}
+
+pub struct NoLeakSensor;
+
+impl LeakSource for NoLeakSensor {
+    fn leak(&self) -> Option<bool> {
+        None
+    }
+}
+
+pub struct NoReservoir;
+
+impl ReservoirStatusSource for NoReservoir {
+    fn reservoir_telemetry(&self) -> ReservoirTelemetry {
+        ReservoirTelemetry::UNAVAILABLE
     }
 }
 

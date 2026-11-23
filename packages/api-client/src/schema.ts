@@ -43,6 +43,63 @@ const waterLevelEntryGuard = z.object({
   faulty: z.boolean(),
 });
 
+const reservoirChannelGuard = z.object({
+  on: z.boolean(),
+  blocked_by: z
+    .enum([
+      "supervision_unavailable",
+      "levels_unavailable",
+      "leak",
+      "fault",
+      "interlock",
+      "reservoir_full",
+      "water_change",
+      "duty_rest",
+      "reservoir_empty",
+      "tds_unavailable",
+    ])
+    .nullable(),
+  output_error: z.boolean(),
+});
+
+const reservoirGuard = z.object({
+  channels: z
+    .object({
+      ro_valve: reservoirChannelGuard,
+      booster: reservoirChannelGuard,
+      tap_valve: reservoirChannelGuard,
+      mixer: reservoirChannelGuard,
+    })
+    .optional(),
+  dosing_water: z.enum(["ro", "tap"]).optional(),
+  ro_valve: z.boolean(),
+  booster: z.boolean(),
+  tap_valve: z.boolean(),
+  mixer: z.boolean(),
+  phase: z.enum(["idle", "priming", "mixing", "measuring", "dosing"]),
+  tds_ppm: z.number().nullable(),
+  target_tds_ppm: z.number().nullable(),
+  elapsed_s: z.number(),
+  water_change_active: z.boolean(),
+  held_after_reboot: z.boolean(),
+  auto_latched: z.boolean(),
+  fault: z.enum(["overtime", "leak", "unreadable"]).nullable(),
+  supervision: z.enum(["active", "unavailable", "off"]),
+  last_result: z
+    .enum([
+      "completed",
+      "off_target",
+      "overtime",
+      "timeout",
+      "aborted",
+      "tds_unavailable",
+      "leak",
+      "blocked",
+      "interrupted_by_reboot",
+    ])
+    .nullable(),
+});
+
 const telemetryGuard = z.object({
   timestamp_epoch_s: z.number(),
   system_mode: z.enum(["normal", "maintenance", "emergency_lockout"]),
@@ -61,6 +118,7 @@ const telemetryGuard = z.object({
     sump: heaterStatusGuard,
   }),
   pumps: pumpsGuard,
+  reservoir: reservoirGuard.optional(),
   water_level: z.object({
     sump_mechanical: waterLevelEntryGuard,
     sump_biological: waterLevelEntryGuard,

@@ -6,6 +6,7 @@ pub mod metrics_export;
 pub mod ph;
 pub mod probe;
 pub mod pump;
+pub mod reservoir;
 pub mod system_health;
 pub mod tds;
 pub mod telemetry;
@@ -20,8 +21,14 @@ pub use metrics_export::{ExportError, MetricsWriter};
 pub use ph::PhReader;
 pub use probe::ProbeVoltageSink;
 pub use pump::{PumpOutputs, PumpRecord, PumpStatusSource, PumpStore};
+pub use reservoir::{
+    LeakSource, ReservoirOutputs, ReservoirRecord, ReservoirStatusSource, ReservoirStore,
+    WaterChangeActivity,
+};
 pub use system_health::SystemHealthProvider;
 pub use tds::TdsReader;
-pub use telemetry::{TelemetrySink, TemperatureSample, TemperatureSampleSink};
+pub use telemetry::{
+    TdsSample, TdsSampleSink, TelemetrySink, TemperatureSample, TemperatureSampleSink,
+};
 pub use temperature::{TemperatureError, TemperatureReader, TemperatureSensorRole};
 pub use water_level::{LevelSample, WaterLevelPins, WaterLevelSink, WaterLevelSource};

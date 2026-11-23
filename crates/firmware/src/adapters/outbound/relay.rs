@@ -14,7 +14,7 @@ impl Contact {
 }
 
 #[cfg(target_os = "espidf")]
-pub use hw::RelayOutputs;
+pub use hw::{RelayOutputs, ReservoirRelayOutputs};
 
 #[cfg(target_os = "espidf")]
 mod hw {
@@ -22,7 +22,8 @@ mod hw {
     use esp_idf_hal::sys::EspError;
 
     use aquarium_core::domain::pump::PumpId;
-    use aquarium_core::ports::outbound::PumpOutputs;
+    use aquarium_core::domain::reservoir::ReservoirChannel;
+    use aquarium_core::ports::outbound::{PumpOutputs, ReservoirOutputs};
 
     use super::Contact;
 
@@ -57,7 +58,11 @@ mod hw {
         }
 
         pub fn set_coil(&mut self, id: PumpId, energized: bool) -> Result<(), &'static str> {
-            let pin = &mut self.pins[id.index()];
+            self.drive(id.index(), energized)
+        }
+
+        fn drive(&mut self, index: usize, energized: bool) -> Result<(), &'static str> {
+            let pin = &mut self.pins[index];
             let result = if energized {
                 pin.set_high()
             } else {
@@ -65,6 +70,34 @@ mod hw {
             };
 
             result.map_err(|_| "the relay input could not be driven")
+        }
+    }
+
+    pub struct ReservoirRelayOutputs<'d>(RelayOutputs<'d>);
+
+    impl<'d> ReservoirRelayOutputs<'d> {
+        pub fn new(
+            ro_valve: impl OutputPin + 'd,
+            booster: impl OutputPin + 'd,
+            tap_valve: impl OutputPin + 'd,
+            mixer: impl OutputPin + 'd,
+            contacts: [Contact; 4],
+        ) -> Result<Self, EspError> {
+            RelayOutputs::new(ro_valve, booster, tap_valve, mixer, contacts).map(Self)
+        }
+
+        pub fn set_coil(
+            &mut self,
+            channel: ReservoirChannel,
+            energized: bool,
+        ) -> Result<(), &'static str> {
+            self.0.drive(channel.index(), energized)
+        }
+    }
+
+    impl ReservoirOutputs for ReservoirRelayOutputs<'_> {
+        fn set(&mut self, channel: ReservoirChannel, on: bool) -> Result<(), &'static str> {
+            self.set_coil(channel, self.0.contacts[channel.index()].coil_for(on))
         }
     }
 

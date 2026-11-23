@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use super::{InMemoryTelemetryStore, VolatilePumpStore};
+use tokio::time::Instant;
+
+use super::{InMemoryTelemetryStore, VolatilePumpStore, VolatileReservoirStore};
 use crate::domain::metrics::{ProbeVoltagesDto, SystemMode, TankTelemetryDto};
 use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
@@ -413,4 +415,40 @@ fn the_volatile_pump_store_keeps_records_apart() {
 
     store.erase(PumpRecord::Settings).expect("erase");
     assert_eq!(store.load(PumpRecord::Settings), None);
+}
+
+#[test]
+fn the_tds_channel_hands_out_the_latest_sample() {
+    use crate::ports::outbound::{TdsSample, TdsSampleSink};
+
+    let store = InMemoryTelemetryStore::new();
+    let receiver = store.subscribe_tds();
+    assert_eq!(*receiver.borrow(), None);
+
+    let first = TdsSample {
+        ppm: Some(150.0),
+        measured_at: Instant::now(),
+    };
+    let second = TdsSample {
+        ppm: None,
+        measured_at: Instant::now(),
+    };
+    store.publish_tds(first);
+    store.publish_tds(second);
+    assert_eq!(*receiver.borrow(), Some(second));
+}
+
+#[test]
+fn the_volatile_reservoir_store_keeps_records_apart() {
+    use crate::ports::outbound::{ReservoirRecord, ReservoirStore};
+
+    let store = VolatileReservoirStore::default();
+    store.store(ReservoirRecord::Fault, b"x").expect("stored");
+    assert_eq!(
+        store.load(ReservoirRecord::Fault).unwrap(),
+        Some(b"x".to_vec())
+    );
+    assert_eq!(store.load(ReservoirRecord::Running).unwrap(), None);
+    store.erase(ReservoirRecord::Fault).expect("erased");
+    assert_eq!(store.load(ReservoirRecord::Fault).unwrap(), None);
 }

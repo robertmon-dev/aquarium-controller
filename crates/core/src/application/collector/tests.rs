@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use super::{TelemetryCollector, TelemetryConfig, TelemetrySources};
+use crate::adapters::outbound::memory::NoReservoir;
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::cron::CivilTime;
 use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
@@ -14,12 +15,13 @@ use crate::domain::metrics::{
 use crate::domain::pump::{
     OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry, Supervision,
 };
+use crate::domain::reservoir::{FillPhase, ReservoirTelemetry};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureError, TemperatureReader, TemperatureSample, TemperatureSampleSink,
-    TemperatureSensorRole, WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
+    TdsSample, TdsSampleSink, TelemetrySink, TemperatureError, TemperatureReader,
+    TemperatureSample, TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
 use crate::protocol::tds::{self, TdsError};
@@ -309,6 +311,7 @@ struct RecordingSink {
     snapshots: Mutex<Vec<TankTelemetryDto>>,
     volts: Mutex<Vec<ProbeVoltagesDto>>,
     temperatures: Mutex<Vec<TemperatureSample>>,
+    tds: Mutex<Vec<TdsSample>>,
 }
 
 impl RecordingSink {
@@ -351,6 +354,12 @@ impl TemperatureSampleSink for &RecordingSink {
     }
 }
 
+impl TdsSampleSink for &RecordingSink {
+    fn publish_tds(&self, sample: TdsSample) {
+        self.tds.lock().unwrap().push(sample);
+    }
+}
+
 impl ProbeVoltageSink for &RecordingSink {
     fn publish_volts(&self, ph: Option<f32>, tds: Option<f32>, sampled_at_epoch_s: u64) {
         self.volts.lock().unwrap().push(ProbeVoltagesDto {
@@ -372,6 +381,7 @@ type Subject<'a> = TelemetryCollector<
     FakeCalibration,
     FakeHeaters,
     FakePumps,
+    NoReservoir,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -441,6 +451,7 @@ fn with_analog(
             calibration,
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
+            reservoir: NoReservoir,
         },
         sink,
         config(),
@@ -562,6 +573,7 @@ async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
+            reservoir: NoReservoir,
         },
         &sink,
         config(),
@@ -886,6 +898,7 @@ async fn ato_with(
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(pumps, last_top_off),
+            reservoir: NoReservoir,
         },
         &sink,
         config(),
@@ -1450,6 +1463,7 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(heaters),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
+            reservoir: NoReservoir,
         },
         &sink,
         config(),
@@ -1488,6 +1502,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
             calibration: FakeCalibration::standard(),
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(pumps, None),
+            reservoir: NoReservoir,
         },
         &sink,
         config(),
@@ -1496,4 +1511,84 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
     .await;
 
     assert_eq!(sink.last().pumps, pumps);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sample_publishes_the_tds_reading_with_its_measurement_time() {
+    let sink = RecordingSink::default();
+    let mut subject = analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::tds_at(2.16),
+        FakeCalibration::standard(),
+    );
+    let before = Instant::now();
+
+    subject.sample().await;
+    tokio::time::advance(Duration::from_secs(5)).await;
+    subject.republish();
+
+    let samples = sink.tds.lock().unwrap().clone();
+    assert_eq!(
+        samples.len(),
+        1,
+        "a republish must not refresh the TDS sample"
+    );
+    let expected = tds::convert(2.16, 25.0, 1.0).expect("valid").ppm.as_ppm();
+    assert_close(samples[0].ppm.expect("a reading"), expected);
+    assert!(samples[0].measured_at >= before);
+    assert!(samples[0].measured_at <= before + Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn a_missing_tds_probe_publishes_an_empty_sample() {
+    let sink = RecordingSink::default();
+    analog_subject(
+        &sink,
+        FakeReader::healthy(),
+        FakeAnalog::nothing_attached(),
+        FakeCalibration::standard(),
+    )
+    .sample()
+    .await;
+
+    assert_eq!(sink.tds.lock().unwrap()[0].ppm, None);
+}
+
+struct FixedReservoir(ReservoirTelemetry);
+
+impl ReservoirStatusSource for FixedReservoir {
+    fn reservoir_telemetry(&self) -> ReservoirTelemetry {
+        self.0
+    }
+}
+
+#[tokio::test]
+async fn telemetry_carries_the_reservoir_section() {
+    let sink = RecordingSink::default();
+    let reservoir = ReservoirTelemetry {
+        ro_valve: true,
+        phase: FillPhase::Dosing,
+        ..ReservoirTelemetry::UNAVAILABLE
+    };
+    let mut subject = TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
+            reservoir: FixedReservoir(reservoir),
+        },
+        &sink,
+        config(),
+    );
+
+    subject.sample().await;
+
+    assert_eq!(sink.last().reservoir, reservoir);
 }

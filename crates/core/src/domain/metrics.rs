@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::heater::HeatersStatus;
 use super::pump::PumpsTelemetry;
+use super::reservoir::ReservoirTelemetry;
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 
 use std::fmt;
@@ -158,6 +159,9 @@ pub struct TankTelemetryDto {
     pub water_level: WaterLevelMetricsDto,
     pub heaters: HeatersStatus,
     pub pumps: PumpsTelemetry,
+    #[serde(default)]
+    #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<ReservoirTelemetry>"))]
+    pub reservoir: ReservoirTelemetry,
     pub leak_detected: bool,
 }
 
@@ -206,6 +210,7 @@ impl TankTelemetryDto {
             water_level: WaterLevelMetricsDto::UNAVAILABLE,
             heaters: HeatersStatus::UNAVAILABLE,
             pumps: PumpsTelemetry::UNAVAILABLE,
+            reservoir: ReservoirTelemetry::UNAVAILABLE,
             leak_detected: false,
         }
     }

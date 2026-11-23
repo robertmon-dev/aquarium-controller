@@ -81,6 +81,7 @@ async fn the_export_loop_retries_a_503_once_per_backoff_while_samples_keep_comin
     let writer = FakeWriter::failing_with(ExportError::Unavailable(503), 1);
     let (snapshots, rx) = watch::channel(TankTelemetryDto::empty());
     let (_events, events_rx) = mpsc::unbounded_channel();
+    let (_fills_tx, fills_rx) = mpsc::unbounded_channel();
     let start = Instant::now();
 
     let producer = async {
@@ -106,7 +107,7 @@ async fn the_export_loop_retries_a_503_once_per_backoff_while_samples_keep_comin
     };
 
     tokio::select! {
-        () = export_loop(exporter(&writer, 100, 100), rx, events_rx) => panic!("the loop ended"),
+        () = export_loop(exporter(&writer, 100, 100), rx, events_rx, fills_rx) => panic!("the loop ended"),
         () = producer => {}
     }
 
@@ -315,4 +316,25 @@ async fn operation_events_share_the_buffer_with_snapshots() {
     assert!(writer
         .last_body()
         .contains("aquarium_pump_operation,kind=top_off,result=completed"));
+}
+
+#[tokio::test]
+async fn a_finished_fill_is_queued_for_export() {
+    use crate::domain::reservoir::{FillEvent, FillRecord, FillTrigger, RunningMarker};
+
+    let writer = FakeWriter::default();
+    let mut subject = exporter(&writer, 10, 10);
+    let mut record = FillRecord::interrupted(RunningMarker {
+        trigger: FillTrigger::Auto,
+        started_at: Some(1),
+    });
+    record.finished_at = Some(1_750_000_000);
+
+    assert!(subject.enqueue_fill(&FillEvent {
+        record,
+        ro_l: None,
+        tap_l: None
+    }));
+    subject.flush().await.expect("written");
+    assert!(writer.last_body().starts_with("aquarium_reservoir_fill,"));
 }

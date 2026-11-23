@@ -10,13 +10,13 @@ use crate::domain::metrics::{
 use crate::domain::pump::{LevelConditions, OperationKind};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, SystemHealthProvider, TdsReader, TelemetrySink,
-    TemperatureReader, TemperatureSample, TemperatureSampleSink, TemperatureSensorRole,
-    WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
+    TdsSample, TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSample,
+    TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
-pub struct TelemetrySources<R, C, H, O, W, A, K, T, P> {
+pub struct TelemetrySources<R, C, H, O, W, A, K, T, P, V> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
@@ -26,6 +26,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K, T, P> {
     pub calibration: K,
     pub heaters: T,
     pub pumps: P,
+    pub reservoir: V,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,29 +44,30 @@ struct Readings {
     tds_volts: Option<f32>,
 }
 
-pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P> {
-    sources: TelemetrySources<R, C, H, O, W, A, K, T, P>,
+pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V> {
+    sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V>,
     sink: S,
     lighting: LightingSchedule,
     config: TelemetryConfig,
     last: Readings,
 }
 
-impl<R, C, H, S, O, W, A, K, T, P> TelemetryCollector<R, C, H, S, O, W, A, K, T, P>
+impl<R, C, H, S, O, W, A, K, T, P, V> TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V>
 where
     R: TemperatureReader,
     C: Clock,
     H: SystemHealthProvider,
-    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink,
+    S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink + TdsSampleSink,
     O: LightingOverrideSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
     T: HeaterStatusSource,
     P: PumpStatusSource,
+    V: ReservoirStatusSource,
 {
     pub fn new(
-        sources: TelemetrySources<R, C, H, O, W, A, K, T, P>,
+        sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V>,
         sink: S,
         config: TelemetryConfig,
     ) -> Self {
@@ -85,6 +87,14 @@ where
         self.sink.publish_temperature(TemperatureSample {
             tank_celsius: self.last.tank,
             sump_celsius: self.last.sump,
+            measured_at,
+        });
+
+        let calibration = self.sources.calibration.calibration();
+        self.sink.publish_tds(TdsSample {
+            ppm: self
+                .resolve_tds(self.last.tds_volts, &calibration)
+                .map(|reading| reading.ppm.as_ppm()),
             measured_at,
         });
 
@@ -184,6 +194,7 @@ where
         }
         dto.heaters = self.sources.heaters.heater_status();
         dto.pumps = self.sources.pumps.pump_telemetry();
+        dto.reservoir = self.sources.reservoir.reservoir_telemetry();
         dto.ato.pump_active =
             dto.pumps.operation_kind == Some(OperationKind::TopOff) && dto.pumps.makeup;
         dto.ato.last_fill_duration_ms = self

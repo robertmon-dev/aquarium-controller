@@ -58,6 +58,75 @@ const valid = {
 };
 
 describe("assertTelemetry", () => {
+  const reservoir = {
+    ro_valve: true,
+    booster: true,
+    tap_valve: false,
+    mixer: true,
+    phase: "dosing",
+    tds_ppm: 148.5,
+    target_tds_ppm: 150,
+    elapsed_s: 600,
+    water_change_active: false,
+    held_after_reboot: false,
+    auto_latched: false,
+    fault: null,
+    supervision: "active",
+    last_result: "completed",
+  };
+
+  it("accepts telemetry without a reservoir section from older firmware", () => {
+    expect(assertTelemetry(valid).reservoir).toBeUndefined();
+  });
+
+  it("accepts a reservoir section", () => {
+    expect(assertTelemetry({ ...valid, reservoir }).reservoir?.phase).toBe(
+      "dosing",
+    );
+  });
+
+  it("checks the dosing inlet and individual relay diagnostics", () => {
+    const relay = { on: false, blocked_by: "interlock", output_error: true };
+    const channels = {
+      ro_valve: relay,
+      booster: relay,
+      tap_valve: relay,
+      mixer: relay,
+    };
+    const sample = { ...reservoir, dosing_water: "tap", channels };
+    const telemetry = assertTelemetry({ ...valid, reservoir: sample });
+    expect(telemetry.reservoir?.channels?.ro_valve.output_error).toBe(true);
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...sample, dosing_water: "mixer" },
+      }),
+    ).toThrow(/reservoir\.dosing_water/);
+
+    const broken = { ...channels, mixer: { ...relay, blocked_by: "unknown" } };
+    expect(() =>
+      assertTelemetry({ ...valid, reservoir: { ...sample, channels: broken } }),
+    ).toThrow(/reservoir\.channels\.mixer\.blocked_by/);
+  });
+
+  it("accepts an unreadable fault record", () => {
+    expect(
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...reservoir, fault: "unreadable" },
+      }).reservoir?.fault,
+    ).toBe("unreadable");
+  });
+
+  it("names the malformed reservoir field", () => {
+    expect(() =>
+      assertTelemetry({
+        ...valid,
+        reservoir: { ...reservoir, phase: "boiling" },
+      }),
+    ).toThrow(/reservoir\.phase/);
+  });
+
   it("accepts a snapshot carrying the fields the app reads", () => {
     expect(assertTelemetry(valid).timestamp_epoch_s).toBe(1);
   });
