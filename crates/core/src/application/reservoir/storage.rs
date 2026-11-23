@@ -22,8 +22,17 @@ impl<T> Stored<T> {
 }
 
 fn load<S: ReservoirStore, T: DeserializeOwned>(store: &S, record: ReservoirRecord) -> Stored<T> {
-    let Some(bytes) = store.load(record) else {
-        return Stored::Absent;
+    let bytes = match store.load(record) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Stored::Absent,
+        Err(reason) => {
+            tracing::warn!(
+                reason,
+                record = record.key(),
+                "stored barrel record could not be read"
+            );
+            return Stored::Unreadable;
+        }
     };
     match serde_json::from_slice(&bytes) {
         Ok(value) => Stored::Value(value),

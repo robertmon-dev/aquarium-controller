@@ -28,6 +28,12 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
         trigger: FillTrigger,
         epoch: Option<u64>,
     ) -> Result<(), &'static str> {
+        if state.invalidation_pending {
+            self.flush_pending(state);
+            if state.invalidation_pending {
+                return Err("the previous fill is still being recorded");
+            }
+        }
         let marker = RunningMarker {
             trigger,
             started_at: epoch,
@@ -74,9 +80,7 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
         if fill.trigger() == FillTrigger::Auto && result.latches_auto() {
             state.auto_latched = true;
         }
-        if let Err(reason) = write(&self.store, ReservoirRecord::Last, &record) {
-            tracing::warn!(reason, "barrel fill result not stored");
-        }
+        state.last_pending = true;
         state.invalidation_pending = true;
 
         let flows = state.settings.flow_lph;
