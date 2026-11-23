@@ -198,6 +198,14 @@ impl<S: ReservoirStore, C: Clock> ReservoirControl for ReservoirService<S, C> {
             if state.leaking() {
                 return Err(FaultClearError::Blocked(ReservoirBlocker::Leak));
             }
+            if state.invalidation_pending {
+                self.flush_pending(&mut state);
+                if state.invalidation_pending {
+                    return Err(FaultClearError::NotPersisted(
+                        "the faulting fill is still being recorded",
+                    ));
+                }
+            }
             write(&self.store, ReservoirRecord::Fault, &None::<FaultRecord>)
                 .map_err(FaultClearError::NotPersisted)?;
             state.fault = None;
