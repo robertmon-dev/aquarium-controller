@@ -10,7 +10,7 @@ use crate::domain::pump::Supervision;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-export", ts(export))]
+#[cfg_attr(feature = "ts-export", ts(export, rename = "ReservoirChannelMode"))]
 pub enum ChannelMode {
     Auto,
     ManualOn,
@@ -33,11 +33,11 @@ pub struct ReservoirChannelStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
-pub struct ReservoirChannels {
-    pub ro_valve: ReservoirChannelStatus,
-    pub booster: ReservoirChannelStatus,
-    pub tap_valve: ReservoirChannelStatus,
-    pub mixer: ReservoirChannelStatus,
+pub struct ReservoirChannels<T = ReservoirChannelStatus> {
+    pub ro_valve: T,
+    pub booster: T,
+    pub tap_valve: T,
+    pub mixer: T,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ impl From<&Fill> for FillStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-export", ts(export))]
+#[cfg_attr(feature = "ts-export", ts(export, rename = "ReservoirSkipReason"))]
 pub enum SkipReason {
     HeldAfterReboot,
     AutoLatched,
@@ -117,10 +117,25 @@ pub struct ReservoirStatus {
     pub last_skipped: Option<SkippedFill>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct ReservoirChannelTelemetry {
+    pub on: bool,
+    pub blocked_by: Option<ReservoirBlocker>,
+    pub output_error: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub struct ReservoirTelemetry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub channels: Option<ReservoirChannels<ReservoirChannelTelemetry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-export", ts(optional))]
+    pub dosing_water: Option<Inlet>,
     pub ro_valve: bool,
     pub booster: bool,
     pub tap_valve: bool,
@@ -139,6 +154,8 @@ pub struct ReservoirTelemetry {
 
 impl ReservoirTelemetry {
     pub const UNAVAILABLE: Self = Self {
+        channels: None,
+        dosing_water: None,
         ro_valve: false,
         booster: false,
         tap_valve: false,

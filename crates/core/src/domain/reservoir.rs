@@ -26,6 +26,6 @@ pub use settings::{
     InletFlows, ReservoirSettings, ReservoirSettingsPatch, MAX_FLOW_LPH, MAX_TDS_PPM, OVERTIME_PCT,
 };
 pub use status::{
-    ChannelMode, FillStatus, InletRest, ReservoirChannelStatus, ReservoirChannels, ReservoirStatus,
-    ReservoirTelemetry, SkipReason, SkippedFill,
+    ChannelMode, FillStatus, InletRest, ReservoirChannelStatus, ReservoirChannelTelemetry,
+    ReservoirChannels, ReservoirStatus, ReservoirTelemetry, SkipReason, SkippedFill,
 };
