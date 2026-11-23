@@ -44,10 +44,8 @@ struct BarrelOutputs(Shared);
 impl ReservoirOutputs for BarrelOutputs {
     fn set(&mut self, channel: ReservoirChannel, on: bool) -> Result<(), &'static str> {
         let mut barrel = self.0.lock().expect("barrel poisoned");
-        if !on && barrel.refuse_off == Some(channel) {
-            return Err("relay driver refused");
-        }
         if barrel.valves[channel.index()] != on {
+            barrel.advance();
             barrel.valves[channel.index()] = on;
             let at = barrel.t_s;
             barrel.runs.push((channel, on, at));
@@ -65,12 +63,11 @@ impl LeakSource for FakeLeak {
     }
 }
 
-#[derive(Default)]
-pub struct FakeWaterChange(AtomicBool);
+struct FakeWaterChange(Shared);
 
 impl WaterChangeActivity for FakeWaterChange {
     fn water_change_active(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
+        self.0.lock().expect("barrel poisoned").water_change_active
     }
 }
 
@@ -99,18 +96,17 @@ impl Clock for BarrelClock {
 pub type Service = ReservoirService<Arc<VolatileReservoirStore>, Arc<BarrelClock>>;
 
 pub struct BarrelSim {
-    pub barrel: Shared,
+    barrel: Shared,
     pub service: Arc<Service>,
-    pub store: Arc<VolatileReservoirStore>,
-    pub leak: Arc<FakeLeak>,
-    pub water_change: Arc<FakeWaterChange>,
+    store: Arc<VolatileReservoirStore>,
+    leak: Arc<FakeLeak>,
     pub tds_live: Arc<AtomicBool>,
     settings: ReservoirSettings,
     clock: Arc<BarrelClock>,
     levels: Arc<InMemoryWaterLevelStore>,
     telemetry: Arc<InMemoryTelemetryStore>,
     driver: JoinHandle<()>,
-    control: JoinHandle<()>,
+    control: Option<JoinHandle<()>>,
 }
 
 async fn drive(
@@ -125,9 +121,9 @@ async fn drive(
         ticker.tick().await;
         {
             let mut barrel = barrel.lock().expect("barrel poisoned");
-            barrel.step(STEP.as_secs_f64());
+            barrel.advance();
             levels.publish(barrel.snapshot());
-            if tds_live.load(Ordering::Relaxed) && seconds.is_multiple_of(TDS_PERIOD_S) {
+            if tds_live.load(Ordering::Relaxed) && seconds % TDS_PERIOD_S == 0 {
                 telemetry.publish_tds(TdsSample {
                     ppm: Some(barrel.probe_ppm as f32),
                     measured_at: Instant::now(),
@@ -145,7 +141,6 @@ impl BarrelSim {
         let telemetry = Arc::new(InMemoryTelemetryStore::new());
         let tds_live = Arc::new(AtomicBool::new(true));
         let leak = Arc::new(FakeLeak::default());
-        let water_change = Arc::new(FakeWaterChange::default());
         let store = Arc::new(VolatileReservoirStore::default());
         let clock = Arc::new(BarrelClock {
             start: Instant::now(),
@@ -169,30 +164,22 @@ impl BarrelSim {
             barrel,
             store,
             leak,
-            water_change,
             tds_live,
             settings,
             clock,
             levels,
             telemetry,
             driver,
-            control: tokio::task::spawn_local(async {}),
+            control: None,
         };
-        sim.boot();
+        sim.start_controller();
         sim.run_for(Duration::from_secs(3)).await;
         sim
     }
 
-    fn boot(&mut self) {
-        self.service = Arc::new(ReservoirService::new(
-            self.settings,
-            Arc::clone(&self.store),
-            Arc::clone(&self.clock),
-            None,
-            TIMING,
-        ));
+    fn start_controller(&mut self) {
         self.service.set_supervision(Supervision::Active);
-        self.control = tokio::task::spawn_local(reservoir_loop(
+        self.control = Some(tokio::task::spawn_local(reservoir_loop(
             ReservoirController::new(
                 BarrelOutputs(Arc::clone(&self.barrel)),
                 Arc::clone(&self.service),
@@ -201,23 +188,34 @@ impl BarrelSim {
             self.levels.subscribe(),
             self.telemetry.subscribe_tds(),
             Arc::clone(&self.leak),
-            Arc::clone(&self.water_change),
+            FakeWaterChange(Arc::clone(&self.barrel)),
             self.service.change_signal(),
             Arc::new(Notify::new()),
             TIMING,
             Arc::new(AtomicU32::new(0)),
-        ));
+        )));
     }
 
     pub async fn reboot(&mut self) {
-        self.control.abort();
+        if let Some(task) = self.control.take() {
+            task.abort();
+        }
         self.barrel().valves = [false; 4];
-        self.boot();
+        self.service = Arc::new(ReservoirService::new(
+            self.settings,
+            Arc::clone(&self.store),
+            Arc::clone(&self.clock),
+            None,
+            TIMING,
+        ));
+        self.start_controller();
         self.run_for(Duration::from_secs(3)).await;
     }
 
     pub fn barrel(&self) -> MutexGuard<'_, Barrel> {
-        self.barrel.lock().expect("barrel poisoned")
+        let mut barrel = self.barrel.lock().expect("barrel poisoned");
+        barrel.advance();
+        barrel
     }
 
     pub fn status(&self) -> ReservoirStatus {
@@ -275,14 +273,13 @@ impl BarrelSim {
     }
 
     pub async fn begin_water_change(&self) {
-        self.water_change.0.store(true, Ordering::Relaxed);
-        self.run_for(Duration::from_secs(2)).await;
         self.barrel().water_change_active = true;
+        self.levels.publish(self.barrel().snapshot());
+        tokio::task::yield_now().await;
     }
 
     pub fn end_water_change(&self) {
         self.barrel().water_change_active = false;
-        self.water_change.0.store(false, Ordering::Relaxed);
     }
 
     pub fn set_leak(&self, leak: Option<bool>) {
@@ -292,7 +289,9 @@ impl BarrelSim {
 
 impl Drop for BarrelSim {
     fn drop(&mut self) {
-        self.control.abort();
+        if let Some(task) = self.control.take() {
+            task.abort();
+        }
         self.driver.abort();
     }
 }

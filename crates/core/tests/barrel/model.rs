@@ -1,3 +1,5 @@
+use tokio::time::Instant;
+
 use aquarium_core::domain::reservoir::ReservoirChannel;
 use aquarium_core::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 
@@ -42,7 +44,6 @@ pub struct Barrel {
     pub salt: f64,
     pub probe_ppm: f64,
     pub valves: [bool; 4],
-    pub refuse_off: Option<ReservoirChannel>,
     pub hose_burst: bool,
     pub full_stuck_dry: bool,
     pub poured_l: [f64; 2],
@@ -52,6 +53,7 @@ pub struct Barrel {
     pub water_change_active: bool,
     pub runs: Vec<(ReservoirChannel, bool, f64)>,
     pub t_s: f64,
+    updated: Instant,
 }
 
 impl Barrel {
@@ -62,7 +64,6 @@ impl Barrel {
             salt: 0.0,
             probe_ppm: 0.0,
             valves: [false; 4],
-            refuse_off: None,
             hose_burst: false,
             full_stuck_dry: false,
             poured_l: [0.0; 2],
@@ -72,6 +73,7 @@ impl Barrel {
             water_change_active: false,
             runs: Vec::new(),
             t_s: 0.0,
+            updated: Instant::now(),
         }
     }
 
@@ -102,7 +104,13 @@ impl Barrel {
         self.salt += litres * ppm;
     }
 
-    pub fn step(&mut self, dt: f64) {
+    pub fn advance(&mut self) {
+        let now = Instant::now();
+        let dt = (now - self.updated).as_secs_f64();
+        self.updated = now;
+        if dt == 0.0 {
+            return;
+        }
         self.t_s += dt;
         let layout = self.layout;
         let ro = self.valves[RoValve.index()] && self.valves[Booster.index()];

@@ -67,12 +67,12 @@ async fn automatic_top_ups_keep_the_barrel_full_and_on_target() {
                 BarrelSim::start(Barrel::new(LAYOUT).with_water(100.5, 150.0), settings).await;
 
             let mut fills = Vec::new();
-            for _ in 0..12 {
+            for _ in 0..7 {
                 sim.barrel().draw(3.0);
-                fills.extend(sim.fills_during(hours(2)).await);
+                fills.extend(sim.fills_during(hours(24)).await);
             }
 
-            assert_eq!(fills.len(), 12, "{fills:?}");
+            assert_eq!(fills.len(), 7, "{fills:?}");
             assert!(
                 fills
                     .iter()
@@ -120,11 +120,15 @@ async fn a_water_change_pauses_both_inlets_and_the_fill_finishes_after_it() {
             let sim =
                 BarrelSim::start(Barrel::new(LAYOUT).with_water(60.0, 150.0), targeted()).await;
             sim.service.start_fill().expect("started");
-            sim.run_for(Duration::from_secs(300)).await;
+            sim.run_until(hours(1), "RO flow", |_, barrel| {
+                barrel.valves[ReservoirChannel::Booster.index()]
+            })
+            .await;
 
             sim.begin_water_change().await;
             sim.run_for(Duration::from_secs(1200)).await;
             assert_eq!(sim.barrel().poured_during_water_change_l, 0.0);
+            assert_eq!(sim.barrel().valves, [false, false, false, true]);
             assert!(sim.status().fill.is_some());
             sim.end_water_change();
 
@@ -313,6 +317,34 @@ async fn long_ro_runs_respect_the_duty_cycle() {
                     pair[1].0 - pair[0].1
                 );
             }
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_closed_tap_times_out_and_holds_automatic_fills() {
+    LocalSet::new()
+        .run_until(async {
+            let layout = BarrelLayout {
+                tap_lph: 0.0,
+                ..LAYOUT
+            };
+            let settings = ReservoirSettings {
+                auto_fill: true,
+                ..targeted()
+            };
+            settings.validate().expect("valid settings");
+            let sim = BarrelSim::start(Barrel::new(layout).with_water(60.0, 80.0), settings).await;
+
+            let record = sim.finished(hours(13)).await;
+            assert_eq!(record.result, FillResult::Timeout);
+            assert!(record.tap_pulses > 0);
+            assert_eq!(sim.barrel().litres, 60.0);
+            assert_eq!(sim.barrel().valves, [false; 4]);
+            sim.run_for(hours(1)).await;
+            assert!(sim.status().auto_latched);
+            assert!(sim.status().fill.is_none());
+            assert_eq!(sim.status().last, Some(record));
         })
         .await;
 }
