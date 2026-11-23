@@ -106,6 +106,8 @@ pub(super) struct FlakyStore {
     pub(super) inner: VolatileReservoirStore,
     pub(super) refuse_marker: AtomicBool,
     pub(super) refuse_fault: AtomicBool,
+    pub(super) refuse_last: AtomicBool,
+    pub(super) fail_fault_read: AtomicBool,
     pub(super) refuse_erase: AtomicBool,
     pub(super) marker_writes: AtomicU32,
 }
@@ -126,6 +128,9 @@ impl FlakyStore {
 
 impl ReservoirStore for FlakyStore {
     fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str> {
+        if record == ReservoirRecord::Fault && self.fail_fault_read.load(Ordering::Relaxed) {
+            return Err("flash read failed");
+        }
         self.inner.load(record)
     }
 
@@ -135,6 +140,7 @@ impl ReservoirStore for FlakyStore {
                 self.marker_writes.fetch_add(1, Ordering::Relaxed);
                 self.refuse_marker.load(Ordering::Relaxed)
             }
+            ReservoirRecord::Last => self.refuse_last.load(Ordering::Relaxed),
             ReservoirRecord::Fault => self.refuse_fault.load(Ordering::Relaxed),
             _ => false,
         };
