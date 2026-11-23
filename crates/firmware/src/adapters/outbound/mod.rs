@@ -1,5 +1,7 @@
 pub mod ads1115;
 pub mod ds18b20;
+#[cfg(target_os = "espidf")]
+pub mod flood;
 pub mod influx;
 pub mod nvs_blob;
 pub mod nvs_calibration;
