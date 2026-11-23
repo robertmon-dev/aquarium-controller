@@ -1,8 +1,8 @@
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::reservoir::{
-    FaultRecord, FillFault, FillRecord, FillTrigger, ReservoirSettings, RunningMarker,
+    FaultRecord, FillFault, FillRecord, FillResult, FillTrigger, ReservoirSettings, RunningMarker,
 };
 use crate::ports::outbound::{ReservoirRecord, ReservoirStore};
 
@@ -87,63 +87,121 @@ fn stored_fault<S: ReservoirStore>(store: &S) -> Option<FaultRecord> {
     }
 }
 
-fn finished(last: &FillRecord, marker: &RunningMarker) -> bool {
-    marker.started_at.is_some()
-        && last.started_at == marker.started_at
-        && last.trigger == marker.trigger
-        && last.finished_at.is_some()
+#[derive(Serialize, Deserialize)]
+pub(super) struct SavedMarker {
+    #[serde(default)]
+    pub cycle_id: u64,
+    #[serde(flatten)]
+    pub marker: RunningMarker,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct SavedResult {
+    #[serde(default)]
+    pub cycle_id: u64,
+    #[serde(flatten)]
+    pub record: FillRecord,
+    #[serde(default)]
+    pub auto_latched: Option<bool>,
+    #[serde(default)]
+    pub held_after_reboot: bool,
+}
+
+pub(super) fn next_cycle_id(store: &impl ReservoirStore) -> Result<u64, &'static str> {
+    #[derive(Deserialize)]
+    struct Id {
+        #[serde(default)]
+        cycle_id: u64,
+    }
+    let previous = store
+        .load(ReservoirRecord::Last)?
+        .and_then(|bytes| serde_json::from_slice::<Id>(&bytes).ok())
+        .map_or(0, |last| last.cycle_id);
+    Ok(previous.wrapping_add(1).max(1))
 }
 
 pub(super) struct Recovery {
     pub(super) last: Option<FillRecord>,
+    pub(super) cycle_id: u64,
+    pub(super) auto_latched: bool,
     pub(super) fault: Option<FaultRecord>,
     pub(super) held_after_reboot: bool,
     pub(super) fault_pending: bool,
+    pub(super) last_pending: bool,
     pub(super) invalidation_pending: bool,
 }
 
 pub(super) fn recover<S: ReservoirStore>(store: &S) -> Recovery {
+    let saved = load::<S, SavedResult>(store, ReservoirRecord::Last);
+    let unreadable = matches!(saved, Stored::Unreadable);
+    let saved = saved.value();
     let mut recovery = Recovery {
-        last: load::<S, FillRecord>(store, ReservoirRecord::Last).value(),
+        last: saved.as_ref().map(|saved| saved.record),
+        cycle_id: saved.as_ref().map_or(0, |saved| saved.cycle_id),
+        auto_latched: saved.as_ref().map_or(unreadable, |saved| {
+            saved.auto_latched.unwrap_or_else(|| {
+                saved.record.trigger == FillTrigger::Auto && saved.record.result.latches_auto()
+            })
+        }),
         fault: stored_fault(store),
-        held_after_reboot: false,
+        held_after_reboot: saved.as_ref().is_some_and(|saved| saved.held_after_reboot),
         fault_pending: false,
+        last_pending: false,
         invalidation_pending: false,
     };
-    let marker = match load::<S, RunningMarker>(store, ReservoirRecord::Running) {
+    let stored_marker = load::<S, SavedMarker>(store, ReservoirRecord::Running);
+    let unknown_marker = matches!(stored_marker, Stored::Unreadable);
+    let marker = match stored_marker {
         Stored::Absent => return recovery,
-        Stored::Unreadable => RunningMarker {
-            trigger: FillTrigger::Auto,
-            started_at: None,
+        Stored::Unreadable => SavedMarker {
+            cycle_id: 0,
+            marker: RunningMarker {
+                trigger: FillTrigger::Auto,
+                started_at: None,
+            },
         },
         Stored::Value(marker) => marker,
     };
-
-    match recovery.last.filter(|last| finished(last, &marker)) {
-        Some(last) => {
+    if unreadable {
+        recovery.held_after_reboot = true;
+        recovery.fault.get_or_insert(FaultRecord {
+            fault: FillFault::Unreadable,
+            at: None,
+        });
+        return recovery;
+    }
+    if let Some(last) = recovery.last {
+        let same_cycle = marker.cycle_id != 0 && marker.cycle_id == recovery.cycle_id;
+        let legacy_match = marker.cycle_id == 0
+            && recovery.cycle_id == 0
+            && last.trigger == marker.marker.trigger
+            && last.started_at == marker.marker.started_at;
+        let possible_fault = unknown_marker && last.result.fault().is_some();
+        if (same_cycle || legacy_match || possible_fault)
+            && last.result != FillResult::InterruptedByReboot
+        {
             if let (Some(fault), None) = (last.result.fault(), recovery.fault) {
-                tracing::error!(?fault, "restoring a barrel fault that was not stored");
                 recovery.fault = Some(FaultRecord {
                     fault,
                     at: last.finished_at,
                 });
                 recovery.fault_pending = true;
             }
+            recovery.held_after_reboot = !same_cycle;
+            recovery.last_pending = recovery.held_after_reboot;
             recovery.invalidation_pending = true;
-        }
-        None => {
-            let record = FillRecord::interrupted(marker);
-            if recovery.last != Some(record) {
-                if let Err(reason) = write(store, ReservoirRecord::Last, &record) {
-                    tracing::warn!(reason, "interrupted barrel fill not recorded");
-                }
-                recovery.last = Some(record);
-            }
-            recovery.held_after_reboot = true;
-            tracing::warn!(
-                "a barrel fill was interrupted by a restart, automatic fills wait for a manual start"
-            );
+            return recovery;
         }
     }
+    let interrupted = FillRecord::interrupted(marker.marker);
+    recovery.held_after_reboot = true;
+    recovery.auto_latched = false;
+    recovery.last_pending =
+        recovery.last != Some(interrupted) || recovery.cycle_id != marker.cycle_id;
+    recovery.last = Some(interrupted);
+    recovery.cycle_id = marker.cycle_id;
+    tracing::warn!(
+        "a barrel fill was interrupted by a restart, automatic fills wait for a manual start"
+    );
     recovery
 }

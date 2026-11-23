@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::{mpsc, Notify};
 
 use super::state::{Output, State};
-use super::storage::{recover, stored_runtime_ms, stored_settings, write};
+use super::storage::{recover, stored_runtime_ms, stored_settings, write, SavedResult};
 use super::timing::ReservoirTiming;
 use crate::domain::pump::Supervision;
 use crate::domain::reservoir::{FillEvent, ReservoirBlocker, ReservoirChannel, ReservoirSettings};
@@ -107,7 +107,13 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
             tracing::info!("barrel fault stored");
         }
         if state.last_pending {
-            match write(&self.store, ReservoirRecord::Last, &state.last) {
+            let saved = state.last.map(|record| SavedResult {
+                cycle_id: state.cycle_id,
+                record,
+                auto_latched: Some(state.auto_latched),
+                held_after_reboot: state.held_after_reboot,
+            });
+            match write(&self.store, ReservoirRecord::Last, &saved) {
                 Ok(()) => state.last_pending = false,
                 Err(reason) => tracing::warn!(reason, "barrel fill result not stored, retrying"),
             }

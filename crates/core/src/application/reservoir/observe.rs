@@ -93,6 +93,7 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
                 .is_some_and(|conditions| conditions.full && !conditions.full_faulty)
         {
             state.auto_latched = false;
+            state.last_pending = state.last.is_some();
             changed = true;
         }
 

@@ -27,6 +27,7 @@ pub(super) struct Output {
 pub(super) struct State {
     pub(super) settings: ReservoirSettings,
     pub(super) fill: Option<Fill>,
+    pub(super) cycle_id: u64,
     pub(super) just_started: bool,
     pub(super) mixed_at: Option<Instant>,
     pub(super) overrides: [Option<Override>; 3],
@@ -60,6 +61,7 @@ impl State {
         Self {
             settings,
             fill: None,
+            cycle_id: recovery.cycle_id,
             just_started: false,
             mixed_at: None,
             overrides: [None; 3],
@@ -71,10 +73,10 @@ impl State {
             water_change_active: false,
             supervision: Supervision::Off,
             held_after_reboot: recovery.held_after_reboot,
-            auto_latched: false,
+            auto_latched: recovery.auto_latched,
             fault: recovery.fault,
             fault_pending: recovery.fault_pending,
-            last_pending: false,
+            last_pending: recovery.last_pending,
             last: recovery.last,
             last_skipped: None,
             invalidation_pending: recovery.invalidation_pending,
