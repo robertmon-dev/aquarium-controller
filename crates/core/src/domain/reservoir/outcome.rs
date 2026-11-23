@@ -91,6 +91,7 @@ pub struct FillRecord {
     #[cfg_attr(feature = "ts-export", ts(type = "number | null"))]
     pub finished_at: Option<u64>,
     pub result: FillResult,
+    #[serde(default, deserialize_with = "read_tds")]
     pub final_tds_ppm: Option<f32>,
     pub ro_s: u32,
     pub tap_s: u32,
@@ -98,6 +99,10 @@ pub struct FillRecord {
     pub ro_pulses: u32,
     pub tap_pulses: u32,
     pub duration_s: u32,
+}
+
+fn read_tds<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<f32>, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.map(|ppm| ppm as f32))
 }
 
 impl FillRecord {

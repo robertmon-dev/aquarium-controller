@@ -54,7 +54,7 @@ impl RefusingReservoirStore {
 }
 
 impl ReservoirStore for RefusingReservoirStore {
-    fn load(&self, record: ReservoirRecord) -> Option<Vec<u8>> {
+    fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str> {
         self.inner.load(record)
     }
 

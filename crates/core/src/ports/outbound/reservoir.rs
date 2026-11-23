@@ -40,13 +40,13 @@ impl ReservoirRecord {
 }
 
 pub trait ReservoirStore {
-    fn load(&self, record: ReservoirRecord) -> Option<Vec<u8>>;
+    fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str>;
     fn store(&self, record: ReservoirRecord, bytes: &[u8]) -> Result<(), &'static str>;
     fn erase(&self, record: ReservoirRecord) -> Result<(), &'static str>;
 }
 
 impl<S: ReservoirStore + ?Sized> ReservoirStore for Arc<S> {
-    fn load(&self, record: ReservoirRecord) -> Option<Vec<u8>> {
+    fn load(&self, record: ReservoirRecord) -> Result<Option<Vec<u8>>, &'static str> {
         self.as_ref().load(record)
     }
 
@@ -86,5 +86,12 @@ pub trait WaterChangeActivity {
 impl<T: WaterChangeActivity + ?Sized> WaterChangeActivity for Arc<T> {
     fn water_change_active(&self) -> bool {
         self.as_ref().water_change_active()
+    }
+}
+
+impl<T: WaterChangeActivity> WaterChangeActivity for Option<T> {
+    fn water_change_active(&self) -> bool {
+        self.as_ref()
+            .is_some_and(WaterChangeActivity::water_change_active)
     }
 }

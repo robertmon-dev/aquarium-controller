@@ -12,6 +12,8 @@ fn with_full(full: bool, faulty: bool) -> Option<ReservoirConditions> {
 #[test]
 fn the_trigger_waits_for_ten_dry_minutes() {
     let mut trigger = RefillDebounce::default();
+    trigger.advance(with_full(false, false), 700_000);
+    assert!(!trigger.due(600));
     trigger.advance(with_full(false, false), 599_000);
     assert!(!trigger.due(600));
     trigger.advance(with_full(false, false), 1000);
