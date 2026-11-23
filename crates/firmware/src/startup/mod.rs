@@ -11,6 +11,8 @@ use aquarium_core::adapters::outbound::memory::{
 use aquarium_core::application::pump::{startup_pump_outputs, stored_flood_latch};
 use aquarium_core::application::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -212,11 +214,13 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn optional<T, F: core::future::Future<Output = T>>(task: Option<F>) {
+fn optional<'a, T: 'a, F: Future<Output = T> + 'a>(
+    task: Option<F>,
+) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
     match task {
-        Some(task) => {
+        Some(task) => Box::pin(async move {
             task.await;
-        }
-        None => core::future::pending::<()>().await,
+        }),
+        None => Box::pin(core::future::pending()),
     }
 }
