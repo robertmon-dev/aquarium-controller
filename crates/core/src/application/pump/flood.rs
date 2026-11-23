@@ -7,7 +7,6 @@ use crate::domain::pump::{OperationResult, PumpId};
 use crate::ports::inbound::FloodResetError;
 use crate::ports::outbound::{Clock, LeakSource, PumpOutputs, PumpRecord, PumpStore};
 
-/// Open the relay bank when automation needs it or a flood cutoff must be held.
 pub fn startup_pump_outputs<O: PumpOutputs, E>(
     configured: bool,
     hold_off: bool,

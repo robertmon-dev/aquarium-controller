@@ -21,7 +21,7 @@ impl ReturnLockout {
         match levels {
             None => {
                 self.wet_since = None;
-                false
+                self.locked
             }
             Some(levels) if levels.sump_low => {
                 self.locked = true;
