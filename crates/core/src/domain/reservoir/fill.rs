@@ -197,6 +197,9 @@ impl Fill {
         if conditions.leaking() {
             return FillStep::Finished(FillResult::Leak);
         }
+        if conditions.full_faulty {
+            return FillStep::Finished(FillResult::Blocked);
+        }
         if !conditions.full && self.inlet_ms.iter().sum::<u64>() > self.plan.overtime_ms {
             return FillStep::Finished(FillResult::Overtime);
         }
