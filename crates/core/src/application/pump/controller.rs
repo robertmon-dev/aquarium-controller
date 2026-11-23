@@ -179,7 +179,6 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
         started || observed.changed || outputs_changed || starvation_changed || suspect_changed
     }
 
-    /// Supervise the relay module while normal pump automation is disabled.
     pub fn tick_flood_only(&mut self, latched: bool, released_on: [bool; 4]) -> bool {
         let mut changed = false;
         for id in PumpId::ALL {

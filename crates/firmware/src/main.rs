@@ -529,7 +529,6 @@ async fn run() -> anyhow::Result<()> {
     };
 
     let flood_task = async {
-        // Keep initialized pins owned even when their component is idle.
         let mut idle = idle_relays
             .map(|outputs| PumpController::new(outputs, Arc::clone(&pumps), SETTINGS.pumps.timing));
         if !components.flood.is_running() && !pumps.flood_status().latched {
