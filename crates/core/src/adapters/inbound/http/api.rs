@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use picoserve::io::Read;
 use picoserve::request::RequestParts;
 use picoserve::response::{IntoResponse, NoContent, ResponseWriter, StatusCode};
@@ -57,7 +60,37 @@ impl<State, PathParameters> Layer<State, PathParameters> for ApiLayer {
                 .await;
         }
 
-        next.run(state, path_parameters, self.cors.writer(response_writer))
-            .await
+        let writer = self.cors.writer(response_writer);
+        box_call(|| next.run(state, path_parameters, writer)).await
     }
+}
+
+pub struct BoxLayer;
+
+impl<State, PathParameters> Layer<State, PathParameters> for BoxLayer {
+    type NextState = State;
+    type NextPathParameters = PathParameters;
+
+    async fn call_layer<
+        'a,
+        R: Read + 'a,
+        NextLayer: Next<'a, R, Self::NextState, Self::NextPathParameters>,
+        W: ResponseWriter<Error = R::Error>,
+    >(
+        &self,
+        next: NextLayer,
+        state: &State,
+        path_parameters: PathParameters,
+        _request_parts: RequestParts<'_>,
+        response_writer: W,
+    ) -> Result<ResponseSent, W::Error> {
+        box_call(|| next.run(state, path_parameters, response_writer)).await
+    }
+}
+
+#[inline(never)]
+fn box_call<'f, F: Future + 'f>(
+    build: impl FnOnce() -> F,
+) -> Pin<Box<dyn Future<Output = F::Output> + 'f>> {
+    Box::pin(build())
 }

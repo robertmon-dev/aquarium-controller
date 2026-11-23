@@ -5,7 +5,7 @@ use picoserve::extract::{FromRef, State};
 use picoserve::routing::{delete, get, parse_path_segment, post, put, PathRouter};
 use picoserve::Router;
 
-use crate::adapters::inbound::http::api::ApiLayer;
+use crate::adapters::inbound::http::api::{ApiLayer, BoxLayer};
 use crate::adapters::inbound::http::handlers;
 use crate::domain::heater::HeaterId;
 use crate::domain::pump::PumpId;
@@ -84,6 +84,76 @@ where
     P: PumpControl + 'static,
     R: ReservoirControl + 'static,
 {
+    let lighting = Router::new()
+        .route(
+            "/override",
+            get(handlers::lighting::current::<L>)
+                .put(handlers::lighting::set::<L>)
+                .delete(handlers::lighting::clear::<L>),
+        )
+        .route(
+            ("/schedule", parse_path_segment::<u8>()),
+            get(handlers::lighting::schedule),
+        )
+        .layer(BoxLayer);
+
+    let heaters = Router::new()
+        .route(
+            "/settings",
+            get(handlers::heaters::settings::<H>).patch(handlers::heaters::patch_settings::<H>),
+        )
+        .route(
+            (parse_path_segment::<HeaterId>(), "/override"),
+            put(handlers::heaters::set_override::<H>)
+                .delete(handlers::heaters::clear_override::<H>),
+        )
+        .layer(BoxLayer);
+
+    let pumps = Router::new()
+        .route(
+            "/settings",
+            get(handlers::pumps::settings::<P>).patch(handlers::pumps::patch_settings::<P>),
+        )
+        .route(
+            (parse_path_segment::<PumpId>(), "/override"),
+            put(handlers::pumps::set_override::<P>).delete(handlers::pumps::clear_override::<P>),
+        )
+        .route(
+            (parse_path_segment::<PumpId>(), "/runtime/reset"),
+            post(handlers::pumps::reset_runtime::<P>),
+        )
+        .route(
+            "/top-off",
+            post(handlers::pumps::start_top_off::<P>).delete(handlers::pumps::cancel_top_off::<P>),
+        )
+        .route(
+            "/top-off/resume",
+            post(handlers::pumps::resume_top_off::<P>),
+        )
+        .layer(BoxLayer);
+
+    let reservoir = Router::new()
+        .route(
+            "/settings",
+            get(handlers::reservoir::settings::<R>).patch(handlers::reservoir::patch_settings::<R>),
+        )
+        .route(
+            (parse_path_segment::<OverrideTarget>(), "/override"),
+            put(handlers::reservoir::set_override::<R>)
+                .delete(handlers::reservoir::clear_override::<R>),
+        )
+        .route(
+            (parse_path_segment::<ReservoirChannel>(), "/runtime/reset"),
+            post(handlers::reservoir::reset_runtime::<R>),
+        )
+        .route(
+            "/fill",
+            post(handlers::reservoir::start_fill::<R>)
+                .delete(handlers::reservoir::cancel_fill::<R>),
+        )
+        .route("/fault", delete(handlers::reservoir::clear_fault::<R>))
+        .layer(BoxLayer);
+
     Router::new()
         .route("/api/telemetry", get(handlers::telemetry::snapshot::<Q>))
         .route(
@@ -95,61 +165,12 @@ where
         .route("/api/health", get(handlers::health::probe::<Q>))
         .route("/api/probe", get(handlers::probe::voltages::<Q>))
         .route(
-            "/api/lighting/override",
-            get(handlers::lighting::current::<L>)
-                .put(handlers::lighting::set::<L>)
-                .delete(handlers::lighting::clear::<L>),
-        )
-        .route(
-            ("/api/lighting/schedule", parse_path_segment::<u8>()),
-            get(handlers::lighting::schedule),
-        )
-        .route(
             "/api/calibration",
             get(handlers::calibration::current::<C>).patch(handlers::calibration::patch::<C>),
-        )
-        .route("/api/heaters", get(handlers::heaters::status::<H>))
-        .route(
-            "/api/heaters/settings",
-            get(handlers::heaters::settings::<H>).patch(handlers::heaters::patch_settings::<H>),
-        )
-        .route(
-            (
-                "/api/heaters",
-                parse_path_segment::<HeaterId>(),
-                "/override",
-            ),
-            put(handlers::heaters::set_override::<H>)
-                .delete(handlers::heaters::clear_override::<H>),
         )
         .route(
             "/api/flood/alarm",
             delete(handlers::pumps::reset_flood::<P>),
-        )
-        .route("/api/pumps", get(handlers::pumps::status::<P>))
-        .route(
-            "/api/pumps/settings",
-            get(handlers::pumps::settings::<P>).patch(handlers::pumps::patch_settings::<P>),
-        )
-        .route(
-            ("/api/pumps", parse_path_segment::<PumpId>(), "/override"),
-            put(handlers::pumps::set_override::<P>).delete(handlers::pumps::clear_override::<P>),
-        )
-        .route(
-            (
-                "/api/pumps",
-                parse_path_segment::<PumpId>(),
-                "/runtime/reset",
-            ),
-            post(handlers::pumps::reset_runtime::<P>),
-        )
-        .route(
-            "/api/pumps/top-off",
-            post(handlers::pumps::start_top_off::<P>).delete(handlers::pumps::cancel_top_off::<P>),
-        )
-        .route(
-            "/api/pumps/top-off/resume",
-            post(handlers::pumps::resume_top_off::<P>),
         )
         .route(
             "/api/water-change",
@@ -160,37 +181,13 @@ where
             "/api/water-change/resume",
             post(handlers::pumps::resume_water_change::<P>),
         )
+        .route("/api/heaters", get(handlers::heaters::status::<H>))
+        .route("/api/pumps", get(handlers::pumps::status::<P>))
         .route("/api/reservoir", get(handlers::reservoir::status::<R>))
-        .route(
-            "/api/reservoir/settings",
-            get(handlers::reservoir::settings::<R>).patch(handlers::reservoir::patch_settings::<R>),
-        )
-        .route(
-            (
-                "/api/reservoir",
-                parse_path_segment::<OverrideTarget>(),
-                "/override",
-            ),
-            put(handlers::reservoir::set_override::<R>)
-                .delete(handlers::reservoir::clear_override::<R>),
-        )
-        .route(
-            (
-                "/api/reservoir",
-                parse_path_segment::<ReservoirChannel>(),
-                "/runtime/reset",
-            ),
-            post(handlers::reservoir::reset_runtime::<R>),
-        )
-        .route(
-            "/api/reservoir/fill",
-            post(handlers::reservoir::start_fill::<R>)
-                .delete(handlers::reservoir::cancel_fill::<R>),
-        )
-        .route(
-            "/api/reservoir/fault",
-            delete(handlers::reservoir::clear_fault::<R>),
-        )
+        .nest("/api/lighting", lighting)
+        .nest("/api/heaters", heaters)
+        .nest("/api/pumps", pumps)
+        .nest("/api/reservoir", reservoir)
         .layer(ApiLayer::new(token, cors_origin))
         .with_state(state)
 }
