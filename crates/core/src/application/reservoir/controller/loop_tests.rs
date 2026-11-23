@@ -210,3 +210,28 @@ async fn an_api_change_is_applied_without_waiting_for_the_ticker() {
         })
         .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn override_expiry_closes_the_valve_between_ticks() {
+    LocalSet::new()
+        .run_until(async {
+            let rig = spawn(
+                RO_ONLY,
+                ReservoirTiming {
+                    tick: Duration::from_secs(60),
+                    level_stale: Duration::from_secs(60),
+                    ..TIMING
+                },
+            );
+            publish_levels(&rig.levels);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            rig.service
+                .set_override(OverrideTarget::Tap, true, Some(1))
+                .expect("open tap");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert!(rig.relays.pin(ReservoirChannel::TapValve));
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            assert!(!rig.relays.pin(ReservoirChannel::TapValve));
+        })
+        .await;
+}

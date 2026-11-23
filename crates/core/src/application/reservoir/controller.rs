@@ -206,6 +206,7 @@ pub async fn reservoir_loop<O, S, C, L, W>(
     loop {
         heartbeat.fetch_add(1, Ordering::Relaxed);
 
+        let expiry = controller.service.next_override_expiry();
         let api_wake = tokio::select! {
             received = levels.changed(), if !levels_closed => {
                 match received {
@@ -228,6 +229,7 @@ pub async fn reservoir_loop<O, S, C, L, W>(
                 false
             }
             () = api_changed.notified() => true,
+            () = crate::application::sleep_until_some(expiry) => false,
             _ = ticker.tick() => false,
         };
 
