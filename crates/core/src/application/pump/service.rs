@@ -121,12 +121,38 @@ fn stored_history<S: PumpStore>(store: &S) -> LastOperations {
     }
 }
 
+pub fn stored_flood_latch(store: &impl PumpStore) -> bool {
+    store
+        .load_flood_alarm()
+        .and_then(|record| match record {
+            None => Ok(false),
+            Some(bytes) => {
+                serde_json::from_slice::<bool>(&bytes).map_err(|_| "invalid saved flood alarm")
+            }
+        })
+        .unwrap_or_else(|reason| {
+            tracing::error!(reason, "flood alarm state unreadable, holding pumps off");
+            true
+        })
+}
+
 impl<S: PumpStore, C: Clock> PumpService<S, C> {
     pub fn new(
         defaults: PumpSettings,
         store: S,
         clock: C,
         events: Option<mpsc::UnboundedSender<OperationEvent>>,
+    ) -> Self {
+        let flood_latched = stored_flood_latch(&store);
+        Self::with_flood_latch(defaults, store, clock, events, flood_latched)
+    }
+
+    pub fn with_flood_latch(
+        defaults: PumpSettings,
+        store: S,
+        clock: C,
+        events: Option<mpsc::UnboundedSender<OperationEvent>>,
+        flood_latched: bool,
     ) -> Self {
         let settings = stored_settings(&store, defaults);
         let overrides = stored_overrides(&store);
@@ -165,18 +191,6 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             resumed.max(recorded)
         });
 
-        let flood_latched = store
-            .load_flood_alarm()
-            .and_then(|record| match record {
-                None => Ok(false),
-                Some(bytes) => {
-                    serde_json::from_slice::<bool>(&bytes).map_err(|_| "invalid saved flood alarm")
-                }
-            })
-            .unwrap_or_else(|reason| {
-                tracing::error!(reason, "flood alarm state unreadable, holding pumps off");
-                true
-            });
         Self {
             state: Mutex::new(State {
                 flood: crate::domain::flood::FloodStatus {

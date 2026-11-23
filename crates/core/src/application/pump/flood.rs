@@ -3,9 +3,33 @@ use tokio::time::Instant;
 use super::service::PumpService;
 use super::state::{Activity, State};
 use crate::domain::flood::FloodProbes;
-use crate::domain::pump::OperationResult;
+use crate::domain::pump::{OperationResult, PumpId};
 use crate::ports::inbound::FloodResetError;
-use crate::ports::outbound::{Clock, LeakSource, PumpRecord, PumpStore};
+use crate::ports::outbound::{Clock, LeakSource, PumpOutputs, PumpRecord, PumpStore};
+
+/// Open the relay bank when automation needs it or a flood cutoff must be held.
+pub fn startup_pump_outputs<O: PumpOutputs, E>(
+    configured: bool,
+    hold_off: bool,
+    open: impl FnOnce() -> Result<O, E>,
+) -> Result<Option<O>, E> {
+    if !configured && !hold_off {
+        return Ok(None);
+    }
+    let mut outputs = open()?;
+    if hold_off {
+        for id in PumpId::ALL {
+            if let Err(reason) = outputs.set(id, false) {
+                tracing::error!(
+                    pump = id.name(),
+                    reason,
+                    "failed to hold pump output off during startup"
+                );
+            }
+        }
+    }
+    Ok(Some(outputs))
+}
 
 impl<S: PumpStore, C: Clock> PumpService<S, C> {
     pub fn observe_flood(&self, probes: FloodProbes) {
