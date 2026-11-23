@@ -146,3 +146,16 @@ fn a_refused_marker_is_retried_once_per_debounce_period() {
     assert!(rig.status().fill.is_some());
     assert_eq!(rig.status().last_skipped, None);
 }
+
+#[test]
+fn a_faulty_full_sensor_ends_an_active_fill_as_blocked() {
+    use crate::domain::water::WaterLevelRole;
+    let mut rig = Rig::new(RO_ONLY);
+    rig.start_fill().unwrap();
+    rig.run(3);
+    assert!(rig.relays.pin(ReservoirChannel::RoValve));
+    rig.levels.sensors[WaterLevelRole::ReservoirFull.index()].faulty = true;
+    rig.tick();
+    assert_eq!(rig.relays.pins(), [false; 4]);
+    assert_eq!(rig.status().last.unwrap().result, FillResult::Blocked);
+}
