@@ -8,8 +8,8 @@ use super::storage::write;
 use crate::domain::reservoir::{
     validate_override, ChannelMode, FaultRecord, FillPhase, FillResult, FillStatus, FillTrigger,
     Inlet, InletRest, OverrideTarget, ReservoirBlocker, ReservoirChannel, ReservoirChannelStatus,
-    ReservoirChannels, ReservoirSettings, ReservoirSettingsPatch, ReservoirStatus,
-    ReservoirTelemetry,
+    ReservoirChannelTelemetry, ReservoirChannels, ReservoirSettings, ReservoirSettingsPatch,
+    ReservoirStatus, ReservoirTelemetry,
 };
 use crate::ports::inbound::{
     FaultClearError, FillCancelError, FillStartError, ReservoirControl, ReservoirOverrideError,
@@ -212,12 +212,27 @@ impl<S: ReservoirStore, C: Clock> ReservoirControl for ReservoirService<S, C> {
 impl<S: ReservoirStore, C: Clock> ReservoirStatusSource for ReservoirService<S, C> {
     fn reservoir_telemetry(&self) -> ReservoirTelemetry {
         let state = self.lock();
-        let on = |channel: ReservoirChannel| state.outputs[channel.index()].on;
+        let channel = |id: ReservoirChannel| {
+            let output = state.outputs[id.index()];
+            ReservoirChannelTelemetry {
+                on: output.on,
+                blocked_by: output.blocked_by,
+                output_error: output.error,
+            }
+        };
+        let channels = ReservoirChannels {
+            ro_valve: channel(ReservoirChannel::RoValve),
+            booster: channel(ReservoirChannel::Booster),
+            tap_valve: channel(ReservoirChannel::TapValve),
+            mixer: channel(ReservoirChannel::Mixer),
+        };
         ReservoirTelemetry {
-            ro_valve: on(ReservoirChannel::RoValve),
-            booster: on(ReservoirChannel::Booster),
-            tap_valve: on(ReservoirChannel::TapValve),
-            mixer: on(ReservoirChannel::Mixer),
+            channels: Some(channels),
+            dosing_water: state.fill.and_then(|fill| fill.dosing()),
+            ro_valve: channels.ro_valve.on,
+            booster: channels.booster.on,
+            tap_valve: channels.tap_valve.on,
+            mixer: channels.mixer.on,
             phase: state.fill.map_or(FillPhase::Idle, |fill| fill.phase()),
             tds_ppm: state.fill.and_then(|fill| fill.last_tds()),
             target_tds_ppm: state.settings.target_tds_ppm,
