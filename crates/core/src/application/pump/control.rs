@@ -5,12 +5,15 @@ use tokio::time::Instant;
 use super::schedule::Schedule;
 use super::service::PumpService;
 use super::state::{Activity, Expiry};
+use crate::domain::flood::FloodStatus;
 use crate::domain::pump::{
     validate_override, validate_top_off, Blocker, ChannelStatus, OperationKind, OperationPlan,
     OperationRecord, OperationResult, OverrideError, PumpId, PumpSettings, PumpSettingsPatch,
     PumpsStatus, PumpsTelemetry, Supervision, WaterChangePlan,
 };
-use crate::ports::inbound::{CancelError, PumpControl, PumpSettingsError, StartError};
+use crate::ports::inbound::{
+    CancelError, FloodResetError, PumpControl, PumpSettingsError, StartError,
+};
 use crate::ports::outbound::{Clock, PumpRecord, PumpStatusSource, PumpStore, WaterChangeActivity};
 
 impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
@@ -136,7 +139,7 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
         self.reset_runtime_at(id, Instant::now());
     }
 
-    fn reset_flood(&self) -> Result<(), crate::ports::inbound::FloodResetError> {
+    fn reset_flood(&self) -> Result<(), FloodResetError> {
         self.acknowledge_flood()
     }
 
@@ -257,7 +260,7 @@ impl<S: PumpStore, C: Clock> WaterChangeActivity for PumpService<S, C> {
 }
 
 impl<S: PumpStore, C: Clock> PumpStatusSource for PumpService<S, C> {
-    fn flood_status(&self) -> crate::domain::flood::FloodStatus {
+    fn flood_status(&self) -> FloodStatus {
         self.lock().flood
     }
 

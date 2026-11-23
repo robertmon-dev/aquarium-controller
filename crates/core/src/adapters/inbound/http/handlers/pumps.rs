@@ -8,7 +8,7 @@ use crate::domain::pump::{
     WaterChangePlan,
 };
 use crate::ports::inbound::{
-    CancelError, OverrideError, PumpControl, PumpSettingsError, StartError,
+    CancelError, FloodResetError, OverrideError, PumpControl, PumpSettingsError, StartError,
 };
 
 type Rejection = (StatusCode, &'static str);
@@ -40,7 +40,6 @@ pub async fn status<P: PumpControl>(
 pub async fn reset_flood<P: PumpControl>(
     State(PumpState(pumps)): State<PumpState<P>>,
 ) -> Result<Empty, Rejection> {
-    use crate::ports::inbound::FloodResetError;
     pumps.reset_flood().map_err(|error| match error {
         FloodResetError::Wet => (StatusCode::LOCKED, "a flood probe is still wet"),
         FloodResetError::Unavailable => (StatusCode::LOCKED, "both flood probes must report dry"),
