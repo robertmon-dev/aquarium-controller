@@ -137,6 +137,12 @@ const telemetryGuard = z.object({
     channel_rgb_pct: z.number(),
     override_active: z.boolean(),
   }),
+  flood: z
+    .object({
+      probes: z.object({ reservoir: z.boolean(), sump: z.boolean() }).nullable(),
+      latched: z.boolean(),
+    })
+    .optional(),
   leak_detected: z.boolean(),
 });
 
@@ -163,6 +169,7 @@ export function assertTelemetry(value: unknown): TankTelemetryDto {
 const operationKind = z.enum(["top_off", "water_change"]);
 
 const blocker = z.enum([
+  "leak",
   "sump_low",
   "reservoir_empty",
   "tank_overflow",

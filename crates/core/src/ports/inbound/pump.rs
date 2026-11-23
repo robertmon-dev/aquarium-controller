@@ -23,7 +23,15 @@ pub enum CancelError {
     NotPersisted(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloodResetError {
+    Wet,
+    Unavailable,
+    Storage(&'static str),
+}
+
 pub trait PumpControl {
+    fn reset_flood(&self) -> Result<(), FloodResetError>;
     fn status(&self) -> PumpsStatus;
     fn settings(&self) -> PumpSettings;
     fn apply_settings(&self, patch: PumpSettingsPatch) -> Result<PumpSettings, PumpSettingsError>;

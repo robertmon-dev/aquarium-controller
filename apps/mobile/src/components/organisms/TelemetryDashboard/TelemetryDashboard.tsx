@@ -7,6 +7,7 @@ import {
   atoCard,
   co2Card,
   filtrationCard,
+  floodMessage,
   lightingCard,
   pumpsCard,
   systemCard,
@@ -25,6 +26,7 @@ export const TelemetryDashboard = ({
 }): ReactNode => {
   const t = useT();
   const levels = waterLevelCard(snapshot.water_level, t);
+  const alarm = floodMessage(snapshot, t);
   const cards = [
     filtrationCard(snapshot, t),
     co2Card(snapshot, t),
@@ -37,9 +39,9 @@ export const TelemetryDashboard = ({
 
   return (
     <View style={{ gap: spacing.sm }}>
-      {snapshot.leak_detected ? (
+      {alarm ? (
         <Alert variant="danger" title={t("telemetry.leakTitle")}>
-          {t("telemetry.leakBody")}
+          {alarm}
         </Alert>
       ) : null}
 

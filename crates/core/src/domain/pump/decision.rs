@@ -44,6 +44,7 @@ impl LevelConditions {
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub enum Blocker {
+    Leak,
     SumpLow,
     ReservoirEmpty,
     TankOverflow,
@@ -113,6 +114,7 @@ impl ChannelDecision {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DecisionInput {
+    pub flood_locked: bool,
     pub levels: Option<LevelConditions>,
     pub return_locked_out: bool,
     pub return_forced_off: bool,
@@ -124,6 +126,9 @@ pub struct DecisionInput {
 }
 
 pub fn decide(input: DecisionInput) -> [ChannelDecision; 4] {
+    if input.flood_locked {
+        return [ChannelDecision::blocked(Blocker::Leak); 4];
+    }
     let return_pump = match input.levels {
         _ if input.return_held_after_drain => {
             ChannelDecision::blocked(Blocker::LevelsUnavailableAfterDrain)

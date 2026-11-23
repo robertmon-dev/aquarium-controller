@@ -22,6 +22,7 @@ export {
   useLightingSchedule,
   usePatchCalibration,
   useProbeVoltages,
+  useResetFlood,
   useSetLightingOverride,
   useTelemetry,
 } from "./queries";

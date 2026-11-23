@@ -24,7 +24,8 @@ impl FlakyStore {
     }
 
     fn refusing(&self, record: PumpRecord) -> bool {
-        record == PumpRecord::Checkpoint && self.refuse.load(Ordering::Relaxed)
+        matches!(record, PumpRecord::Checkpoint | PumpRecord::Flood)
+            && self.refuse.load(Ordering::Relaxed)
     }
 
     pub(super) fn holds_checkpoint(&self) -> bool {

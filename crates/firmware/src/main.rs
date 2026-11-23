@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore, NoLeakSensor,
+    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
 use aquarium_core::application::heater::probe_heaters;
 use aquarium_core::application::{
@@ -20,9 +20,9 @@ use aquarium_core::domain::reservoir::{FillEvent, ReservoirChannel};
 use aquarium_core::ports::inbound::TelemetryQuery;
 use aquarium_core::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, PumpStore, ReservoirStatusSource, ReservoirStore,
-    SystemHealthProvider, TdsReader, TdsSampleSink, TelemetrySink, TemperatureReader,
-    TemperatureSampleSink, WaterLevelPins, WaterLevelSink, WaterLevelSource,
+    ProbeVoltageSink, PumpOutputs, PumpStatusSource, PumpStore, ReservoirStatusSource,
+    ReservoirStore, SystemHealthProvider, TdsReader, TdsSampleSink, TelemetrySink,
+    TemperatureReader, TemperatureSampleSink, WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use aquarium_core::protocol::ads1115::Channel;
 use aquarium_core::protocol::ds18b20::{
@@ -45,13 +45,16 @@ use tracing::{error, info, warn};
 
 use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::ds18b20::{Ds18b20Adapter, OneWireBus};
+use aquarium_controller::adapters::outbound::flood::FloodInputs;
 use aquarium_controller::adapters::outbound::influx::InfluxWriter;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::nvs_heater::NvsHeaterSettings;
 use aquarium_controller::adapters::outbound::nvs_pump::NvsPumpStore;
 use aquarium_controller::adapters::outbound::nvs_reservoir::NvsReservoirStore;
 use aquarium_controller::adapters::outbound::pump_storage::PumpStorage;
-use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
+use aquarium_controller::adapters::outbound::relay::{
+    Contact, RelayOutputs, ReservoirRelayOutputs,
+};
 use aquarium_controller::adapters::outbound::reservoir_storage::ReservoirStorage;
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
@@ -177,7 +180,15 @@ async fn run() -> anyhow::Result<()> {
         return probe_relays(&mut relays, &mut barrel).await;
     }
 
-    let relays = if components.pumps.is_initialized() {
+    let flood_inputs = if components.flood.is_initialized() {
+        Some(
+            FloodInputs::new(peripherals.pins.gpio38, peripherals.pins.gpio48)
+                .context("Failed to initialize flood alarm inputs")?,
+        )
+    } else {
+        None
+    };
+    let mut relays = if components.pumps.is_initialized() || components.flood.is_running() {
         Some(
             RelayOutputs::new(
                 peripherals.pins.gpio5,
@@ -192,6 +203,22 @@ async fn run() -> anyhow::Result<()> {
         None
     };
 
+    let initial_flood = flood_inputs
+        .as_ref()
+        .filter(|_| components.flood.is_running())
+        .map(FloodInputs::read);
+    if initial_flood.is_some() {
+        if let Some(outputs) = &mut relays {
+            for id in PumpId::ALL {
+                if let Err(reason) = outputs.set(id, false) {
+                    error!(
+                        pump = id.name(),
+                        reason, "Failed to hold pump output off during startup"
+                    );
+                }
+            }
+        }
+    }
     let barrel_relays = if components.reservoir.is_initialized() {
         Some(
             ReservoirRelayOutputs::new(
@@ -229,7 +256,6 @@ async fn run() -> anyhow::Result<()> {
         Ok(partition) => (Some(partition), None),
         Err(error) => (None, Some(nvs_unavailable_alarm(error))),
     };
-    let nvs_available = nvs_partition.is_some();
 
     let wifi = if components.wifi.is_initialized() {
         let sys_loop = EspSystemEventLoop::take().context("System event loop already taken")?;
@@ -358,17 +384,30 @@ async fn run() -> anyhow::Result<()> {
     } else {
         (None, None)
     };
+    let pump_nvs = nvs_partition
+        .clone()
+        .and_then(|partition| match NvsPumpStore::new(partition) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                error!(%error, "Pump NVS namespace unavailable, pump automation disabled");
+                None
+            }
+        });
+    let pumps_automated = components.pumps.is_running() && pump_nvs.is_some();
     let pumps = Arc::new(PumpService::new(
         SETTINGS.pumps.defaults.clone(),
-        match nvs_partition.clone() {
-            Some(partition) => PumpStorage::Nvs(
-                NvsPumpStore::new(partition).context("Failed to open the pump namespace in NVS")?,
-            ),
-            None => PumpStorage::Unavailable,
-        },
+        pump_nvs.map_or(
+            PumpStorage::Unavailable {
+                flood_enabled: components.flood.is_running(),
+            },
+            PumpStorage::Nvs,
+        ),
         Arc::clone(&clock),
         pump_events,
     ));
+    if let Some(probes) = initial_flood {
+        pumps.observe_flood(probes);
+    }
     let pumps_republish = Arc::new(Notify::new());
     let pump_heartbeat = Arc::new(AtomicU32::new(0));
 
@@ -400,10 +439,13 @@ async fn run() -> anyhow::Result<()> {
     ));
     let reservoir_republish = Arc::new(Notify::new());
     let reservoir_heartbeat = Arc::new(AtomicU32::new(0));
-    let pumps_automated = components.pumps.is_running() && nvs_available;
 
+    let flood_heartbeat = Arc::new(AtomicU32::new(0));
     let mut supervised: Vec<Arc<dyn Supervised>> = Vec::new();
     let mut heartbeats = Vec::new();
+    if components.flood.is_running() {
+        heartbeats.push(Arc::clone(&flood_heartbeat));
+    }
     if heater_task.is_some() {
         heartbeats.push(Arc::clone(&heater_heartbeat));
     }
@@ -435,7 +477,7 @@ async fn run() -> anyhow::Result<()> {
         }
     };
 
-    let (pump_task, _idle_relays) = match (relays, pumps_automated) {
+    let (pump_task, idle_relays) = match (relays, pumps_automated) {
         (Some(outputs), true) => {
             info!("Pump control running");
             (
@@ -451,7 +493,7 @@ async fn run() -> anyhow::Result<()> {
             )
         }
         (Some(outputs), false) => {
-            info!("Pump relays held released but not controlled");
+            info!("Pump automation disabled");
             (None, Some(outputs))
         }
         (None, _) => (None, None),
@@ -469,7 +511,7 @@ async fn run() -> anyhow::Result<()> {
                     ),
                     levels.subscribe(),
                     store.subscribe_tds(),
-                    NoLeakSensor,
+                    Arc::clone(&pumps),
                     pumps_automated.then(|| Arc::clone(&pumps)),
                     reservoir.change_signal(),
                     Arc::clone(&reservoir_republish),
@@ -486,6 +528,41 @@ async fn run() -> anyhow::Result<()> {
         (None, _) => (None, None),
     };
 
+    let flood_task = async {
+        // Keep initialized pins owned even when their component is idle.
+        let mut idle = idle_relays
+            .map(|outputs| PumpController::new(outputs, Arc::clone(&pumps), SETTINGS.pumps.timing));
+        if !components.flood.is_running() && !pumps.flood_status().latched {
+            return std::future::pending::<()>().await;
+        }
+        let mut previous = None;
+        loop {
+            flood_heartbeat.fetch_add(1, Ordering::Relaxed);
+            if let Some(inputs) = flood_inputs
+                .as_ref()
+                .filter(|_| components.flood.is_running())
+            {
+                pumps.observe_flood(inputs.read());
+            }
+            let status = pumps.flood_status();
+            let mut changed = previous != Some(status);
+            if let Some(controller) = &mut idle {
+                changed |= controller.tick_flood_only(
+                    status.latched,
+                    SETTINGS
+                        .pumps
+                        .contacts
+                        .map(|contact| contact == Contact::NormallyClosed),
+                );
+            }
+            if changed {
+                pumps_republish.notify_one();
+                reservoir.change_signal().notify_one();
+                previous = Some(status);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    };
     let analog = if components.ph.is_initialized() || components.tds.is_initialized() {
         let front_end = analog_front_end(
             peripherals.i2c0,
@@ -629,6 +706,7 @@ async fn run() -> anyhow::Result<()> {
         optional(export_loop),
         optional(server),
         optional(heater_task),
+        flood_task,
         optional(pump_task),
         optional(reservoir_task),
         optional(wifi_loop),

@@ -186,6 +186,13 @@ export const en = {
     malformedTitle: "unexpected telemetry",
     errorTitle: "device returned an error",
     leakTitle: "leak detected",
+    floodBoth: "Flood alarm under the reservoir and under the sump.",
+    floodReservoir: "Flood alarm under the reservoir.",
+    floodSump: "Flood alarm under the sump.",
+    floodDry: "Both probes are dry. Check the leak before releasing the pump lockout.",
+    floodUnknown: "Pump lockout active. Waiting for readings from both probes.",
+    resetFlood: "Acknowledge alarm and release pumps",
+    resetFloodError: "Could not reset the flood alarm",
     leakBody: "water outside the tank — check the sump and the floor",
   },
 

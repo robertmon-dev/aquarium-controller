@@ -8,6 +8,7 @@ export interface DeviceConfig {
 
 export type ApiPath =
   | "/api/telemetry"
+  | "/api/flood/alarm"
   | "/api/health"
   | "/api/probe"
   | "/api/calibration"

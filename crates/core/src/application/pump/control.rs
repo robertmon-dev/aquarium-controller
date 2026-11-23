@@ -136,6 +136,10 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
         self.reset_runtime_at(id, Instant::now());
     }
 
+    fn reset_flood(&self) -> Result<(), crate::ports::inbound::FloodResetError> {
+        self.acknowledge_flood()
+    }
+
     fn start_top_off(&self, duration_s: u32) -> Result<(), StartError> {
         validate_top_off(duration_s).map_err(StartError::Invalid)?;
         self.start(OperationPlan::top_off(duration_s))
@@ -150,6 +154,9 @@ impl<S: PumpStore, C: Clock> PumpControl for PumpService<S, C> {
         let epoch = self.clock.epoch_seconds();
         {
             let mut state = self.lock();
+            if state.flood.latched {
+                return Err(StartError::Blocked(Blocker::Leak));
+            }
             let mut operation = match std::mem::replace(&mut state.activity, Activity::Idle) {
                 Activity::Suspended(operation) if operation.plan.kind == kind => operation,
                 other => {
@@ -250,6 +257,10 @@ impl<S: PumpStore, C: Clock> WaterChangeActivity for PumpService<S, C> {
 }
 
 impl<S: PumpStore, C: Clock> PumpStatusSource for PumpService<S, C> {
+    fn flood_status(&self) -> crate::domain::flood::FloodStatus {
+        self.lock().flood
+    }
+
     fn pump_telemetry(&self) -> PumpsTelemetry {
         let state = self.lock();
         let on =

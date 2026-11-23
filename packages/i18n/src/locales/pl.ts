@@ -188,6 +188,13 @@ export const pl: DeepString<typeof en> = {
     malformedTitle: "nieoczekiwana telemetria",
     errorTitle: "urządzenie zwróciło błąd",
     leakTitle: "wykryto wyciek",
+    floodBoth: "Alarm zalania pod beczką i pod sumpem.",
+    floodReservoir: "Alarm zalania pod beczką.",
+    floodSump: "Alarm zalania pod sumpem.",
+    floodDry: "Obie sondy są suche. Przed odblokowaniem pomp sprawdź przyczynę wycieku.",
+    floodUnknown: "Pompy zablokowane. Trwa oczekiwanie na odczyt obu sond.",
+    resetFlood: "Potwierdź alarm i odblokuj pompy",
+    resetFloodError: "Nie udało się skasować alarmu zalania",
     leakBody: "woda poza akwarium — sprawdź sump i podłogę",
   },
 

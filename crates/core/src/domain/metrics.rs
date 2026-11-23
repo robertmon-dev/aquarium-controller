@@ -162,6 +162,12 @@ pub struct TankTelemetryDto {
     #[serde(default)]
     #[cfg_attr(feature = "ts-export", ts(optional, as = "Option<ReservoirTelemetry>"))]
     pub reservoir: ReservoirTelemetry,
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "ts-export",
+        ts(optional, as = "Option<crate::domain::flood::FloodStatus>")
+    )]
+    pub flood: crate::domain::flood::FloodStatus,
     pub leak_detected: bool,
 }
 
@@ -211,6 +217,7 @@ impl TankTelemetryDto {
             heaters: HeatersStatus::UNAVAILABLE,
             pumps: PumpsTelemetry::UNAVAILABLE,
             reservoir: ReservoirTelemetry::UNAVAILABLE,
+            flood: Default::default(),
             leak_detected: false,
         }
     }

@@ -17,6 +17,7 @@ pub struct RecordOutcome {
 }
 
 pub struct Observation {
+    pub(super) flood_locked: bool,
     pub(super) phase: Option<Phase>,
     pub(super) return_forced_off: bool,
     pub(super) uv_forced_off: bool,
@@ -82,8 +83,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             }
         }
 
-        let mut changed = false;
-
+        let mut changed = self.abort_on_flood(&mut state);
         if let Activity::Resuming(checkpoint) = &state.activity {
             let checkpoint = checkpoint.clone();
 
@@ -176,6 +176,7 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
         }
 
         Observation {
+            flood_locked: state.flood.latched,
             phase: state.phase(),
             return_forced_off,
             uv_forced_off,

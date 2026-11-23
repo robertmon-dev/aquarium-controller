@@ -43,6 +43,7 @@ pub struct ComponentSettings {
     pub tds: ComponentMode,
     pub heaters: ComponentMode,
     pub pumps: ComponentMode,
+    pub flood: ComponentMode,
     pub reservoir: ComponentMode,
     pub health: ComponentMode,
 }
@@ -156,6 +157,7 @@ impl Settings {
                 tds: ComponentMode::Off,
                 heaters: ComponentMode::Off,
                 pumps: ComponentMode::Off,
+                flood: ComponentMode::Off,
                 reservoir: ComponentMode::Off,
                 health: ComponentMode::Running,
             },

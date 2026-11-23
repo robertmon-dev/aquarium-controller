@@ -122,6 +122,10 @@ where
             put(handlers::heaters::set_override::<H>)
                 .delete(handlers::heaters::clear_override::<H>),
         )
+        .route(
+            "/api/flood/alarm",
+            delete(handlers::pumps::reset_flood::<P>),
+        )
         .route("/api/pumps", get(handlers::pumps::status::<P>))
         .route(
             "/api/pumps/settings",

@@ -1,9 +1,10 @@
-import { ApiError, useTelemetry, type Transport } from "@aquarium/api-client";
+import { ApiError, useResetFlood, useTelemetry, type Transport } from "@aquarium/api-client";
 import { colors, screenStyles, spacing } from "@aquarium/theme";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { RefreshControl, ScrollView } from "react-native";
-import { Alert } from "@/components/atoms";
+import { Alert, Button } from "@/components/atoms";
+import { canResetFlood } from "@aquarium/view-model";
 import { ScreenMessage } from "@/components/molecules";
 import { TelemetryDashboard } from "@/components/organisms";
 import { DeviceGate } from "@/components/utility/DeviceGate";
@@ -27,6 +28,7 @@ const TelemetryContent = ({
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
   const { data, error, isPending } = useTelemetry(transport);
+  const resetFlood = useResetFlood(transport);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -50,6 +52,18 @@ const TelemetryContent = ({
       }
     >
       {error ? <TelemetryError error={error} /> : null}
+      {data && canResetFlood(data) ? (
+        <>
+          <Button onPress={() => resetFlood.mutate()} isLoading={resetFlood.isPending}>
+            {t("telemetry.resetFlood")}
+          </Button>
+          {resetFlood.error ? (
+            <Alert variant="danger" title={t("telemetry.resetFloodError")}>
+              {resetFlood.error.message}
+            </Alert>
+          ) : null}
+        </>
+      ) : null}
       {data ? <TelemetryDashboard snapshot={data} /> : null}
     </ScrollView>
   );
