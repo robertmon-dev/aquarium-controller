@@ -20,12 +20,14 @@ pub(super) const EPOCH: u64 = 1_800_000_000;
 
 #[derive(Default)]
 pub(super) struct TestClock {
+    synced: bool,
     epoch: AtomicU64,
 }
 
 impl TestClock {
     pub(super) fn synced() -> Arc<Self> {
         Arc::new(Self {
+            synced: true,
             epoch: AtomicU64::new(EPOCH),
         })
     }
@@ -37,7 +39,7 @@ impl TestClock {
 
 impl Clock for TestClock {
     fn epoch_seconds(&self) -> Option<u64> {
-        Some(self.epoch.load(Ordering::Relaxed))
+        self.synced.then(|| self.epoch.load(Ordering::Relaxed))
     }
 
     fn uptime_seconds(&self) -> u64 {

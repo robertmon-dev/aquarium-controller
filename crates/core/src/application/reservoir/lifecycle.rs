@@ -2,7 +2,7 @@ use tokio::time::Instant;
 
 use super::service::ReservoirService;
 use super::state::State;
-use super::storage::write;
+use super::storage::{next_cycle_id, write, SavedMarker};
 use crate::domain::pump::litres;
 use crate::domain::reservoir::{
     FaultRecord, Fill, FillEvent, FillFault, FillResult, FillTrigger, RunningMarker,
@@ -28,15 +28,18 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
         trigger: FillTrigger,
         epoch: Option<u64>,
     ) -> Result<(), &'static str> {
-        if state.invalidation_pending {
+        if state.invalidation_pending || state.last_pending {
             self.flush_pending(state);
-            if state.invalidation_pending {
+            if state.invalidation_pending || state.last_pending {
                 return Err("the previous fill is still being recorded");
             }
         }
-        let marker = RunningMarker {
-            trigger,
-            started_at: epoch,
+        let marker = SavedMarker {
+            cycle_id: next_cycle_id(&self.store)?,
+            marker: RunningMarker {
+                trigger,
+                started_at: epoch,
+            },
         };
         if let Err(reason) = write(&self.store, ReservoirRecord::Running, &marker) {
             tracing::error!(
@@ -45,6 +48,7 @@ impl<S: ReservoirStore, C: Clock> ReservoirService<S, C> {
             );
             return Err(reason);
         }
+        state.cycle_id = marker.cycle_id;
         state.fill = Some(Fill::start(trigger, epoch, state.settings.fill_plan()));
         state.just_started = true;
         state.mixed_at = None;
