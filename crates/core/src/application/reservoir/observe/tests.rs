@@ -41,6 +41,10 @@ fn a_targeted_fill_doses_tap_water_after_a_soft_reading() {
         rig.status().fill.and_then(|fill| fill.dosing),
         Some(Inlet::Tap)
     );
+    let telemetry =
+        crate::ports::outbound::ReservoirStatusSource::reservoir_telemetry(&*rig.service);
+    assert_eq!(telemetry.dosing_water, Some(Inlet::Tap));
+    assert!(telemetry.channels.unwrap().tap_valve.on);
     assert!(rig.relays.pin(TapValve));
     assert!(!rig.relays.pin(RoValve));
 }
