@@ -57,6 +57,7 @@ async fn pump_routes_require_the_token() {
             let addr = start_with_pumps(pumps()).await;
 
             for request in [
+                body("DELETE", "/api/flood/alarm", None, ""),
                 get(STATUS, None),
                 get(SETTINGS, None),
                 body("PATCH", SETTINGS, None, "{}"),
@@ -581,6 +582,26 @@ async fn top_off_and_water_change_answer_only_to_the_barrel_flags() {
             );
 
             assert_status(&raw(addr, &top_off).await, 202);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn flood_acknowledgement_requires_both_probes_dry() {
+    use aquarium_core::domain::flood::FloodProbes;
+    LocalSet::new()
+        .run_until(async {
+            let pumps = pumps();
+            let addr = start_with_pumps(Arc::clone(&pumps)).await;
+            for (reservoir, sump, code) in
+                [(true, true, 423), (false, true, 423), (false, false, 204)]
+            {
+                pumps.observe_flood(FloodProbes { reservoir, sump });
+                assert_status(
+                    &raw(addr, &body("DELETE", "/api/flood/alarm", Some(TOKEN), "")).await,
+                    code,
+                );
+            }
         })
         .await;
 }

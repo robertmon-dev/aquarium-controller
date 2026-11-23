@@ -165,8 +165,25 @@ impl<S: PumpStore, C: Clock> PumpService<S, C> {
             resumed.max(recorded)
         });
 
+        let flood_latched = store
+            .load_flood_alarm()
+            .and_then(|record| match record {
+                None => Ok(false),
+                Some(bytes) => {
+                    serde_json::from_slice::<bool>(&bytes).map_err(|_| "invalid saved flood alarm")
+                }
+            })
+            .unwrap_or_else(|reason| {
+                tracing::error!(reason, "flood alarm state unreadable, holding pumps off");
+                true
+            });
         Self {
             state: Mutex::new(State {
+                flood: crate::domain::flood::FloodStatus {
+                    probes: None,
+                    latched: flood_latched,
+                },
+                flood_pending: false,
                 schedule: Schedule::compile(&settings, None),
                 settings,
                 overrides,

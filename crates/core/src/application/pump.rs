@@ -4,6 +4,7 @@ mod control;
 mod controller;
 #[cfg(test)]
 mod fixtures;
+mod flood;
 mod hold;
 mod observe;
 mod operations;

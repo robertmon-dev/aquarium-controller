@@ -139,3 +139,14 @@ export function usePatchCalibration(
     },
   });
 }
+
+export function useResetFlood(
+  transport: Transport,
+): UseMutationResult<void, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => createClient(transport).resetFlood(),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: queryKeys.telemetry(transport.device) }),
+  });
+}

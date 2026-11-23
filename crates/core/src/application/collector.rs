@@ -194,6 +194,11 @@ where
         }
         dto.heaters = self.sources.heaters.heater_status();
         dto.pumps = self.sources.pumps.pump_telemetry();
+        dto.flood = self.sources.pumps.flood_status();
+        dto.leak_detected = dto.flood.probes.is_some_and(|probes| probes.wet());
+        if dto.flood.latched {
+            dto.system_mode = crate::domain::metrics::SystemMode::EmergencyLockout;
+        }
         dto.reservoir = self.sources.reservoir.reservoir_telemetry();
         dto.ato.pump_active =
             dto.pumps.operation_kind == Some(OperationKind::TopOff) && dto.pumps.makeup;

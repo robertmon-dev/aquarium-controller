@@ -8,7 +8,7 @@ use crate::domain::pump::{
     WaterChangePlan,
 };
 use crate::ports::inbound::{
-    CancelError, OverrideError, PumpControl, PumpSettingsError, StartError,
+    CancelError, FloodResetError, OverrideError, PumpControl, PumpSettingsError, StartError,
 };
 
 type Rejection = (StatusCode, &'static str);
@@ -35,6 +35,17 @@ pub async fn status<P: PumpControl>(
     tracing::info!("GET /api/pumps");
 
     Json(pumps.status())
+}
+
+pub async fn reset_flood<P: PumpControl>(
+    State(PumpState(pumps)): State<PumpState<P>>,
+) -> Result<Empty, Rejection> {
+    pumps.reset_flood().map_err(|error| match error {
+        FloodResetError::Wet => (StatusCode::LOCKED, "a flood probe is still wet"),
+        FloodResetError::Unavailable => (StatusCode::LOCKED, "both flood probes must report dry"),
+        FloodResetError::Storage(reason) => (StatusCode::SERVICE_UNAVAILABLE, reason),
+    })?;
+    Ok((StatusCode::NO_CONTENT, NoContent))
 }
 
 pub async fn settings<P: PumpControl>(
@@ -221,6 +232,7 @@ fn accepted(route: &'static str, result: Result<(), StartError>) -> Result<Empty
 
 const fn blocker_reason(blocker: Blocker) -> &'static str {
     match blocker {
+        Blocker::Leak => "the flood alarm is active",
         Blocker::SumpLow => "the sump is low",
         Blocker::ReservoirEmpty => "the makeup reservoir is empty",
         Blocker::TankOverflow => "the tank overflow sensor is wet",

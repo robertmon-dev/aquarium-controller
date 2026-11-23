@@ -33,6 +33,7 @@ export type OverridablePump = Extract<PumpId, "return" | "uv">;
 
 export interface DeviceClient {
   telemetry: () => Promise<TankTelemetryDto>;
+  resetFlood: () => Promise<void>;
   health: () => Promise<SystemHealthDto>;
   lightingOverride: () => Promise<LightingOverride | null>;
   setLightingOverride: (body: SetOverrideRequest) => Promise<LightingOverride>;
@@ -69,6 +70,9 @@ export interface DeviceClient {
 export const createClient = (transport: Transport): DeviceClient => {
   return {
     telemetry: () => request<TankTelemetryDto>(transport, "/api/telemetry"),
+
+    resetFlood: () =>
+      request<void>(transport, "/api/flood/alarm", { method: "DELETE" }),
 
     health: () => request<SystemHealthDto>(transport, "/api/health"),
 

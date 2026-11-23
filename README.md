@@ -147,7 +147,22 @@ supply ─┬─ RO valve (GPIO40) ─ booster (GPIO41) ─ RO membrane ─┐
                                                                  mixer (GPIO47), TDS (A0)
 ```
 
-`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 are reserved for the white and RGB LED MOSFETs. GPIO38 is reserved for a future leak sensor.
+`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 are reserved for the white and RGB LED MOSFETs.
+
+### Floor flood probes
+
+| Probe location | Isolated status contact | Alarm input |
+|---|---|---|
+| Under the makeup reservoir | Channel 1 | GPIO38 |
+| Under the sump | Channel 2 | GPIO48 |
+
+The detector is powered from its specified supply (24 V or 5 V). Its hardware interlock must interrupt the common +24 V feed to both normally closed solenoid valves whenever either zone trips, including while the ESP32 is powered down. Use a dedicated valve interlock contact, or a separate isolated pole per zone with the two valve poles in series. Size the switching contacts for the valves' DC inductive load.
+
+The ESP32 needs **two independent dry status contacts**, one per probe. Each connects its input to ESP ground while the detector is healthy and the probe is dry. The internal pull-up reads an open circuit as an alarm, including a broken status wire. Select the module's operating mode and contact terminals for this behaviour and test loss of detector power. The 5 V or 24 V supply and the valve circuit must stay isolated from both GPIO inputs. A single changeover contact shares its common terminal and cannot serve both circuits.
+
+In normal firmware set `components.flood` to `ComponentMode::Running` after commissioning. The supplied bench profile leaves it `Off`. Check the board revision before wiring: ESP32-S3-DevKitC-1 uses GPIO48 for the onboard RGB LED on v1.0 and GPIO38 on v1.1. Confirm both inputs reach valid high and low levels with the actual board. [Espressif board FAQ](https://docs.espressif.com/projects/esp-faq/en/latest/hardware-related/development-board.html)
+
+The firmware samples the contacts every 100 ms. Either alarm stops return, UV, makeup and drain, even with barrel or pump automation disabled. A running fill or water transfer is interrupted. The dashboards show which zone is active. The pump lockout survives reboot when written to NVS. Once both probes report dry, acknowledge the alarm on the dashboard or send an authenticated `DELETE /api/flood/alarm`. If barrel automation recorded its own leak fault, also clear it via `DELETE /api/reservoir/fault` after the global lockout clears. With the ESP32 unpowered, the existing NC return and UV contacts revert to their energised-load state. Only the valve cutoff is independent of the controller.
 
 ### XKC-Y25 water-level sensors
 
@@ -192,6 +207,8 @@ Notes:
 | XKC-Y25 — sump return chamber, operating level | `GPIO21` | input, internal pull-up, active-low |
 | XKC-Y25 — makeup reservoir, mid height (ready for a water change) | `GPIO10` | input, internal pull-up, active-low |
 | XKC-Y25 — makeup reservoir, top (full) | `GPIO39` | input, internal pull-up, active-low |
+| Floor probe — under the reservoir | `GPIO38` | dry contact to ESP ground, internal pull-up, open = alarm |
+| Floor probe — under the sump | `GPIO48` | dry contact to ESP ground, internal pull-up, open = alarm |
 | Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
 | Heater SSR — sump | `GPIO18` | push-pull output, low at boot, drives the SSR input directly |
 | Pump relay IN1 — return pump (NC) | `GPIO5` | push-pull output, driven low once the relay module is initialised, drives the relay module input directly |
@@ -348,6 +365,7 @@ All routes sit behind a bearer-token layer: `Authorization: Bearer <API_TOKEN>`.
 | `PUT` / `DELETE` | `/api/reservoir/{ro\|tap\|mixer}/override` | Set an override with `{"on":true,"duration_s":60}` or clear it (`204`). An OFF override without a duration lasts until cleared or rebooted |
 | `POST` | `/api/reservoir/{channel}/runtime/reset` | Zero the counter for `ro_valve`, `booster`, `tap_valve` or `mixer` (`204`) |
 | `POST` / `DELETE` | `/api/reservoir/fill` | Start a manual fill (`202`) or cancel it (`204`) |
+| `DELETE` | `/api/flood/alarm` | Acknowledge the pump lockout after both zones report dry (204, 423 while wet or unavailable, 503 on a persistence error) |
 | `DELETE` | `/api/reservoir/fault` | Clear the persistent lockout (`204`) |
 
 ```bash
@@ -413,7 +431,7 @@ Cron schedules are evaluated in local time (`Settings.timezone`), and need an SN
 
 > **Avoid pump windows between 02:00 and 02:59 local time.** With the default `CET-1CEST` zone that hour does not exist on the last Sunday of March, so a window there (for example `30 2 * * *` or `30 2 * * sun`) silently does not run that day, with no `last_skipped` record.
 
-A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (wet/faulty flags for `sump_mechanical`, `sump_biological`, `sump_pump`, `main_tank`, `sump_reserve`, `sump_return_level`, `reservoir_ready` and `reservoir_full`, plus `sensors_healthy`, exported to InfluxDB as `aquarium_water_level,sensor=<name>`) and `leak_detected`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
+A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (wet/faulty flags for `sump_mechanical`, `sump_biological`, `sump_pump`, `main_tank`, `sump_reserve`, `sump_return_level`, `reservoir_ready` and `reservoir_full`, plus `sensors_healthy`, exported to InfluxDB as `aquarium_water_level,sensor=<name>`) and `leak_detected` (at least one current floor alarm). The `flood` section adds `probes.reservoir`, `probes.sump` and the persistent `latched` lockout. Before sampling, `probes` is null. InfluxDB records these as `flood_reservoir`, `flood_sump` and `flood_latched` on `aquarium_health`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).

@@ -1592,3 +1592,50 @@ async fn telemetry_carries_the_reservoir_section() {
 
     assert_eq!(sink.last().reservoir, reservoir);
 }
+
+#[test]
+fn a_flood_republish_updates_each_zone_and_keeps_the_lock_visible_after_drying() {
+    use crate::adapters::outbound::memory::VolatilePumpStore;
+    use crate::application::PumpService;
+    use crate::domain::flood::FloodProbes;
+    use crate::domain::metrics::SystemMode;
+    use crate::domain::pump::PumpSettings;
+    use crate::ports::inbound::PumpControl;
+    use std::sync::Arc;
+
+    let sink = RecordingSink::default();
+    let pumps = Arc::new(PumpService::new(
+        PumpSettings::DEFAULT,
+        VolatilePumpStore::default(),
+        FakeClock::synced_at_noon_in_june(),
+        None,
+    ));
+    let collector = TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            overrides: FakeOverrides::none(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: Arc::clone(&pumps),
+            reservoir: NoReservoir,
+        },
+        &sink,
+        config(),
+    );
+    for (reservoir, sump) in [(true, false), (true, true), (false, true), (false, false)] {
+        let probes = FloodProbes { reservoir, sump };
+        pumps.observe_flood(probes);
+        collector.republish();
+        let data = sink.last();
+        assert_eq!(data.leak_detected, reservoir || sump);
+        assert_eq!(data.flood.probes, Some(probes));
+        assert_eq!(data.system_mode, SystemMode::EmergencyLockout);
+    }
+    pumps.reset_flood().unwrap();
+    collector.republish();
+    assert_eq!(sink.last().system_mode, SystemMode::Normal);
+}

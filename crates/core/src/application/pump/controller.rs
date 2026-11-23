@@ -96,6 +96,7 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
         let return_held_after_drain = self.service.hold_return_after_drain(levels.is_none(), now);
 
         let mut decisions = decide(DecisionInput {
+            flood_locked: observed.flood_locked,
             levels,
             return_locked_out: locked_out,
             return_forced_off: observed.return_forced_off,
@@ -176,6 +177,18 @@ impl<O: PumpOutputs, S: PumpStore, C: Clock> PumpController<O, S, C> {
         }
 
         started || observed.changed || outputs_changed || starvation_changed || suspect_changed
+    }
+
+    pub fn tick_flood_only(&mut self, latched: bool, released_on: [bool; 4]) -> bool {
+        let mut changed = false;
+        for id in PumpId::ALL {
+            let (on, fault) = self.drive(id, !latched && released_on[id.index()]);
+            changed |= self
+                .service
+                .record(id, on, fault, latched.then_some(Blocker::Leak))
+                .changed;
+        }
+        changed
     }
 
     fn drive(&mut self, id: PumpId, on: bool) -> (bool, Option<ChannelFault>) {

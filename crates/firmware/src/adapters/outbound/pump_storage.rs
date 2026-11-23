@@ -9,28 +9,44 @@ mod hw {
 
     pub enum PumpStorage {
         Nvs(NvsPumpStore),
-        Unavailable,
+        Unavailable { flood_enabled: bool },
     }
 
     impl PumpStore for PumpStorage {
+        fn load_flood_alarm(&self) -> Result<Option<Vec<u8>>, &'static str> {
+            match self {
+                Self::Nvs(store) => store.load_flood_alarm(),
+                Self::Unavailable {
+                    flood_enabled: true,
+                } => Err("NVS unavailable"),
+                Self::Unavailable {
+                    flood_enabled: false,
+                } => Ok(None),
+            }
+        }
+
         fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
             match self {
                 Self::Nvs(store) => store.load(record),
-                Self::Unavailable => None,
+                Self::Unavailable { .. } => None,
             }
         }
 
         fn store(&self, record: PumpRecord, bytes: &[u8]) -> Result<(), &'static str> {
             match self {
                 Self::Nvs(store) => store.store(record, bytes),
-                Self::Unavailable => Err("NVS is unavailable, the pump record cannot be saved"),
+                Self::Unavailable { .. } => {
+                    Err("NVS is unavailable, the pump record cannot be saved")
+                }
             }
         }
 
         fn erase(&self, record: PumpRecord) -> Result<(), &'static str> {
             match self {
                 Self::Nvs(store) => store.erase(record),
-                Self::Unavailable => Err("NVS is unavailable, the pump record cannot be erased"),
+                Self::Unavailable { .. } => {
+                    Err("NVS is unavailable, the pump record cannot be erased")
+                }
             }
         }
     }

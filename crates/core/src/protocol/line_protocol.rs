@@ -134,6 +134,11 @@ fn health(snapshot: &TankTelemetryDto) -> Fields {
     fields.integer("free_heap_kb", snapshot.system_health.free_heap_kb);
     fields.string("mode", mode_name(&snapshot.system_mode));
     fields.boolean("leak", snapshot.leak_detected);
+    fields.boolean("flood_latched", snapshot.flood.latched);
+    if let Some(probes) = snapshot.flood.probes {
+        fields.boolean("flood_reservoir", probes.reservoir);
+        fields.boolean("flood_sump", probes.sump);
+    }
     fields.boolean("water_healthy", snapshot.water_level.sensors_healthy);
     fields
 }

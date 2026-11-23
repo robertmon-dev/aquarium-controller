@@ -58,6 +58,12 @@ const valid = {
 };
 
 describe("assertTelemetry", () => {
+  it("preserves both flood inputs and rejects partial readings", () => {
+    const flood = { latched: true, probes: { reservoir: true, sump: false } };
+    expect(assertTelemetry({ ...valid, flood }).flood).toEqual(flood);
+    expect(() => assertTelemetry({ ...valid, flood: { ...flood, probes: { sump: true } } })).toThrow();
+  });
+
   const reservoir = {
     ro_valve: true,
     booster: true,

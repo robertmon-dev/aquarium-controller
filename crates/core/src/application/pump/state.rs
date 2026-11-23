@@ -78,6 +78,8 @@ pub(super) struct PendingFinish {
 }
 
 pub(super) struct State {
+    pub(super) flood: crate::domain::flood::FloodStatus,
+    pub(super) flood_pending: bool,
     pub(super) settings: PumpSettings,
     pub(super) schedule: Schedule,
     pub(super) overrides: [Option<Expiry>; 2],
@@ -219,6 +221,9 @@ impl State {
         now: Instant,
         epoch: Option<u64>,
     ) -> Result<(), StartError> {
+        if self.flood.latched {
+            return Err(StartError::Blocked(Blocker::Leak));
+        }
         match (&self.activity, plan.kind) {
             (Activity::Idle, _) => {}
             (Activity::Running(current), OperationKind::WaterChange)

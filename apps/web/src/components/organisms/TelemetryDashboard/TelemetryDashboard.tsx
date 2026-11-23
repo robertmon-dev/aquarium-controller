@@ -4,6 +4,7 @@ import {
   atoCard,
   co2Card,
   filtrationCard,
+  floodMessage,
   lightingCard,
   pumpsCard,
   systemCard,
@@ -22,6 +23,7 @@ export function TelemetryDashboard({
 }) {
   const t = useT();
   const levels = waterLevelCard(snapshot.water_level, t);
+  const alarm = floodMessage(snapshot, t);
   const cards = [
     filtrationCard(snapshot, t),
     co2Card(snapshot, t),
@@ -34,9 +36,9 @@ export function TelemetryDashboard({
 
   return (
     <>
-      {snapshot.leak_detected ? (
+      {alarm ? (
         <Alert variant="danger" title={t("telemetry.leakTitle")}>
-          {t("telemetry.leakBody")}
+          {alarm}
         </Alert>
       ) : null}
 

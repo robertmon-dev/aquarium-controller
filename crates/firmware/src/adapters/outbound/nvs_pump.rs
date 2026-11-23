@@ -26,6 +26,11 @@ mod hw {
     }
 
     impl PumpStore for NvsPumpStore {
+        fn load_flood_alarm(&self) -> Result<Option<Vec<u8>>, &'static str> {
+            read_blob(&self.nvs, PumpRecord::Flood.key(), MAX_BLOB_BYTES)
+                .map_err(|_| "the saved flood alarm could not be read")
+        }
+
         fn load(&self, record: PumpRecord) -> Option<Vec<u8>> {
             read_blob(&self.nvs, record.key(), MAX_BLOB_BYTES).unwrap_or_else(|error| {
                 tracing::warn!(%error, key = record.key(), "pump record unreadable");
