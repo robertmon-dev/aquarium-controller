@@ -23,7 +23,7 @@ use aquarium_core::application::{
 use aquarium_core::domain::flood::FloodProbes;
 use aquarium_core::domain::pump::{OperationEvent, PumpId};
 use aquarium_core::domain::reservoir::FillEvent;
-use aquarium_core::ports::outbound::PumpOutputs;
+use aquarium_core::ports::outbound::{PumpOutputs, PumpStatusSource};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use tokio::sync::{mpsc::UnboundedSender, Notify};
 use tokio::time::sleep;
@@ -77,8 +77,8 @@ pub(super) fn pump_outputs(
 }
 
 pub(super) type Heaters = Control<HeaterService<NvsHeaterSettings>>;
-pub(super) type Pumps = Control<PumpService<PumpStorage, SystemClock>>;
-pub(super) type Reservoir = Control<ReservoirService<ReservoirStorage, SystemClock>>;
+pub(super) type Pumps = Control<PumpService<PumpStorage, Arc<SystemClock>>>;
+pub(super) type Reservoir = Control<ReservoirService<ReservoirStorage, Arc<SystemClock>>>;
 
 impl Heaters {
     pub fn load(nvs_partition: Option<EspDefaultNvsPartition>) -> anyhow::Result<Self> {
