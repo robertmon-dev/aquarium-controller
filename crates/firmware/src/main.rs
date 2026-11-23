@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
         .context("Failed to build tokio runtime")?;
 
     let local = LocalSet::new();
-    runtime.block_on(local.run_until(run()))
+    runtime.block_on(local.run_until(Box::pin(run())))
 }
 
 fn init_logging() {
