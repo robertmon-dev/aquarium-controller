@@ -132,3 +132,29 @@ fn flood_protection_drives_idle_relays_and_retries_a_failed_cutoff() {
     controller.tick_flood_only(false, released_on);
     assert_eq!(outputs.state(), released_on);
 }
+
+#[test]
+fn saved_flood_opens_and_cuts_off_idle_pump_relays_even_with_both_components_off() {
+    use crate::application::pump::startup_pump_outputs;
+    use crate::ports::outbound::PumpOutputs;
+    let (service, store) = service_and_store();
+    assert!(startup_pump_outputs::<RecordingOutputs, ()>(
+        false,
+        service.flood_status().latched,
+        || panic!("idle relays opened without an alarm")
+    )
+    .unwrap()
+    .is_none());
+    service.observe_flood(BARREL);
+    let reboot = service_on(&store, TestClock::synced(EPOCH));
+    let mut released = RecordingOutputs::default();
+    released.set(PumpId::Return, true).unwrap();
+    released.set(PumpId::Uv, true).unwrap();
+    let outputs = startup_pump_outputs(false, reboot.flood_status().latched, || {
+        Ok::<_, ()>(released)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(outputs.state(), [false; 4]);
+    assert_eq!(reboot.reset_flood(), Err(FloodResetError::Unavailable));
+}
