@@ -97,9 +97,10 @@ where
         tokio::task::spawn_local(async move {
             let mut buffer = vec![0_u8; HTTP_BUFFER_BYTES];
 
-            let result = picoserve::Server::new_tokio(router, server_config, &mut buffer)
-                .serve(stream)
-                .await;
+            let result = Box::pin(
+                picoserve::Server::new_tokio(router, server_config, &mut buffer).serve(stream),
+            )
+            .await;
 
             let total_ms = accepted_at.elapsed().as_millis();
 
