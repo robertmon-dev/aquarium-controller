@@ -209,3 +209,128 @@ fn the_marker_outlives_a_failed_result_write() {
         FillResult::Aborted
     );
 }
+
+#[test]
+fn an_unsynced_overtime_survives_a_failed_fault_write_and_reboot() {
+    let settings = ReservoirSettings {
+        empty_fill_s: 600,
+        ..RO_ONLY
+    };
+    let mut rig = Rig::build(Arc::default(), Arc::default(), settings);
+    rig.start_fill().unwrap();
+    rig.store.refuse_fault.store(true, Ordering::Relaxed);
+    rig.run(725);
+    let last = rig.status().last.unwrap();
+    assert_eq!(last.result, FillResult::Overtime);
+    assert_eq!(last.started_at, None);
+    assert_eq!(last.finished_at, None);
+    rig.store.refuse_fault.store(false, Ordering::Relaxed);
+    let reboot = rig.reboot();
+    assert_eq!(reboot.status().last, Some(last));
+    assert_eq!(reboot.status().fault.unwrap().fault, FillFault::Overtime);
+    assert_eq!(
+        reboot.start_fill(),
+        Err(FillStartError::Blocked(ReservoirBlocker::Fault))
+    );
+    assert_eq!(reboot.reboot().status().fault, reboot.status().fault);
+}
+
+#[test]
+fn cancelling_and_restarting_in_one_second_keeps_the_second_fills_restart_hold() {
+    let rig = Rig::new(RO_ONLY);
+    rig.start_fill().unwrap();
+    rig.cancel_fill().unwrap();
+    rig.start_fill().unwrap();
+    let reboot = rig.reboot();
+    assert!(reboot.status().held_after_reboot);
+    assert!(reboot.reboot().status().held_after_reboot);
+    assert_eq!(
+        reboot.status().last.unwrap().result,
+        FillResult::InterruptedByReboot
+    );
+}
+
+#[test]
+fn automatic_cancellation_and_both_release_paths_survive_reboot() {
+    let settings = ReservoirSettings {
+        auto_fill: true,
+        refill_debounce_s: 60,
+        ..RO_ONLY
+    };
+    let mut rig = Rig::new(settings);
+    rig.run(61);
+    rig.cancel_fill().unwrap();
+    let mut reboot = rig.reboot();
+    reboot.run(65);
+    assert!(reboot.status().auto_latched);
+    assert_eq!(reboot.relays.pins(), [false; 4]);
+    assert!(reboot.status().fill.is_none());
+
+    reboot.levels = barrel(&FULL);
+    reboot.tick();
+    let mut dry = reboot.reboot();
+    assert!(!dry.status().auto_latched);
+    dry.run(65);
+    assert!(dry.status().fill.is_some());
+    dry.cancel_fill().unwrap();
+    let manual = dry.reboot();
+    manual.start_fill().unwrap();
+    manual.cancel_fill().unwrap();
+    assert!(!manual.reboot().status().auto_latched);
+}
+
+#[test]
+fn a_legacy_unsynced_fault_is_preserved_even_when_the_cycle_identity_is_ambiguous() {
+    use crate::domain::reservoir::{FillRecord, RunningMarker};
+    let rig = Rig::new(RO_ONLY);
+    let marker = RunningMarker {
+        trigger: FillTrigger::Manual,
+        started_at: None,
+    };
+    let mut last = FillRecord::interrupted(marker);
+    last.result = FillResult::Overtime;
+    rig.store
+        .store(ReservoirRecord::Last, &serde_json::to_vec(&last).unwrap())
+        .unwrap();
+    rig.store
+        .store(
+            ReservoirRecord::Running,
+            &serde_json::to_vec(&marker).unwrap(),
+        )
+        .unwrap();
+    let reboot = rig.reboot();
+    assert_eq!(reboot.status().last, Some(last));
+    assert!(reboot.status().held_after_reboot);
+    assert_eq!(reboot.status().fault.unwrap().fault, FillFault::Overtime);
+    reboot.service.clear_fault().unwrap();
+    let cleared = reboot.reboot();
+    assert!(cleared.status().fault.is_none());
+    assert!(cleared.status().held_after_reboot);
+    assert_eq!(cleared.status().last, Some(last));
+    cleared.start_fill().unwrap();
+}
+
+#[test]
+fn clearing_an_inherited_auto_latch_is_retried_until_durable() {
+    use crate::domain::reservoir::{FillRecord, RunningMarker};
+    let rig = Rig::new(RO_ONLY);
+    let mut last = FillRecord::interrupted(RunningMarker {
+        trigger: FillTrigger::Auto,
+        started_at: Some(EPOCH),
+    });
+    last.result = FillResult::Timeout;
+    rig.store
+        .store(ReservoirRecord::Last, &serde_json::to_vec(&last).unwrap())
+        .unwrap();
+    let mut reboot = rig.reboot();
+    assert!(reboot.status().auto_latched);
+    reboot.store.refuse_last.store(true, Ordering::Relaxed);
+    reboot.levels = barrel(&FULL);
+    reboot.tick();
+    assert!(reboot.reboot().status().auto_latched);
+    reboot.store.refuse_last.store(false, Ordering::Relaxed);
+    reboot.tick();
+    let cleared = reboot.reboot();
+    assert!(!cleared.status().auto_latched);
+    assert_eq!(cleared.status().last, Some(last));
+}
