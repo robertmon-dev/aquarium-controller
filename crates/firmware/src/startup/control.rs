@@ -21,15 +21,15 @@ use aquarium_core::application::{
     PumpService, ReservoirController, ReservoirService,
 };
 use aquarium_core::domain::flood::FloodProbes;
-use aquarium_core::domain::pump::{OperationEvent, PumpId};
+use aquarium_core::domain::pump::OperationEvent;
 use aquarium_core::domain::reservoir::FillEvent;
-use aquarium_core::ports::outbound::{PumpOutputs, PumpStatusSource};
+use aquarium_core::ports::outbound::PumpStatusSource;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use tokio::sync::{mpsc::UnboundedSender, Notify};
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::board::{HeaterPins, PumpPins};
+use crate::board::HeaterPins;
 use crate::SETTINGS;
 
 pub(super) struct Control<S> {
@@ -48,32 +48,6 @@ impl<S> Control<S> {
             heartbeat: Arc::new(AtomicU32::new(0)),
         }
     }
-}
-
-pub(super) fn pump_outputs(
-    pins: PumpPins,
-    flood_inputs: Option<&FloodInputs<'_>>,
-) -> anyhow::Result<(Option<RelayOutputs<'static>>, Option<FloodProbes>)> {
-    let components = &SETTINGS.components;
-    let mut relays = (components.pumps.is_initialized() || components.flood.is_running())
-        .then(|| pins.open())
-        .transpose()?;
-    let initial_flood = flood_inputs
-        .filter(|_| components.flood.is_running())
-        .map(FloodInputs::read);
-    if initial_flood.is_some() {
-        if let Some(outputs) = &mut relays {
-            for id in PumpId::ALL {
-                if let Err(reason) = outputs.set(id, false) {
-                    error!(
-                        pump = id.name(),
-                        reason, "Failed to hold pump output off during startup"
-                    );
-                }
-            }
-        }
-    }
-    Ok((relays, initial_flood))
 }
 
 pub(super) type Heaters = Control<HeaterService<NvsHeaterSettings>>;
@@ -129,31 +103,37 @@ impl Heaters {
 }
 
 impl Pumps {
+    pub fn open_store(nvs_partition: Option<EspDefaultNvsPartition>) -> PumpStorage {
+        let nvs = nvs_partition.and_then(|partition| {
+            NvsPumpStore::new(partition)
+                .map_err(|error| {
+                    error!(%error, "Pump NVS namespace unavailable, pump automation disabled");
+                })
+                .ok()
+        });
+        nvs.map_or(
+            PumpStorage::Unavailable {
+                flood_enabled: SETTINGS.components.flood.is_running(),
+            },
+            PumpStorage::Nvs,
+        )
+    }
+
     pub fn load(
-        nvs_partition: Option<EspDefaultNvsPartition>,
+        store: PumpStorage,
+        flood_latched: bool,
         clock: Arc<SystemClock>,
         pump_events: Option<UnboundedSender<OperationEvent>>,
         initial_flood: Option<FloodProbes>,
     ) -> Self {
-        let components = &SETTINGS.components;
-        let pump_nvs = nvs_partition.and_then(|partition| match NvsPumpStore::new(partition) {
-            Ok(store) => Some(store),
-            Err(error) => {
-                error!(%error, "Pump NVS namespace unavailable, pump automation disabled");
-                None
-            }
-        });
-        let pumps_automated = components.pumps.is_running() && pump_nvs.is_some();
-        let pumps = PumpService::new(
+        let pumps_automated =
+            SETTINGS.components.pumps.is_running() && matches!(store, PumpStorage::Nvs(_));
+        let pumps = PumpService::with_flood_latch(
             SETTINGS.pumps.defaults.clone(),
-            pump_nvs.map_or(
-                PumpStorage::Unavailable {
-                    flood_enabled: components.flood.is_running(),
-                },
-                PumpStorage::Nvs,
-            ),
+            store,
             clock,
             pump_events,
+            flood_latched,
         );
         if let Some(probes) = initial_flood {
             pumps.observe_flood(probes);

@@ -8,6 +8,7 @@ use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
     InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
 };
+use aquarium_core::application::pump::{startup_pump_outputs, stored_flood_latch};
 use aquarium_core::application::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use std::sync::atomic::AtomicU32;
@@ -31,23 +32,53 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         .then(|| FloodInputs::new(board.flood.0, board.flood.1))
         .transpose()
         .context("Failed to initialize flood alarm inputs")?;
-    let (relays, initial_flood) = control::pump_outputs(board.pumps, flood_inputs.as_ref())?;
+    let initial_flood = flood_inputs
+        .as_ref()
+        .filter(|_| components.flood.is_running())
+        .map(FloodInputs::read);
+    let (early_relays, pump_pins) = if initial_flood.is_some() {
+        (
+            startup_pump_outputs(false, true, || board.pumps.open())?,
+            None,
+        )
+    } else {
+        (None, Some(board.pumps))
+    };
+    let (nvs_partition, nvs_alarm) = match EspDefaultNvsPartition::take_with(false) {
+        Ok(partition) => (Some(partition), None),
+        Err(error) => (None, Some(nvs_unavailable_alarm(error))),
+    };
+    let pump_store = Pumps::open_store(nvs_partition.clone());
+    let flood_latched = stored_flood_latch(&pump_store);
+    let relays = match pump_pins {
+        Some(pins) => {
+            startup_pump_outputs(components.pumps.is_initialized(), flood_latched, || {
+                pins.open()
+            })?
+        }
+        None => early_relays,
+    };
+
     let barrel_relays = components
         .reservoir
         .is_initialized()
         .then(|| board.reservoir.open())
         .transpose()?;
     let temperature = sensors::temperature(board.temperature)?;
-    let (nvs_partition, nvs_alarm) = match EspDefaultNvsPartition::take_with(false) {
-        Ok(partition) => (Some(partition), None),
-        Err(error) => (None, Some(nvs_unavailable_alarm(error))),
-    };
     let wifi_loop = network::wifi(board.modem, nvs_partition.clone())?;
     let clock = Arc::new(
         SystemClock::new(SETTINGS.timezone, components.wifi.is_initialized())
             .context("Failed to start SNTP")?,
     );
 
+    let (pump_events, pump_events_rx) = network::export_events();
+    let pumps = Pumps::load(
+        pump_store,
+        flood_latched,
+        Arc::clone(&clock),
+        pump_events,
+        initial_flood,
+    );
     let store = Arc::new(InMemoryTelemetryStore::new());
     let lighting = Arc::new(InMemoryLightingStore::new());
     let levels = Arc::new(InMemoryWaterLevelStore::new());
@@ -56,13 +87,6 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let heaters = Heaters::load(nvs_partition.clone())?;
     let (heater_task, _idle_ssr) = heaters.task(board.heaters, &store)?;
 
-    let (pump_events, pump_events_rx) = network::export_events();
-    let pumps = Pumps::load(
-        nvs_partition.clone(),
-        Arc::clone(&clock),
-        pump_events,
-        initial_flood,
-    );
     let (fill_events, fill_events_rx) = network::export_events();
     let reservoir = Reservoir::load(nvs_partition, Arc::clone(&clock), fill_events);
 
