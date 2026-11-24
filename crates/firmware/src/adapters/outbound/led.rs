@@ -27,7 +27,6 @@ mod hw {
     use esp_idf_hal::ledc::{
         config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution,
     };
-    use esp_idf_hal::peripheral::Peripheral;
     use esp_idf_hal::sys::EspError;
     use esp_idf_hal::units::FromValueType;
 
@@ -37,44 +36,34 @@ mod hw {
         channels: [LedcDriver<'d>; 2],
     }
 
-    fn off_channel<'d, C, T>(
-        channel: impl Peripheral<P = C> + 'd,
-        timer: &'d LedcTimerDriver<'d, T>,
-        pin: impl Peripheral<P = impl OutputPin> + 'd,
-    ) -> Result<LedcDriver<'d>, EspError>
-    where
-        C: LedcChannel,
-        T: LedcTimer,
-    {
+    fn off_channel<'d>(
+        channel: impl LedcChannel + 'd,
+        timer: &'d LedcTimerDriver<'d>,
+        pin: impl OutputPin + 'd,
+    ) -> Result<LedcDriver<'d>, EspError> {
         let mut driver = LedcDriver::new(channel, timer, pin)?;
         driver.set_duty(0)?;
         Ok(driver)
     }
 
     impl<'d> LedMosfetOutputs<'d> {
-        /// Tworzy wspólny timer PWM (2.5 kHz, 12-bit) do przekazania do `new`.
-        pub fn create_timer<T: LedcTimer>(
-            timer: impl Peripheral<P = T> + 'd,
+        pub fn create_timer(
+            timer: impl LedcTimer + 'd,
             freq_hz: u32,
-        ) -> Result<LedcTimerDriver<'d, T>, EspError> {
+        ) -> Result<LedcTimerDriver<'d>, EspError> {
             let config = TimerConfig::new()
                 .frequency(freq_hz.Hz())
                 .resolution(Resolution::Bits12);
             LedcTimerDriver::new(timer, &config)
         }
 
-        pub fn new<C0, C1, T>(
-            timer: &'d LedcTimerDriver<'d, T>,
-            white_ch: impl Peripheral<P = C0> + 'd,
-            white_pin: impl Peripheral<P = impl OutputPin> + 'd,
-            rgb_ch: impl Peripheral<P = C1> + 'd,
-            rgb_pin: impl Peripheral<P = impl OutputPin> + 'd,
-        ) -> Result<Self, EspError>
-        where
-            C0: LedcChannel,
-            C1: LedcChannel,
-            T: LedcTimer,
-        {
+        pub fn new(
+            timer: &'d LedcTimerDriver<'d>,
+            white_ch: impl LedcChannel + 'd,
+            white_pin: impl OutputPin + 'd,
+            rgb_ch: impl LedcChannel + 'd,
+            rgb_pin: impl OutputPin + 'd,
+        ) -> Result<Self, EspError> {
             Ok(Self {
                 channels: [
                     off_channel(white_ch, timer, white_pin)?,
