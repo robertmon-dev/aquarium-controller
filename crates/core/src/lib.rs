@@ -1,5 +1,3 @@
-#![recursion_limit = "256"]
-
 pub mod adapters;
 pub mod application;
 pub mod domain;
