@@ -14,7 +14,7 @@ impl Contact {
 }
 
 #[cfg(target_os = "espidf")]
-pub use hw::{RelayOutputs, ReservoirRelayOutputs};
+pub use hw::{RelayOutput, RelayOutputs, ReservoirRelayOutputs, SolenoidRelayOutput};
 
 #[cfg(target_os = "espidf")]
 mod hw {
@@ -27,16 +27,54 @@ mod hw {
 
     use super::Contact;
 
-    pub struct RelayOutputs<'d> {
-        pins: [PinDriver<'d, Output>; 4],
-        contacts: [Contact; 4],
-    }
-
     fn released<'d>(pin: impl OutputPin + 'd) -> Result<PinDriver<'d, Output>, EspError> {
         let mut driver = PinDriver::output(pin)?;
         driver.set_low()?;
         Ok(driver)
     }
+
+    struct RelayBank<'d, const N: usize> {
+        pins: [PinDriver<'d, Output>; N],
+        contacts: [Contact; N],
+    }
+
+    impl<'d, const N: usize> RelayBank<'d, N> {
+        fn new(pins: [PinDriver<'d, Output>; N], contacts: [Contact; N]) -> Self {
+            Self { pins, contacts }
+        }
+
+        fn set_coil(&mut self, index: usize, energized: bool) -> Result<(), &'static str> {
+            let result = if energized {
+                self.pins[index].set_high()
+            } else {
+                self.pins[index].set_low()
+            };
+
+            result.map_err(|_| "the relay input could not be driven")
+        }
+
+        fn set(&mut self, index: usize, on: bool) -> Result<(), &'static str> {
+            self.set_coil(index, self.contacts[index].coil_for(on))
+        }
+    }
+
+    pub struct RelayOutput<'d>(RelayBank<'d, 1>);
+
+    impl<'d> RelayOutput<'d> {
+        pub fn new(pin: impl OutputPin + 'd, contact: Contact) -> Result<Self, EspError> {
+            Ok(Self(RelayBank::new([released(pin)?], [contact])))
+        }
+
+        pub fn set_coil(&mut self, energized: bool) -> Result<(), &'static str> {
+            self.0.set_coil(0, energized)
+        }
+
+        pub fn set(&mut self, on: bool) -> Result<(), &'static str> {
+            self.0.set(0, on)
+        }
+    }
+
+    pub struct RelayOutputs<'d>(RelayBank<'d, 4>);
 
     impl<'d> RelayOutputs<'d> {
         pub fn new(
@@ -46,34 +84,29 @@ mod hw {
             drain: impl OutputPin + 'd,
             contacts: [Contact; 4],
         ) -> Result<Self, EspError> {
-            Ok(Self {
-                pins: [
+            Ok(Self(RelayBank::new(
+                [
                     released(return_pump)?,
                     released(uv)?,
                     released(makeup)?,
                     released(drain)?,
                 ],
                 contacts,
-            })
+            )))
         }
 
         pub fn set_coil(&mut self, id: PumpId, energized: bool) -> Result<(), &'static str> {
-            self.drive(id.index(), energized)
-        }
-
-        fn drive(&mut self, index: usize, energized: bool) -> Result<(), &'static str> {
-            let pin = &mut self.pins[index];
-            let result = if energized {
-                pin.set_high()
-            } else {
-                pin.set_low()
-            };
-
-            result.map_err(|_| "the relay input could not be driven")
+            self.0.set_coil(id.index(), energized)
         }
     }
 
-    pub struct ReservoirRelayOutputs<'d>(RelayOutputs<'d>);
+    impl PumpOutputs for RelayOutputs<'_> {
+        fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
+            self.0.set(id.index(), on)
+        }
+    }
+
+    pub struct ReservoirRelayOutputs<'d>(RelayBank<'d, 4>);
 
     impl<'d> ReservoirRelayOutputs<'d> {
         pub fn new(
@@ -83,7 +116,15 @@ mod hw {
             mixer: impl OutputPin + 'd,
             contacts: [Contact; 4],
         ) -> Result<Self, EspError> {
-            RelayOutputs::new(ro_valve, booster, tap_valve, mixer, contacts).map(Self)
+            Ok(Self(RelayBank::new(
+                [
+                    released(ro_valve)?,
+                    released(booster)?,
+                    released(tap_valve)?,
+                    released(mixer)?,
+                ],
+                contacts,
+            )))
         }
 
         pub fn set_coil(
@@ -91,20 +132,32 @@ mod hw {
             channel: ReservoirChannel,
             energized: bool,
         ) -> Result<(), &'static str> {
-            self.0.drive(channel.index(), energized)
+            self.0.set_coil(channel.index(), energized)
         }
     }
 
     impl ReservoirOutputs for ReservoirRelayOutputs<'_> {
         fn set(&mut self, channel: ReservoirChannel, on: bool) -> Result<(), &'static str> {
-            self.set_coil(channel, self.0.contacts[channel.index()].coil_for(on))
+            self.0.set(channel.index(), on)
         }
     }
 
-    impl PumpOutputs for RelayOutputs<'_> {
-        fn set(&mut self, id: PumpId, on: bool) -> Result<(), &'static str> {
-            let coil = self.contacts[id.index()].coil_for(on);
-            self.set_coil(id, coil)
+    pub struct SolenoidRelayOutput<'d>(RelayOutput<'d>);
+
+    impl<'d> SolenoidRelayOutput<'d> {
+        pub fn new(
+            solenoid_valve: impl OutputPin + 'd,
+            contact: Contact,
+        ) -> Result<Self, EspError> {
+            RelayOutput::new(solenoid_valve, contact).map(Self)
+        }
+
+        pub fn set_coil(&mut self, energized: bool) -> Result<(), &'static str> {
+            self.0.set_coil(energized)
+        }
+
+        pub fn set(&mut self, on: bool) -> Result<(), &'static str> {
+            self.0.set(on)
         }
     }
 }
