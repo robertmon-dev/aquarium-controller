@@ -23,8 +23,12 @@ use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
 use crate::board::Board;
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
+use aquarium_controller::adapters::outbound::led::LedMosfetOutputs;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
+use aquarium_core::application::lighting::lighting_loop;
+use std::time::Duration;
+use tokio::sync::Notify;
 
 pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let components = &SETTINGS.components;
@@ -82,7 +86,48 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         initial_flood,
     );
     let store = Arc::new(InMemoryTelemetryStore::new());
+
     let lighting = Arc::new(InMemoryLightingStore::new());
+    let lighting_republish = Arc::new(Notify::new());
+    let led_timer = components
+        .lighting
+        .is_initialized()
+        .then(|| LedMosfetOutputs::create_timer(board.lighting.timer, 5_000))
+        .transpose()
+        .context("Failed to initialize LED PWM timer")?;
+    let led_outputs = led_timer
+        .as_ref()
+        .map(|timer| {
+            LedMosfetOutputs::new(
+                timer,
+                board.lighting.white_ch,
+                board.lighting.white_pin,
+                board.lighting.rgb_ch,
+                board.lighting.rgb_pin,
+            )
+        })
+        .transpose()
+        .context("Failed to initialize LED MOSFET outputs")?;
+
+    let (lighting_loop, _idle_leds) = match (led_outputs, components.lighting.is_running()) {
+        (Some(outputs), true) => (
+            Some(lighting_loop(
+                Arc::clone(&clock),
+                Arc::clone(&lighting),
+                outputs,
+                lighting.change_signal(),
+                Arc::clone(&lighting_republish),
+                Duration::from_secs(30),
+            )),
+            None,
+        ),
+        (Some(outputs), false) => {
+            info!("LED outputs initialized but lighting loop not running");
+            (None, Some(outputs))
+        }
+        (None, _) => (None, None),
+    };
+
     let levels = Arc::new(InMemoryWaterLevelStore::new());
     let level_loop = sensors::levels(board.levels, Arc::clone(&levels))?;
     let calibration = sensors::calibration(nvs_partition.clone())?;
@@ -149,7 +194,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let telemetry_loop = match (collector, components.telemetry.is_running()) {
         (Some(collector), true) => Some(sensors::sensor_task(
             collector,
-            lighting.change_signal(),
+            lighting_republish,
             Arc::clone(&heaters.republish),
             Arc::clone(&pumps.republish),
             Arc::clone(&reservoir.republish),
@@ -197,6 +242,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let health_loop = components.health.is_running().then(health_watch);
 
     tokio::join!(
+        optional(lighting_loop),
         optional(watchdog_task),
         optional(telemetry_loop),
         optional(level_loop),

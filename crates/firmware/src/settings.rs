@@ -45,6 +45,7 @@ pub struct ComponentSettings {
     pub pumps: ComponentMode,
     pub flood: ComponentMode,
     pub reservoir: ComponentMode,
+    pub lighting: ComponentMode,
     pub health: ComponentMode,
 }
 
@@ -69,6 +70,7 @@ pub struct Settings {
     pub heaters: HeaterControlSettings,
     pub pumps: PumpControlSettings,
     pub reservoir: ReservoirControlSettings,
+    pub lighting: LightingSettings,
 }
 
 #[derive(Debug)]
@@ -141,6 +143,12 @@ pub struct LevelSettings {
     pub filter: FilterConfig,
 }
 
+#[derive(Debug)]
+pub struct LightingSettings {
+    pub pwm_freq_hz: u32,
+    pub update_interval: Duration,
+}
+
 impl Settings {
     pub const fn from_env() -> Self {
         Self {
@@ -159,6 +167,7 @@ impl Settings {
                 pumps: ComponentMode::Running,
                 flood: ComponentMode::Off,
                 reservoir: ComponentMode::Off,
+                lighting: ComponentMode::Off,
                 health: ComponentMode::Running,
             },
             wifi: WifiSettings {
@@ -227,6 +236,10 @@ impl Settings {
                 contacts: [Contact::NormallyOpen; 4],
                 timing: ReservoirTiming::DEFAULT,
                 defaults: ReservoirSettings::DEFAULT,
+            },
+            lighting: LightingSettings {
+                pwm_freq_hz: 5_000,
+                update_interval: Duration::from_secs(30),
             },
             pumps: PumpControlSettings {
                 contacts: [
