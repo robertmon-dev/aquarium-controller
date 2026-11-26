@@ -7,9 +7,11 @@ mod hw {
 
     use esp_idf_hal::sys::EspError;
 
-    use super::super::i2c::SharedI2c;
+    use super::super::shared::SharedI2c;
 
     const REG_IODIRA: u8 = 0x00;
+    const REG_GPPUA: u8 = 0x0C;
+    const REG_GPIOA: u8 = 0x12;
     const REG_OLATA: u8 = 0x14;
 
     struct Mcp23017State<'d> {
@@ -33,9 +35,18 @@ mod hw {
     }
 
     impl<'d> Mcp23017<'d> {
-        pub fn new_all_outputs(i2c: SharedI2c<'d>, address: u8) -> Result<Self, EspError> {
+        pub fn new(
+            i2c: SharedI2c<'d>,
+            address: u8,
+            input_mask: u16,
+            pullup_mask: u16,
+        ) -> Result<Self, EspError> {
+            let [dir_a, dir_b] = input_mask.to_le_bytes();
+            let [pu_a, pu_b] = pullup_mask.to_le_bytes();
+
             i2c.write(address, &[REG_OLATA, 0x00, 0x00])?;
-            i2c.write(address, &[REG_IODIRA, 0x00, 0x00])?;
+            i2c.write(address, &[REG_GPPUA, pu_a, pu_b])?;
+            i2c.write(address, &[REG_IODIRA, dir_a, dir_b])?;
 
             Ok(Self {
                 state: Arc::new(Mutex::new(Mcp23017State {
@@ -44,6 +55,15 @@ mod hw {
                     outputs: 0x0000,
                 })),
             })
+        }
+
+        pub fn read_all(&self) -> Result<u16, EspError> {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut buf = [0_u8; 2];
+            state
+                .i2c
+                .write_read(state.address, &[REG_GPIOA], &mut buf)?;
+            Ok(u16::from_le_bytes(buf))
         }
 
         pub fn set_pin(&self, pin: u8, high: bool) -> Result<(), &'static str> {

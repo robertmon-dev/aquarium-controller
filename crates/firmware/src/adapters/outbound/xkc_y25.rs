@@ -5,32 +5,40 @@ pub use hw::Xkc25Adapter;
 
 #[cfg(target_os = "espidf")]
 mod hw {
-    use esp_idf_hal::gpio::{AnyInputPin, Input, PinDriver, Pull};
-    use esp_idf_hal::sys::EspError;
+    use tracing::warn;
 
     use aquarium_core::domain::water::WaterLevelRole;
     use aquarium_core::ports::outbound::water_level::WaterLevelPins;
 
-    type LevelPin<'d> = PinDriver<'d, Input>;
+    use super::super::i2c::mcp23017::Mcp23017;
 
     pub struct Xkc25Adapter<'d> {
-        pins: Vec<LevelPin<'d>>,
+        expander: Mcp23017<'d>,
+        pins: [u8; WaterLevelRole::COUNT],
+        last_state: u16,
     }
 
     impl<'d> Xkc25Adapter<'d> {
-        pub fn new(pins: [AnyInputPin<'d>; WaterLevelRole::COUNT]) -> Result<Self, EspError> {
-            let pins = pins
-                .into_iter()
-                .map(|pin| PinDriver::input(pin, Pull::Up))
-                .collect::<Result<_, _>>()?;
-
-            Ok(Self { pins })
+        pub fn new(expander: Mcp23017<'d>, pins: [u8; WaterLevelRole::COUNT]) -> Self {
+            Self {
+                expander,
+                pins,
+                last_state: 0,
+            }
         }
     }
 
     impl WaterLevelPins for Xkc25Adapter<'_> {
         fn read_raw(&mut self) -> [(WaterLevelRole, bool); WaterLevelRole::COUNT] {
-            WaterLevelRole::ALL.map(|role| (role, self.pins[role.index()].is_high()))
+            match self.expander.read_all() {
+                Ok(bits) => self.last_state = bits,
+                Err(err) => warn!(?err, "Failed to read XKC-Y25 levels from MCP23017"),
+            }
+
+            WaterLevelRole::ALL.map(|role| {
+                let pin = self.pins[role.index()];
+                (role, (self.last_state & (1_u16 << pin)) != 0)
+            })
         }
     }
 }
