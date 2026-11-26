@@ -26,6 +26,7 @@ mod hw {
     use esp_idf_hal::gpio::OutputPin;
     use esp_idf_hal::ledc::{
         config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution,
+        SpeedMode,
     };
     use esp_idf_hal::sys::EspError;
     use esp_idf_hal::units::FromValueType;
@@ -36,9 +37,9 @@ mod hw {
         channels: [LedcDriver<'d>; 2],
     }
 
-    fn off_channel<'d>(
-        channel: impl LedcChannel + 'd,
-        timer: &'d LedcTimerDriver<'d>,
+    fn off_channel<'d, S: SpeedMode>(
+        channel: impl LedcChannel<SpeedMode = S> + 'd,
+        timer: &'d LedcTimerDriver<'d, S>,
         pin: impl OutputPin + 'd,
     ) -> Result<LedcDriver<'d>, EspError> {
         let mut driver = LedcDriver::new(channel, timer, pin)?;
@@ -47,21 +48,21 @@ mod hw {
     }
 
     impl<'d> LedMosfetOutputs<'d> {
-        pub fn create_timer(
-            timer: impl LedcTimer + 'd,
+        pub fn create_timer<T: LedcTimer + 'd>(
+            timer: T,
             freq_hz: u32,
-        ) -> Result<LedcTimerDriver<'d>, EspError> {
+        ) -> Result<LedcTimerDriver<'d, T::SpeedMode>, EspError> {
             let config = TimerConfig::new()
                 .frequency(freq_hz.Hz())
                 .resolution(Resolution::Bits12);
             LedcTimerDriver::new(timer, &config)
         }
 
-        pub fn new(
-            timer: &'d LedcTimerDriver<'d>,
-            white_ch: impl LedcChannel + 'd,
+        pub fn new<S: SpeedMode>(
+            timer: &'d LedcTimerDriver<'d, S>,
+            white_ch: impl LedcChannel<SpeedMode = S> + 'd,
             white_pin: impl OutputPin + 'd,
-            rgb_ch: impl LedcChannel + 'd,
+            rgb_ch: impl LedcChannel<SpeedMode = S> + 'd,
             rgb_pin: impl OutputPin + 'd,
         ) -> Result<Self, EspError> {
             Ok(Self {
