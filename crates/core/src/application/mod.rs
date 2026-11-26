@@ -1,6 +1,7 @@
 pub mod calibration;
 pub mod collector;
 pub mod heater;
+pub mod lighting;
 pub mod metrics_export;
 pub mod pump;
 pub mod reservoir;
