@@ -1,6 +1,7 @@
 use anyhow::Context;
-use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::ds18b20::OneWireBus;
+use aquarium_controller::adapters::outbound::i2c::ads1115::{Ads1115Bus, AnalogFrontEnd};
+use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
 use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_core::protocol::ads1115::Channel;
@@ -131,9 +132,10 @@ impl AnalogBus {
 
         let driver = I2cDriver::new(i2c, sda, scl, &config)
             .context("Failed to initialize the I2C bus for the ADS1115")?;
+        let bus = SharedI2c::new(driver);
 
         Ok(AnalogFrontEnd::new(
-            Ads1115Bus::new(driver, analog.address, analog.gain, analog.data_rate),
+            Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
             ph_channel,
             tds_channel,
             analog.samples_per_reading,

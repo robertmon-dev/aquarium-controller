@@ -16,8 +16,8 @@ use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use tracing::info;
 
-use aquarium_controller::adapters::outbound::ads1115::AnalogFrontEnd;
 use aquarium_controller::adapters::outbound::ds18b20::Ds18b20Adapter;
+use aquarium_controller::adapters::outbound::i2c::ads1115::AnalogFrontEnd;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
