@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Notify;
+use tokio::time::{Instant, MissedTickBehavior};
 
+use super::sleep_until_some;
 use crate::domain::lighting::{resolve, ChannelLevels, LightingSchedule};
 use crate::domain::metrics::{LightingMetricsDto, LightingProfile};
 use crate::ports::outbound::{Clock, LightingOutputs, LightingOverrideSource};
@@ -11,7 +13,8 @@ pub async fn lighting_loop<C, S, O>(
     clock: C,
     overrides: S,
     mut outputs: O,
-    change_signal: Arc<Notify>,
+    api_changed: Arc<Notify>,
+    republish: Arc<Notify>,
     interval: Duration,
 ) where
     C: Clock,
@@ -20,6 +23,10 @@ pub async fn lighting_loop<C, S, O>(
 {
     let schedule = LightingSchedule::new();
     let mut last_levels: Option<ChannelLevels> = None;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+    let mut announce = false;
 
     loop {
         let scheduled = match (clock.local_minute_of_day(), clock.local_month()) {
@@ -32,19 +39,34 @@ pub async fn lighting_loop<C, S, O>(
             },
         };
 
-        let resolved = resolve(scheduled, overrides.active_override().as_ref());
+        let active_override = overrides.active_override();
+        let resolved = resolve(scheduled, active_override.as_ref());
         let levels = ChannelLevels::from_metrics(&resolved);
 
+        let mut changed = false;
         if last_levels != Some(levels) {
             match outputs.set_levels(levels) {
-                Ok(()) => last_levels = Some(levels),
+                Ok(()) => {
+                    last_levels = Some(levels);
+                    changed = true;
+                }
                 Err(error) => tracing::warn!(%error, "failed to update lighting outputs"),
             }
         }
 
-        tokio::select! {
-            _ = change_signal.notified() => {}
-            _ = tokio::time::sleep(interval) => {}
+        if changed || announce {
+            republish.notify_one();
         }
+
+        let wake_at = active_override
+            .and_then(|over| over.expires_in_s)
+            .map(|secs| Instant::now() + Duration::from_secs(u64::from(secs) + 1));
+
+        announce = tokio::select! {
+            biased;
+            () = api_changed.notified() => true,
+            () = sleep_until_some(wake_at) => true,
+            _ = ticker.tick() => false,
+        };
     }
 }
