@@ -33,6 +33,9 @@ mod hw {
 
     use super::{duty_for_pct, LightChannel};
 
+    use aquarium_core::domain::light::ChannelLevels;
+    use aquarium_core::ports::outbound::LightingOutputs;
+
     pub struct LedMosfetOutputs<'d> {
         channels: [LedcDriver<'d>; 2],
     }
@@ -79,6 +82,14 @@ mod hw {
             driver
                 .set_duty(duty)
                 .map_err(|_| "the LED PWM output could not be driven")
+        }
+    }
+
+    impl LightingOutputs for LedMosfetOutputs<'_> {
+        fn set_levels(&mut self, levels: ChannelLevels) -> Result<(), &'static str> {
+            self.set_pct(LightChannel::White, levels.white_pct)?;
+            self.set_pct(LightChannel::Rgb, levels.rgb_pct)?;
+            Ok(())
         }
     }
 }

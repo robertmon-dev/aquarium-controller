@@ -3,7 +3,7 @@ pub mod ds18b20;
 #[cfg(target_os = "espidf")]
 pub mod flood;
 pub mod influx;
-pub mod led;
+pub mod lighting;
 pub mod nvs_blob;
 pub mod nvs_calibration;
 pub mod nvs_heater;

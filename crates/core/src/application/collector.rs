@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::domain::calibration::{Calibration, PhCalibration};
-use crate::domain::light::{self, LightingSchedule};
+use crate::domain::lighting::{self, LightingSchedule};
 use crate::domain::metrics::{
     LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
 };
@@ -260,7 +260,7 @@ where
             },
         };
 
-        light::resolve(scheduled, self.sources.overrides.active_override().as_ref())
+        lighting::resolve(scheduled, self.sources.overrides.active_override().as_ref())
     }
 }
 

@@ -5,7 +5,7 @@ use tokio::time::Instant;
 
 use crate::domain::calibration::Calibration;
 use crate::domain::heater::HeaterSettings;
-use crate::domain::light::{LightingOverride, LightingTarget};
+use crate::domain::lighting::{LightingOverride, LightingTarget};
 use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
 use crate::domain::reservoir::ReservoirTelemetry;
 use crate::domain::water::WaterLevelSnapshot;

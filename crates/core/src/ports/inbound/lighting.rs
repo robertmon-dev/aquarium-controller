@@ -1,4 +1,4 @@
-use crate::domain::light::{LightingOverride, LightingTarget};
+use crate::domain::lighting::{LightingOverride, LightingTarget};
 
 pub trait LightingControl {
     fn set_override(&self, target: LightingTarget, duration_s: Option<u32>);
