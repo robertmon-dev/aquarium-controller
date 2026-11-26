@@ -3,7 +3,7 @@ use picoserve::response::{Json, NoContent, StatusCode};
 use serde::Deserialize;
 
 use crate::adapters::inbound::http::routes::LightingState;
-use crate::domain::light::{LightingOverride, LightingSchedule, LightingTarget};
+use crate::domain::lighting::{LightingOverride, LightingSchedule, LightingTarget};
 use crate::domain::metrics::LightingScheduleDto;
 use crate::ports::inbound::LightingControl;
 

@@ -30,6 +30,13 @@ impl ChannelLevels {
 
         Ok(())
     }
+
+    pub const fn from_metrics(metrics: &LightingMetricsDto) -> Self {
+        Self {
+            white_pct: metrics.channel_white_pct,
+            rgb_pct: metrics.channel_rgb_pct,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -98,7 +98,7 @@ mod lighting {
     use std::time::Duration;
 
     use super::super::InMemoryLightingStore;
-    use crate::domain::light::{ChannelLevels, LightingTarget};
+    use crate::domain::lighting::{ChannelLevels, LightingTarget};
     use crate::domain::metrics::LightingProfile;
     use crate::ports::inbound::LightingControl;
     use crate::ports::outbound::LightingOverrideSource;

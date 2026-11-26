@@ -8,7 +8,7 @@ use crate::adapters::outbound::memory::NoReservoir;
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::cron::CivilTime;
 use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
-use crate::domain::light::{ChannelLevels, LightingOverride, LightingTarget};
+use crate::domain::lighting::{ChannelLevels, LightingOverride, LightingTarget};
 use crate::domain::metrics::{
     LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
