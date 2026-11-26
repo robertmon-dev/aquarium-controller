@@ -5,10 +5,11 @@ use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRela
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_core::protocol::ads1115::Channel;
 use esp_idf_hal::gpio::{
-    AnyInputPin, Gpio16, Gpio17, Gpio18, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42, Gpio47, Gpio48,
-    Gpio5, Gpio6, Gpio7, Gpio8, Gpio9,
+    AnyInputPin, Gpio1, Gpio16, Gpio17, Gpio18, Gpio2, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42,
+    Gpio47, Gpio48, Gpio5, Gpio6, Gpio7, Gpio8, Gpio9,
 };
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
+use esp_idf_hal::ledc::{CHANNEL0, CHANNEL1, TIMER0};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::task::watchdog::TWDT;
@@ -23,6 +24,7 @@ pub struct Board {
     pub reservoir: ReservoirPins,
     pub flood: (Gpio38<'static>, Gpio48<'static>),
     pub heaters: HeaterPins,
+    pub lighting: LightingPins,
     pub temperature: TemperaturePin,
     pub levels: [AnyInputPin<'static>; 8],
     pub analog: AnalogBus,
@@ -38,6 +40,13 @@ impl From<Peripherals> for Board {
             reservoir: ReservoirPins(pins.gpio40, pins.gpio41, pins.gpio42, pins.gpio47),
             flood: (pins.gpio38, pins.gpio48),
             heaters: HeaterPins(pins.gpio17, pins.gpio18),
+            lighting: LightingPins {
+                timer: peripherals.ledc.timer0,
+                white_ch: peripherals.ledc.channel0,
+                white_pin: pins.gpio1,
+                rgb_ch: peripherals.ledc.channel1,
+                rgb_pin: pins.gpio2,
+            },
             temperature: TemperaturePin(pins.gpio4),
             levels: [
                 pins.gpio11.degrade_input(),
@@ -54,6 +63,14 @@ impl From<Peripherals> for Board {
             twdt: peripherals.twdt,
         }
     }
+}
+
+pub struct LightingPins {
+    pub timer: TIMER0<'static>,
+    pub white_ch: CHANNEL0<'static>,
+    pub white_pin: Gpio1<'static>,
+    pub rgb_ch: CHANNEL1<'static>,
+    pub rgb_pin: Gpio2<'static>,
 }
 
 pub struct PumpPins(

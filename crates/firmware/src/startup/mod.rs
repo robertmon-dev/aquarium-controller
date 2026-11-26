@@ -23,7 +23,7 @@ use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
 use crate::board::Board;
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
-use aquarium_controller::adapters::outbound::led::LedMosfetOutputs;
+use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 use aquarium_core::application::lighting::lighting_loop;
