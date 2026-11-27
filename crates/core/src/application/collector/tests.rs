@@ -16,12 +16,14 @@ use crate::domain::pump::{
     OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry, Supervision,
 };
 use crate::domain::reservoir::{FillPhase, ReservoirTelemetry};
+use crate::domain::sump_light::SumpLightStatus;
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingStatusSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
-    TdsSample, TdsSampleSink, TelemetrySink, TemperatureError, TemperatureReader,
-    TemperatureSample, TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
+    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SumpLightStatusSource,
+    SystemHealthProvider, TdsReader, TdsSample, TdsSampleSink, TelemetrySink, TemperatureError,
+    TemperatureReader, TemperatureSample, TemperatureSampleSink, TemperatureSensorRole,
+    WaterLevelSource,
 };
 use crate::protocol::ph::{self, PhError};
 use crate::protocol::tds::{self, TdsError};
@@ -379,6 +381,7 @@ type Subject<'a> = TelemetryCollector<
     FakeHeaters,
     FakePumps,
     NoReservoir,
+    FakeSumpLight,
 >;
 
 fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subject<'_> {
@@ -440,6 +443,7 @@ fn with_analog(
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         sink,
         config(),
@@ -460,6 +464,34 @@ fn analog_subject(
         FakeLevels::all_dry(),
         analog,
         calibration,
+    )
+}
+
+struct FakeSumpLight(SumpLightStatus);
+
+impl SumpLightStatusSource for FakeSumpLight {
+    fn sump_light_status(&self) -> SumpLightStatus {
+        self.0
+    }
+}
+
+fn build_with_sump_light(sump_light: FakeSumpLight, sink: &RecordingSink) -> Subject<'_> {
+    TelemetryCollector::new(
+        TelemetrySources {
+            temperature: FakeReader::healthy(),
+            clock: FakeClock::synced_at_noon_in_june(),
+            health: FakeHealth,
+            lighting: FakeLighting::unavailable(),
+            levels: FakeLevels::all_dry(),
+            analog: FakeAnalog::nothing_attached(),
+            calibration: FakeCalibration::standard(),
+            heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
+            pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
+            reservoir: NoReservoir,
+            sump_light,
+        },
+        sink,
+        config(),
     )
 }
 
@@ -562,6 +594,7 @@ async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -813,6 +846,7 @@ async fn ato_with(
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(pumps, last_top_off),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1378,6 +1412,7 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
             heaters: FakeHeaters(heaters),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1417,6 +1452,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(pumps, None),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1497,6 +1533,7 @@ async fn telemetry_carries_the_reservoir_section() {
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: FakePumps(PumpsTelemetry::UNAVAILABLE, None),
             reservoir: FixedReservoir(reservoir),
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1536,6 +1573,7 @@ fn a_flood_republish_updates_each_zone_and_keeps_the_lock_visible_after_drying()
             heaters: FakeHeaters(HeatersStatus::UNAVAILABLE),
             pumps: Arc::clone(&pumps),
             reservoir: NoReservoir,
+            sump_light: FakeSumpLight(SumpLightStatus::UNAVAILABLE),
         },
         &sink,
         config(),
@@ -1590,4 +1628,19 @@ async fn lighting_is_unavailable_when_nothing_was_published() {
     c.sample().await;
 
     assert!(!sink.last().lighting.available);
+}
+
+#[tokio::test]
+async fn telemetry_carries_the_sump_light_status() {
+    let sink = RecordingSink::default();
+    let status = SumpLightStatus {
+        on: true,
+        expires_in_s: Some(600),
+        available: true,
+    };
+    let mut c = build_with_sump_light(FakeSumpLight(status), &sink);
+
+    c.sample().await;
+
+    assert_eq!(sink.last().sump_light, status);
 }

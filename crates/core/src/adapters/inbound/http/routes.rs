@@ -12,16 +12,17 @@ use crate::domain::pump::PumpId;
 use crate::domain::reservoir::{OverrideTarget, ReservoirChannel};
 use crate::ports::inbound::{
     CalibrationControl, HeaterControl, LightingControl, ProbeVoltageQuery, PumpControl,
-    ReservoirControl, TelemetryQuery,
+    ReservoirControl, SumpLightControl, TelemetryQuery,
 };
 
-pub struct AppState<Q, L, C, H, P, R> {
+pub struct AppState<Q, L, C, H, P, R, S> {
     pub telemetry: Arc<Q>,
     pub lighting: Arc<L>,
     pub calibration: Arc<C>,
     pub heaters: Arc<H>,
     pub pumps: Arc<P>,
     pub reservoir: Arc<R>,
+    pub sump_light: Arc<S>,
 }
 
 pub struct LightingState<L>(pub Arc<L>);
@@ -34,44 +35,52 @@ pub struct PumpState<P>(pub Arc<P>);
 
 pub struct ReservoirState<R>(pub Arc<R>);
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for Arc<Q> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+pub struct SumpLightState<S>(pub Arc<S>);
+
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for Arc<Q> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         Arc::clone(&input.telemetry)
     }
 }
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for LightingState<L> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for LightingState<L> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         LightingState(Arc::clone(&input.lighting))
     }
 }
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for HeaterState<H> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for HeaterState<H> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         HeaterState(Arc::clone(&input.heaters))
     }
 }
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for PumpState<P> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for PumpState<P> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         PumpState(Arc::clone(&input.pumps))
     }
 }
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for CalibrationState<C> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for CalibrationState<C> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         CalibrationState(Arc::clone(&input.calibration))
     }
 }
 
-impl<Q, L, C, H, P, R> FromRef<AppState<Q, L, C, H, P, R>> for ReservoirState<R> {
-    fn from_ref(input: &AppState<Q, L, C, H, P, R>) -> Self {
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for ReservoirState<R> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
         ReservoirState(Arc::clone(&input.reservoir))
     }
 }
 
-pub fn router<Q, L, C, H, P, R>(
-    state: AppState<Q, L, C, H, P, R>,
+impl<Q, L, C, H, P, R, S> FromRef<AppState<Q, L, C, H, P, R, S>> for SumpLightState<S> {
+    fn from_ref(input: &AppState<Q, L, C, H, P, R, S>) -> Self {
+        SumpLightState(Arc::clone(&input.sump_light))
+    }
+}
+
+pub fn router<Q, L, C, H, P, R, S>(
+    state: AppState<Q, L, C, H, P, R, S>,
     token: &'static str,
     sse_keepalive: Duration,
     cors_origin: &'static str,
@@ -83,6 +92,7 @@ where
     H: HeaterControl + 'static,
     P: PumpControl + 'static,
     R: ReservoirControl + 'static,
+    S: SumpLightControl + 'static,
 {
     let lighting = Router::new()
         .route(
@@ -188,6 +198,10 @@ where
         .route("/api/heaters", get(handlers::heaters::status::<H>))
         .route("/api/pumps", get(handlers::pumps::status::<P>))
         .route("/api/reservoir", get(handlers::reservoir::status::<R>))
+        .route(
+            "/api/sump-light",
+            get(handlers::sump_light::status::<S>).put(handlers::sump_light::set::<S>),
+        )
         .nest("/api/lighting", lighting)
         .nest("/api/heaters", heaters)
         .nest("/api/pumps", pumps)

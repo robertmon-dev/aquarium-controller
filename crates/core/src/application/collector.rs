@@ -7,13 +7,13 @@ use crate::domain::metrics::{TankTelemetryDto, WaterLevelMetricsDto};
 use crate::domain::pump::{LevelConditions, OperationKind};
 use crate::ports::outbound::{
     CalibrationSource, Clock, HeaterStatusSource, LightingStatusSource, PhReader, ProbeVoltageSink,
-    PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader, TdsSample,
-    TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSample, TemperatureSampleSink,
-    TemperatureSensorRole, WaterLevelSource,
+    PumpStatusSource, ReservoirStatusSource, SumpLightStatusSource, SystemHealthProvider,
+    TdsReader, TdsSample, TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSample,
+    TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
-pub struct TelemetrySources<R, C, H, O, W, A, K, T, P, V> {
+pub struct TelemetrySources<R, C, H, O, W, A, K, T, P, V, U> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
@@ -24,6 +24,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K, T, P, V> {
     pub heaters: T,
     pub pumps: P,
     pub reservoir: V,
+    pub sump_light: U,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,14 +42,14 @@ struct Readings {
     tds_volts: Option<f32>,
 }
 
-pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V> {
-    sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V>,
+pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V, U> {
+    sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V, U>,
     sink: S,
     config: TelemetryConfig,
     last: Readings,
 }
 
-impl<R, C, H, S, O, W, A, K, T, P, V> TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V>
+impl<R, C, H, S, O, W, A, K, T, P, V, U> TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V, U>
 where
     R: TemperatureReader,
     C: Clock,
@@ -61,9 +62,10 @@ where
     T: HeaterStatusSource,
     P: PumpStatusSource,
     V: ReservoirStatusSource,
+    U: SumpLightStatusSource,
 {
     pub fn new(
-        sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V>,
+        sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V, U>,
         sink: S,
         config: TelemetryConfig,
     ) -> Self {
@@ -188,6 +190,7 @@ where
                 LevelConditions::from_snapshot(&sample.levels, None).reservoir_empty;
         }
         dto.heaters = self.sources.heaters.heater_status();
+        dto.sump_light = self.sources.sump_light.sump_light_status();
         dto.pumps = self.sources.pumps.pump_telemetry();
         dto.flood = self.sources.pumps.flood_status();
         dto.leak_detected = dto.flood.probes.is_some_and(|probes| probes.wet());

@@ -154,6 +154,9 @@ fn lighting(snapshot: &TankTelemetryDto) -> Fields {
         fields.integer("white_pct", lighting.channels.white_pct);
         fields.boolean("override", lighting.override_active);
     }
+    if snapshot.sump_light.available {
+        fields.boolean("sump_light", snapshot.sump_light.on);
+    }
     fields
 }
 

@@ -17,7 +17,9 @@ use aquarium_core::adapters::outbound::memory::{
     InMemoryTelemetryStore, VolatileCalibrationStore, VolatileHeaterStore, VolatileLightingStore,
     VolatilePumpStore,
 };
-use aquarium_core::application::{CalibrationService, HeaterService, LightingService, PumpService};
+use aquarium_core::application::{
+    CalibrationService, HeaterService, LightingService, PumpService, SumpLightService,
+};
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
@@ -189,6 +191,33 @@ pub async fn start_with_all(
         heaters,
         pumps,
         reservoir(),
+        sump_light(),
+        config(),
+    ));
+
+    addr
+}
+
+pub fn sump_light() -> Arc<SumpLightService> {
+    Arc::new(SumpLightService::new())
+}
+
+pub async fn start_with_sump_light(sump: Arc<SumpLightService>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+
+    tokio::task::spawn_local(http::run(
+        listener,
+        Arc::new(InMemoryTelemetryStore::new()),
+        lighting(),
+        Arc::new(CalibrationService::new(
+            calibration_defaults(),
+            VolatileCalibrationStore,
+        )),
+        heaters(),
+        pumps(),
+        reservoir(),
+        sump,
         config(),
     ));
 
@@ -217,6 +246,7 @@ pub async fn serve_pump_control<P: PumpControl + 'static>(
             heaters(),
             pumps,
             reservoir(),
+            sump_light(),
             config(),
         )
         .await;

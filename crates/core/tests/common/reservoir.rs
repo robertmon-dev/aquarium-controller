@@ -17,7 +17,10 @@ use aquarium_core::domain::reservoir::{ReservoirConditions, ReservoirSettings};
 use aquarium_core::ports::inbound::ReservoirControl;
 use aquarium_core::ports::outbound::{Clock, ReservoirRecord, ReservoirStore, TdsSample};
 
-use super::{body, calibration_defaults, config, heaters, lighting, pumps, raw, FixedClock, TOKEN};
+use super::{
+    body, calibration_defaults, config, heaters, lighting, pumps, raw, sump_light, FixedClock,
+    TOKEN,
+};
 
 pub type TestReservoir = ReservoirService<VolatileReservoirStore, FixedClock>;
 
@@ -98,6 +101,7 @@ pub async fn start_with_reservoir<R: ReservoirControl + 'static>(reservoir: Arc<
         heaters(),
         pumps(),
         reservoir,
+        sump_light(),
         config(),
     ));
 
