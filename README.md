@@ -1,6 +1,6 @@
 # aquarium-controller
 
-**aquarium-controller** is ESP32-S3 firmware for a reef/planted tank controller, written in Rust on top of ESP-IDF. It samples the tank (DS18B20 temperature probes, XKC-Y25 non-contact water-level sensors, an analog pH electrode), publishes a single telemetry snapshot over HTTP and SSE, and optionally streams the same snapshots to InfluxDB. The code is split into a hardware-free `aquarium-core` crate — domain, protocols, ports and the HTTP layer, all testable on the host — and a thin firmware crate that wires real peripherals into those ports.
+**aquarium-controller** is ESP32-S3 firmware for a reef/planted tank controller, written in Rust on top of ESP-IDF. It samples the tank (DS18B20 temperature probes, XKC-Y25 non-contact water-level sensors behind an MCP23017 I2C expander, analog pH and TDS probes behind an ADS1115), drives heaters, pumps, barrel relays and PWM lighting, publishes a single telemetry snapshot over HTTP and SSE, and optionally streams the same snapshots to InfluxDB. The code is split into a hardware-free `aquarium-core` crate — domain, protocols, ports and the HTTP layer, all testable on the host — and a thin firmware crate that wires real peripherals into those ports.
 
 ## Hardware
 
@@ -27,7 +27,22 @@ Notes:
 * Each DS18B20 has a unique 64-bit ROM address, so both probes share the bus and are addressed individually — see [Identifying the probes](#identifying-the-probes).
 * Keep the bus below a few metres of cable; for longer runs use shielded/twisted cable and keep the pull-up at the ESP32 end.
 
-### ADS1115 analog front-end (shared I2C bus)
+### I2C bus
+
+One I2C bus at 400 kHz carries two devices: the ADS1115 analog front-end (`0x48`) and the MCP23017 GPIO expander for the water-level sensors (`0x20`). The firmware opens the bus once, when `ph`, `tds` or `water_level` is not `Off`, and every transaction takes the bus lock for its duration, with a 100 ms timeout.
+
+```text
+ESP32-S3                               ADS1115 (0x48)        MCP23017 (0x20)
+
+3V3 ─────────────────────────────────  VDD ───────────────── VDD
+GND ─────────────────────────────────  GND ───────────────── VSS
+GPIO8 (I2C SDA) ─────────────────────  SDA ───────────────── SDA
+GPIO9 (I2C SCL) ─────────────────────  SCL ───────────────── SCL
+```
+
+Only one set of pull-ups is needed on `SDA`/`SCL` for the whole bus. Two modules that each carry 10 kΩ give 5 kΩ in parallel, which is still fine at 400 kHz.
+
+### ADS1115 analog front-end
 
 Both analog probes read through one ADS1115, a 16-bit ADC on I2C. The ESP32-S3 internal ADC is not used for them: it is noisier and non-linear, and a single external converter keeps both channels on the same reference.
 
@@ -52,7 +67,7 @@ Notes:
 * `ADDR` needs no wiring: the breakout module pulls it down on board, which selects address `0x48`. Only a bare ADS1115 chip has to have `ADDR` driven explicitly — the die itself has no pull-down, and TI's datasheet requires the pin to sit at `VDD`, `GND`, `SDA` or `SCL` rather than float.
 * Most breakout modules already carry 10 kΩ pull-ups on `SDA`/`SCL`. If yours does not, add 4.7 kΩ from each line to `3V3`.
 * Powering the ADS1115 from 5 V while driving I2C at 3.3 V is not reliable: its logic-high threshold is 0.7 × VDD = 3.5 V, which 3.3 V does not meet.
-* The driver uses PGA ±4.096 V (125 µV per count), single-shot conversions at 128 SPS, and averages 16 samples per reading — about 150 ms per channel. `A2` and `A3` are defined in the driver but unused.
+* The driver uses PGA ±4.096 V (125 µV per count), single-shot conversions at 128 SPS, and averages 16 samples per reading — about 150 ms per channel. After the nominal conversion time it polls the config register's `OS` bit until the conversion has finished, and gives up with `ADS1115 conversion did not complete in time` after about twice the nominal time. `A2` and `A3` are defined in the driver but unused.
 * `GPIO8` and `GPIO9` are free on the ESP32-S3: the strapping pins are `GPIO0`, `GPIO3`, `GPIO45`, `GPIO46`, and USB uses `GPIO19`/`GPIO20`.
 
 #### pH probe — channel A1
@@ -147,7 +162,25 @@ supply ─┬─ RO valve (GPIO40) ─ booster (GPIO41) ─ RO membrane ─┐
                                                                  mixer (GPIO47), TDS (A0)
 ```
 
-`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 are reserved for the white and RGB LED MOSFETs.
+`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 drive the [LED MOSFETs](#led-mosfet-outputs).
+
+### LED MOSFET outputs
+
+Two PWM outputs dim the lighting through a MOSFET module: one channel for the white LEDs, one for the RGB strip.
+
+```text
+ESP32-S3                               MOSFET module                 Load side
+
+GPIO1  ──────────────────────────────  PWM in, channel 1             white LEDs
+GPIO2  ──────────────────────────────  PWM in, channel 2             RGB LEDs
+GND    ──────────────────────────────  GND
+```
+
+Notes:
+* Both channels share LEDC `TIMER0` at 5 kHz with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
+* Both outputs are driven to 0 % as soon as the firmware initialises them (`components.lighting` not `Off`). Before that the GPIOs float; fit a pull-down on each gate input if the module does not carry one.
+* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s, immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
+* The supplied profile leaves `components.lighting` `Off`.
 
 ### Floor flood probes
 
@@ -166,47 +199,56 @@ The firmware samples the contacts every 100 ms. Either alarm stops return, UV, m
 
 ### XKC-Y25 water-level sensors
 
-Eight non-contact sensors read the water through the glass. Each one has its own GPIO; they share only the supply.
+Eight non-contact sensors read the water through the glass. Their outputs go to an MCP23017 GPIO expander on the [I2C bus](#i2c-bus); they share only the supply.
 
 ```text
-ESP32-S3                               XKC-Y25 (×8)                  Mounted at
+MCP23017 (0x20)                        XKC-Y25 (×8)                  Mounted at
 
-5 V    ──────────────────────────────  VCC (brown)
-GND    ──────────────────────────────  GND (blue)
-GPIO11 ──────────────────────────────  OUT (yellow)                  sump mechanical chamber                     sump_mechanical
-GPIO12 ──────────────────────────────  OUT (yellow)                  sump biological chamber                     sump_biological
-GPIO13 ──────────────────────────────  OUT (yellow)                  sump chamber 5 (return pump), low           sump_pump
-GPIO14 ──────────────────────────────  OUT (yellow)                  main tank, overflow level                   main_tank
-GPIO15 ──────────────────────────────  OUT (yellow)                  makeup reservoir, bottom                    sump_reserve
-GPIO21 ──────────────────────────────  OUT (yellow)                  sump chamber 5, at the operating level      sump_return_level
-GPIO10 ──────────────────────────────  OUT (yellow)                  makeup reservoir, mid height                reservoir_ready
-GPIO39 ──────────────────────────────  OUT (yellow)                  makeup reservoir, top                       reservoir_full
+                     5 V ────────────  VCC (brown)
+                     GND ────────────  GND (blue)
+GPA0 ────────────────────────────────  OUT (yellow)                  sump mechanical chamber                     sump_mechanical
+GPA1 ────────────────────────────────  OUT (yellow)                  sump biological chamber                     sump_biological
+GPA2 ────────────────────────────────  OUT (yellow)                  sump chamber 5 (return pump), low           sump_pump
+GPA3 ────────────────────────────────  OUT (yellow)                  main tank, overflow level                   main_tank
+GPA4 ────────────────────────────────  OUT (yellow)                  makeup reservoir, bottom                    sump_reserve
+GPA5 ────────────────────────────────  OUT (yellow)                  sump chamber 5, at the operating level      sump_return_level
+GPA6 ────────────────────────────────  OUT (yellow)                  makeup reservoir, mid height                reservoir_ready
+GPA7 ────────────────────────────────  OUT (yellow)                  makeup reservoir, top                       reservoir_full
+
+A0, A1, A2 ── GND (address 0x20)
+RESET ─────── 3V3
 ```
 
 Notes:
-* The firmware expects an open-collector output that pulls the line low over water (`level.polarity: ActiveLow` in `crates/firmware/src/settings.rs`). The GPIOs use their internal pull-ups, so no resistors are needed, and the 5 V supply never reaches the pin.
+* The firmware expects an open-collector output that pulls the line low over water (`level.polarity: ActiveLow` in `crates/firmware/src/settings.rs`). Port A has the expander's internal 100 kΩ pull-ups enabled, so no resistors are needed, and the 5 V supply never reaches the expander.
+* The firmware configures all 16 expander pins as inputs; port B has no pull-ups and is unused. The sensor-to-pin map is fixed in `crates/firmware/src/startup/sensors.rs`.
+* `RESET` is active low and has no internal pull-up: it must be tied to `3V3` (most breakout modules do this on board). The firmware does not drive it.
+* The sampler reads both ports in one transaction every 100 ms. A failed read is logged and the previous reading is reused.
 * `sump_return_level` sits in the return-pump chamber, the only chamber whose level moves with a top-off or a refill. It is the default refill-stop sensor. A sensor in a baffled chamber only gets wet once the whole sump has flooded above the baffles.
 * `reservoir_ready` marks enough water for a water change, and `reservoir_full` a full reservoir. `sump_reserve` marks an empty reservoir and protects the makeup pump.
-* `GPIO39` is the `MTCK` JTAG pad. It is free while debugging goes over the built-in USB-Serial-JTAG (`GPIO19`/`GPIO20`).
 * Enable sampling with `components.water_level` in `crates/firmware/src/settings.rs`.
+
+> **Known issue:** current MCP23017 silicon specifies `GPA7` and `GPB7` as output-only, and the driver refuses to configure them as inputs. The firmware still requests all 16 pins as inputs and maps `reservoir_full` to `GPA7`, so with `water_level` not `Off` the expander fails to initialise and startup aborts. Until the map moves off `GPA7`, keep `water_level` `Off`.
 
 ### Pin map
 
 | Peripheral | Pin(s) | Mode |
 |---|---|---|
 | DS18B20 1-Wire bus (tank + sump) | `GPIO4` | open-drain input/output, external 4.7 kΩ pull-up |
-| ADS1115 I2C bus — data | `GPIO8` | I2C master at 400 kHz, pull-up on the module |
-| ADS1115 I2C bus — clock | `GPIO9` | I2C master at 400 kHz, pull-up on the module |
+| I2C bus (ADS1115, MCP23017) — data | `GPIO8` | I2C master at 400 kHz, pull-up on the module |
+| I2C bus (ADS1115, MCP23017) — clock | `GPIO9` | I2C master at 400 kHz, pull-up on the module |
 | pH electrode (analog front-end) | ADS1115 `A1` | single-ended, PGA ±4.096 V, single-shot 128 SPS |
 | TDS probe (analog front-end) | ADS1115 `A0` | single-ended, PGA ±4.096 V, single-shot 128 SPS |
-| XKC-Y25 — sump mechanical chamber | `GPIO11` | input, internal pull-up, active-low |
-| XKC-Y25 — sump biological chamber | `GPIO12` | input, internal pull-up, active-low |
-| XKC-Y25 — sump pump chamber | `GPIO13` | input, internal pull-up, active-low |
-| XKC-Y25 — main tank | `GPIO14` | input, internal pull-up, active-low |
-| XKC-Y25 — makeup reservoir, bottom (empty) | `GPIO15` | input, internal pull-up, active-low |
-| XKC-Y25 — sump return chamber, operating level | `GPIO21` | input, internal pull-up, active-low |
-| XKC-Y25 — makeup reservoir, mid height (ready for a water change) | `GPIO10` | input, internal pull-up, active-low |
-| XKC-Y25 — makeup reservoir, top (full) | `GPIO39` | input, internal pull-up, active-low |
+| XKC-Y25 — sump mechanical chamber | MCP23017 `GPA0` | input, expander pull-up, active-low |
+| XKC-Y25 — sump biological chamber | MCP23017 `GPA1` | input, expander pull-up, active-low |
+| XKC-Y25 — sump pump chamber | MCP23017 `GPA2` | input, expander pull-up, active-low |
+| XKC-Y25 — main tank | MCP23017 `GPA3` | input, expander pull-up, active-low |
+| XKC-Y25 — makeup reservoir, bottom (empty) | MCP23017 `GPA4` | input, expander pull-up, active-low |
+| XKC-Y25 — sump return chamber, operating level | MCP23017 `GPA5` | input, expander pull-up, active-low |
+| XKC-Y25 — makeup reservoir, mid height (ready for a water change) | MCP23017 `GPA6` | input, expander pull-up, active-low |
+| XKC-Y25 — makeup reservoir, top (full) | MCP23017 `GPA7` | input, expander pull-up, active-low — see the known issue under [XKC-Y25](#xkc-y25-water-level-sensors) |
+| LED MOSFET — white channel | `GPIO1` | LEDC PWM, `TIMER0`/`CHANNEL0`, 5 kHz, 12-bit, 0 % once initialised |
+| LED MOSFET — RGB channel | `GPIO2` | LEDC PWM, `TIMER0`/`CHANNEL1`, 5 kHz, 12-bit, 0 % once initialised |
 | Floor probe — under the reservoir | `GPIO38` | dry contact to ESP ground, internal pull-up, open = alarm |
 | Floor probe — under the sump | `GPIO48` | dry contact to ESP ground, internal pull-up, open = alarm |
 | Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
@@ -247,15 +289,15 @@ The panel refuses to capture a point while the reading is still moving. That gat
 
 * **Hexagonal, host-testable core:** `aquarium-core` holds the domain, the wire protocols (1-Wire/DS18B20, XKC-Y25 debouncing, ADS1115 registers, pH and TDS conversion, Influx line protocol) and the HTTP adapter behind ports, with no ESP dependency — `make test` runs the whole suite on the host target.
 * **Shared-bus temperature sensing:** ROM search, per-ROM addressing, CRC validation, and rejection of implausible readings (NaN, the 85 °C power-on-reset value, out-of-range values).
-* **Water level with fault detection:** eight XKC-Y25 inputs sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
+* **Water level with fault detection:** eight XKC-Y25 inputs read through an MCP23017 expander and sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
 * **pH and TDS on one external ADC:** an ADS1115 over I2C serves both probes; 16 averaged samples per reading at 16-bit resolution. pH goes through a two-point calibration with a nominal Nernst slope and sump-temperature compensation; TDS through DFRobot's polynomial with a hand-entered compensation temperature and a correction factor.
 * **Calibration over the API, persisted in NVS:** buffer points, the top-up tank temperature and the TDS factor are set from the apps and survive a reboot. The write goes to flash before the value takes effect, so a calibration that cannot be stored is refused rather than silently lost at the next power cycle.
 * **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, and pump control.
-* **Lighting overrides:** set a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit channel percentages, optionally time-boxed; overrides republish telemetry immediately rather than waiting for the next sample tick.
+* **Lighting:** a seasonal schedule and overrides — a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit channel percentages, optionally time-boxed — drive two PWM channels (white, RGB) through LED MOSFETs. With the lighting loop running, an override reaches the outputs and telemetry immediately rather than waiting for the next sample tick.
 * **Makeup barrel.** The second relay module fills the barrel with RO or mixes RO and tap water to a target TDS. Telemetry includes the barrel state. InfluxDB receives snapshots in `aquarium_reservoir` and fill records in `aquarium_reservoir_fill`.
 * **Pumps, UV, top-off and water changes:** four relay channels (return pump, UV lamp, makeup pump, drain pump) with water-level interlocks, cron-scheduled or on-demand top-offs and water changes, OFF overrides, runtime counters, and checkpoints in NVS so an interrupted operation resumes after a restart.
 * **InfluxDB 2.x export:** optional, compile-time gated on the `INFLUX_*` variables being present. Snapshots are buffered and batched, with bounded retry backoff, on a dedicated worker.
-* **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
+* **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, heaters, pumps, flood, reservoir, lighting, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
 * **Secrets that do not leak:** credentials and the API token are wrapped in a `Secret` newtype whose `Debug`/`Display` redact the value.
 
 ## Installation
@@ -482,34 +524,42 @@ Cancelling an idle or active fill returns `204`. If NVS cannot retire the marker
 ├── crates/
 │   ├── core/                    # aquarium-core — hardware-free, host-testable
 │   │   ├── src/
-│   │   │   ├── domain/          # light, water, metrics, calibration (DTOs + invariants)
-│   │   │   ├── protocol/        # ds18b20, xkc_y25, ads1115, ph, tds, influx line protocol
-│   │   │   ├── ports/           # inbound (telemetry, lighting, calibration, probe) / outbound
-│   │   │   ├── application/     # collector, water_level sampler, calibration, metrics_export
+│   │   │   ├── domain/          # lighting, water, heater, pump, reservoir, flood, cron, metrics, calibration
+│   │   │   ├── protocol/        # ds18b20, xkc_y25, ads1115, ph, tds, influx line protocol, settings_record
+│   │   │   ├── ports/           # inbound (telemetry, lighting, calibration, probe, heater, pump, reservoir) / outbound
+│   │   │   ├── application/     # collector, water_level sampler, calibration, heater, pump, reservoir, lighting loop, metrics_export
 │   │   │   ├── adapters/
 │   │   │   │   ├── inbound/http/  # picoserve router, auth layer, SSE, handlers
 │   │   │   │   └── outbound/    # in-memory stores
 │   │   │   └── secret.rs        # redacting Secret<T> newtype
-│   │   └── tests/               # http_auth/_cors/_telemetry/_lighting/_events/_probe/_calibration
+│   │   └── tests/               # http_* route tests, e2e_* scenario tests on the simulator
 │   └── firmware/                # aquarium-controller — ESP32-S3 firmware
 │       ├── .cargo/config.toml   # xtensa target, linker, ESP-IDF env
 │       ├── src/
-│       │   ├── adapters/outbound/  # ds18b20, xkc_y25, ads1115, nvs_calibration, temperature, influx, relay, nvs_pump
+│       │   ├── adapters/outbound/  # i2c/ (shared bus, ads1115, mcp23017), ds18b20, xkc_y25, ssr, relay, flood, lighting, influx, nvs_*
 │       │   ├── infrastructure/  # wifi, clock (SNTP), system_health
+│       │   ├── startup/         # task graph: sensors, control loops, network, monitoring
+│       │   ├── board.rs         # peripheral and pin assignment
+│       │   ├── diagnostics.rs   # ROM discovery, ADC, SSR and relay probe modes
 │       │   ├── settings.rs      # compile-time configuration
-│       │   └── main.rs          # peripheral wiring, task graph, ROM discovery + ADC probe modes
+│       │   └── main.rs          # entry point, run-mode dispatch
 │       ├── partitions.csv       # 8 MiB layout (3 MiB factory app + SPIFFS)
 │       └── sdkconfig.defaults   # CPU/PSRAM/stack/socket tuning
 ├── packages/
-│   └── api-client/              # typed HTTP + SSE client, generated from the Rust DTOs
-│       └── src/generated/       # ts-rs output — not committed, run `make types`
+│   ├── api-client/              # typed HTTP + SSE client, generated from the Rust DTOs
+│   │   └── src/generated/       # ts-rs output — not committed, run `make types`
+│   ├── view-model/              # client-side view models shared by the apps
+│   ├── i18n/                    # translations
+│   └── theme/                   # design tokens
 ├── apps/
-│   └── mobile/                  # Expo client (expo-router, TanStack Query, react-hook-form)
-│       └── src/
-│           ├── app/             # routes only, one screen each
-│           ├── components/      # atoms / molecules / organisms / pages / utility
-│           └── device/          # config schema, secure storage, fetch seam, SSE hook
-├── docs/                        # design specs and implementation plans
+│   ├── mobile/                  # Expo client (expo-router, TanStack Query, react-hook-form)
+│   │   └── src/
+│   │       ├── app/             # routes only, one screen each
+│   │       ├── components/      # atoms / molecules / organisms / pages / utility
+│   │       └── device/          # config schema, secure storage, fetch seam, SSE hook
+│   └── web/                     # web client, served by Caddy (see docker/README.md)
+├── docker/                      # InfluxDB + Caddy stack
+├── docs/                        # design specs and implementation plans (not committed)
 ├── Makefile                     # build, flash, monitor, test, lint, size, smoke, types
 └── package.json                 # yarn 4 workspace root
 ```
