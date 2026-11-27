@@ -5,10 +5,10 @@ use anyhow::Context;
 use aquarium_core::adapters::outbound::memory::InMemoryWaterLevelStore;
 use aquarium_core::application::{CalibrationService, TelemetryCollector, WaterLevelSampler};
 use aquarium_core::ports::outbound::{
-    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
-    TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSampleSink, WaterLevelPins,
-    WaterLevelSink, WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingStatusSource, PhReader, ProbeVoltageSink,
+    PumpStatusSource, ReservoirStatusSource, SumpLightStatusSource, SystemHealthProvider,
+    TdsReader, TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSampleSink,
+    WaterLevelPins, WaterLevelSink, WaterLevelSource,
 };
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use tokio::sync::Notify;
@@ -134,9 +134,10 @@ where
     }
 }
 
-pub(super) async fn sensor_task<R, C, H, S, O, W, A, K, T, P, V>(
-    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V>,
+pub(super) async fn sensor_task<R, C, H, S, O, W, A, K, T, P, V, U>(
+    mut collector: TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V, U>,
     lighting_changed: Arc<Notify>,
+    sump_light_changed: Arc<Notify>,
     heaters_changed: Arc<Notify>,
     pumps_changed: Arc<Notify>,
     reservoir_changed: Arc<Notify>,
@@ -145,13 +146,14 @@ pub(super) async fn sensor_task<R, C, H, S, O, W, A, K, T, P, V>(
     C: Clock,
     H: SystemHealthProvider,
     S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink + TdsSampleSink,
-    O: LightingOverrideSource,
+    O: LightingStatusSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
     T: HeaterStatusSource,
     P: PumpStatusSource,
     V: ReservoirStatusSource,
+    U: SumpLightStatusSource,
 {
     let mut ticker = tokio::time::interval(SETTINGS.sensors.read_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -160,6 +162,7 @@ pub(super) async fn sensor_task<R, C, H, S, O, W, A, K, T, P, V>(
         tokio::select! {
             _ = ticker.tick() => collector.sample().await,
             _ = lighting_changed.notified() => collector.republish(),
+            _ = sump_light_changed.notified() => collector.republish(),
             _ = heaters_changed.notified() => collector.republish(),
             _ = pumps_changed.notified() => collector.republish(),
             _ = reservoir_changed.notified() => collector.republish(),
