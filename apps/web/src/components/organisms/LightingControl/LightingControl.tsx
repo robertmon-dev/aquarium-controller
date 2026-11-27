@@ -1,6 +1,7 @@
 import {
   useLightingSchedule,
   type LightingMetricsDto,
+  type SumpLightStatus,
   type Transport,
 } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
@@ -11,15 +12,18 @@ import { ConfirmDialog } from "@/components/molecules";
 import { LightingStatus } from "./LightingStatus";
 import { SchedulePreview } from "./SchedulePreview";
 import { OverrideControls } from "./OverrideControls";
+import { SumpLightToggle } from "./SumpLightToggle";
 import { useLocalClock } from "./use-local-clock";
 import "./LightingControl.scss";
 
 export const LightingControl = ({
   transport,
   lighting,
+  sumpLight,
 }: {
   transport: Transport;
   lighting: LightingMetricsDto;
+  sumpLight: SumpLightStatus | undefined;
 }) => {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
@@ -75,6 +79,8 @@ export const LightingControl = ({
           onChannel={control.setChannel}
           onCommitChannels={control.commitChannels}
         />
+
+        <SumpLightToggle transport={transport} status={sumpLight} />
 
         {schedule.data ? (
           <div className="lighting__preview">

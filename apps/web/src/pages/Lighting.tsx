@@ -23,5 +23,11 @@ function LightingContent({ transport }: { transport: Transport }) {
   if (error && !data) return <ErrorPage code={errorCodeFor(error)} />;
   if (!data) return <ScreenMessage>{t("common.noData")}</ScreenMessage>;
 
-  return <LightingControl transport={transport} lighting={data.lighting} />;
+  return (
+    <LightingControl
+      transport={transport}
+      lighting={data.lighting}
+      sumpLight={data.sump_light}
+    />
+  );
 }

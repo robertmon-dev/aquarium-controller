@@ -20,8 +20,10 @@ export const LightingStatus = ({
   const active = lighting.override_active;
 
   const channels: { name: string; pct: number }[] = [
-    { name: t("lighting.white"), pct: lighting.channel_white_pct },
-    { name: t("lighting.rgb"), pct: lighting.channel_rgb_pct },
+    { name: t("lighting.red"), pct: lighting.channels.red_pct },
+    { name: t("lighting.green"), pct: lighting.channels.green_pct },
+    { name: t("lighting.blue"), pct: lighting.channels.blue_pct },
+    { name: t("lighting.white"), pct: lighting.channels.white_pct },
   ];
 
   return (

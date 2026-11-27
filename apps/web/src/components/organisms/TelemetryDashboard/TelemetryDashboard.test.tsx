@@ -39,9 +39,9 @@ function snapshot(overrides: Partial<TankTelemetryDto> = {}): TankTelemetryDto {
     },
     lighting: {
       profile: "daylight",
-      channel_white_pct: 60,
-      channel_rgb_pct: 40,
+      channels: { red_pct: 40, green_pct: 40, blue_pct: 40, white_pct: 60 },
       override_active: false,
+      available: true,
     },
     water_level: {
       sump_mechanical: { wet: true, faulty: false },

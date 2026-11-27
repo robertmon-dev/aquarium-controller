@@ -43,7 +43,7 @@ export const CHARTS: ChartSpec[] = [
   {
     id: "channels",
     measurement: "aquarium_lighting",
-    fields: ["white_pct", "rgb_pct"],
+    fields: ["red_pct", "green_pct", "blue_pct", "white_pct"],
     unit: "%",
     kind: "line",
   },
