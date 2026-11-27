@@ -131,12 +131,15 @@ mod lighting {
     fn setting_twice_replaces_rather_than_stacks() {
         let store = InMemoryLightingStore::new();
         store.set_override(moonlight(), None);
-        store.set_override(LightingTarget::Channels(ChannelLevels::new(80, 20)), None);
+        store.set_override(
+            LightingTarget::Channels(ChannelLevels::new(0, 0, 20, 80)),
+            None,
+        );
 
         let over = store.current_override().expect("an override exists");
         assert_eq!(
             over.target,
-            LightingTarget::Channels(ChannelLevels::new(80, 20))
+            LightingTarget::Channels(ChannelLevels::new(0, 0, 20, 80))
         );
     }
 

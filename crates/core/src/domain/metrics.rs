@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::heater::HeatersStatus;
+use super::lighting::ChannelLevels;
 use super::pump::PumpsTelemetry;
 use super::reservoir::ReservoirTelemetry;
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
@@ -207,12 +208,7 @@ impl TankTelemetryDto {
                 pump_active: false,
                 last_fill_duration_ms: 0,
             },
-            lighting: LightingMetricsDto {
-                profile: LightingProfile::Off,
-                channel_white_pct: 0,
-                channel_rgb_pct: 0,
-                override_active: false,
-            },
+            lighting: LightingMetricsDto::UNAVAILABLE,
             water_level: WaterLevelMetricsDto::UNAVAILABLE,
             heaters: HeatersStatus::UNAVAILABLE,
             pumps: PumpsTelemetry::UNAVAILABLE,
@@ -357,8 +353,10 @@ impl WaterLevelMetricsDto {
 pub struct LightingScheduleDto {
     pub month: u8,
     pub step_minutes: u16,
+    pub red_pct: Vec<u8>,
+    pub green_pct: Vec<u8>,
+    pub blue_pct: Vec<u8>,
     pub white_pct: Vec<u8>,
-    pub rgb_pct: Vec<u8>,
 }
 
 impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
@@ -386,14 +384,32 @@ impl From<&WaterLevelSnapshot> for WaterLevelMetricsDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub struct LightingMetricsDto {
     pub profile: LightingProfile,
-    pub channel_white_pct: u8,
-    pub channel_rgb_pct: u8,
+    pub channels: ChannelLevels,
     pub override_active: bool,
+    pub available: bool,
+}
+
+impl LightingMetricsDto {
+    pub const UNAVAILABLE: Self = Self {
+        profile: LightingProfile::Off,
+        channels: ChannelLevels::OFF,
+        override_active: false,
+        available: false,
+    };
+
+    pub const fn scheduled(profile: LightingProfile, channels: ChannelLevels) -> Self {
+        Self {
+            profile,
+            channels,
+            override_active: false,
+            available: true,
+        }
+    }
 }
 
 #[cfg(test)]

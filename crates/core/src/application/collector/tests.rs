@@ -8,7 +8,7 @@ use crate::adapters::outbound::memory::NoReservoir;
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::cron::CivilTime;
 use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
-use crate::domain::lighting::{ChannelLevels, LightingOverride, LightingTarget};
+use crate::domain::lighting::{ChannelLevels, LightingOverride, LightingPalette, LightingTarget};
 use crate::domain::metrics::{
     LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
@@ -597,7 +597,7 @@ async fn evaluates_lighting_from_the_clock() {
 
     let s = sink.last();
     assert_eq!(s.lighting.profile, LightingProfile::Daylight);
-    assert_eq!(s.lighting.channel_white_pct, 60);
+    assert_eq!(s.lighting.channels, LightingPalette::DEFAULT.daylight);
 }
 
 #[tokio::test]
@@ -611,7 +611,7 @@ async fn unsynced_clock_reports_zero_timestamp_and_lights_off() {
     assert_eq!(s.timestamp_epoch_s, 0, "0 is a sentinel, not a faked date");
     assert_eq!(s.system_health.uptime_seconds, 12, "uptime is always known");
     assert_eq!(s.lighting.profile, LightingProfile::Off);
-    assert_eq!(s.lighting.channel_white_pct, 0);
+    assert_eq!(s.lighting.channels.white_pct, 0);
 }
 
 #[tokio::test]
@@ -652,7 +652,7 @@ async fn an_override_beats_the_schedule() {
         LightingProfile::Off,
         "at noon the schedule wants Daylight, but the override wins"
     );
-    assert_eq!(s.lighting.channel_white_pct, 0);
+    assert_eq!(s.lighting.channels.white_pct, 0);
     assert!(s.lighting.override_active);
 }
 
@@ -679,14 +679,13 @@ async fn a_channels_override_applies_raw_levels() {
         FakeReader::healthy(),
         FakeClock::synced_at_noon_in_june(),
         &sink,
-        FakeOverrides::forcing(LightingTarget::Channels(ChannelLevels::new(80, 20))),
+        FakeOverrides::forcing(LightingTarget::Channels(ChannelLevels::new(0, 0, 20, 80))),
     )
     .sample()
     .await;
 
     let s = sink.last();
-    assert_eq!(s.lighting.channel_white_pct, 80);
-    assert_eq!(s.lighting.channel_rgb_pct, 20);
+    assert_eq!(s.lighting.channels, ChannelLevels::new(0, 0, 20, 80));
     assert!(s.lighting.override_active);
 }
 

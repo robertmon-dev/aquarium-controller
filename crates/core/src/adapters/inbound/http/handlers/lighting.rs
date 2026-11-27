@@ -3,7 +3,9 @@ use picoserve::response::{Json, NoContent, StatusCode};
 use serde::Deserialize;
 
 use crate::adapters::inbound::http::routes::LightingState;
-use crate::domain::lighting::{LightingOverride, LightingSchedule, LightingTarget};
+use crate::domain::lighting::{
+    LightingOverride, LightingPalette, LightingSchedule, LightingTarget,
+};
 use crate::domain::metrics::LightingScheduleDto;
 use crate::ports::inbound::LightingControl;
 
@@ -69,7 +71,7 @@ pub async fn schedule(month: u8) -> Result<Json<LightingScheduleDto>, (StatusCod
     tracing::info!(month, "GET /api/lighting/schedule");
 
     LightingSchedule::new()
-        .try_preview(month, PREVIEW_STEP_MINUTES)
+        .try_preview(month, PREVIEW_STEP_MINUTES, &LightingPalette::DEFAULT)
         .map(Json)
         .ok_or((StatusCode::BAD_REQUEST, "month must be 1-12\n"))
 }

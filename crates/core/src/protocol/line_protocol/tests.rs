@@ -1,5 +1,6 @@
 use super::*;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
+use crate::domain::lighting::ChannelLevels;
 use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
 use crate::domain::pump::{
     OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState,
@@ -39,8 +40,7 @@ fn populated() -> TankTelemetryDto {
     dto.temperature.sensors_healthy = true;
 
     dto.lighting.profile = LightingProfile::Daylight;
-    dto.lighting.channel_white_pct = 60;
-    dto.lighting.channel_rgb_pct = 40;
+    dto.lighting.channels = ChannelLevels::new(5, 10, 25, 60);
 
     dto.water_level.available = true;
     dto.water_level.sump_pump = WaterLevelEntryDto {
@@ -130,7 +130,7 @@ fn the_lighting_profile_is_a_quoted_string() {
 
     assert!(
         encoded.contains(
-            "aquarium_lighting profile=\"daylight\",white_pct=60i,rgb_pct=40i,override=false"
+            "aquarium_lighting profile=\"daylight\",red_pct=5i,green_pct=10i,blue_pct=25i,white_pct=60i,override=false"
         ),
         "got: {encoded}"
     );

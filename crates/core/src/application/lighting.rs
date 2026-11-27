@@ -5,7 +5,7 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::sleep_until_some;
-use crate::domain::lighting::{resolve, ChannelLevels, LightingSchedule};
+use crate::domain::lighting::{resolve, ChannelLevels, LightingPalette, LightingSchedule};
 use crate::domain::metrics::{LightingMetricsDto, LightingProfile};
 use crate::ports::outbound::{Clock, LightingOutputs, LightingOverrideSource};
 
@@ -30,18 +30,19 @@ pub async fn lighting_loop<C, S, O>(
 
     loop {
         let scheduled = match (clock.local_minute_of_day(), clock.local_month()) {
-            (Some(minute), Some(month)) => schedule.evaluate(minute, month),
-            _ => LightingMetricsDto {
-                profile: LightingProfile::Off,
-                channel_white_pct: 0,
-                channel_rgb_pct: 0,
-                override_active: false,
-            },
+            (Some(minute), Some(month)) => {
+                schedule.evaluate(minute, month, &LightingPalette::DEFAULT)
+            }
+            _ => LightingMetricsDto::scheduled(LightingProfile::Off, ChannelLevels::OFF),
         };
 
         let active_override = overrides.active_override();
-        let resolved = resolve(scheduled, active_override.as_ref());
-        let levels = ChannelLevels::from_metrics(&resolved);
+        let resolved = resolve(
+            scheduled,
+            active_override.as_ref(),
+            &LightingPalette::DEFAULT,
+        );
+        let levels = resolved.channels;
 
         let mut changed = false;
         if last_levels != Some(levels) {

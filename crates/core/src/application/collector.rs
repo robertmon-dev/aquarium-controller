@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::domain::calibration::{Calibration, PhCalibration};
-use crate::domain::lighting::{self, LightingSchedule};
+use crate::domain::lighting::{self, ChannelLevels, LightingPalette, LightingSchedule};
 use crate::domain::metrics::{
     LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
 };
@@ -251,16 +251,18 @@ where
             self.sources.clock.local_minute_of_day(),
             self.sources.clock.local_month(),
         ) {
-            (Some(minute), Some(month)) => self.lighting.evaluate(minute, month),
-            _ => LightingMetricsDto {
-                profile: LightingProfile::Off,
-                channel_white_pct: 0,
-                channel_rgb_pct: 0,
-                override_active: false,
-            },
+            (Some(minute), Some(month)) => {
+                self.lighting
+                    .evaluate(minute, month, &LightingPalette::DEFAULT)
+            }
+            _ => LightingMetricsDto::scheduled(LightingProfile::Off, ChannelLevels::OFF),
         };
 
-        lighting::resolve(scheduled, self.sources.overrides.active_override().as_ref())
+        lighting::resolve(
+            scheduled,
+            self.sources.overrides.active_override().as_ref(),
+            &LightingPalette::DEFAULT,
+        )
     }
 }
 

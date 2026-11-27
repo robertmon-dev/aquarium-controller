@@ -60,7 +60,7 @@ async fn setting_raw_channels_round_trips() {
                     "PUT",
                     OVERRIDE_PATH,
                     Some(TOKEN),
-                    r#"{"target":{"channels":{"white_pct":80,"rgb_pct":20}}}"#,
+                    r#"{"target":{"channels":{"red_pct":0,"green_pct":0,"blue_pct":20,"white_pct":80}}}"#,
                 ),
             )
             .await;
@@ -82,7 +82,7 @@ async fn a_channel_level_above_one_hundred_is_rejected() {
                     "PUT",
                     OVERRIDE_PATH,
                     Some(TOKEN),
-                    r#"{"target":{"channels":{"white_pct":150,"rgb_pct":20}}}"#,
+                    r#"{"target":{"channels":{"red_pct":150,"green_pct":0,"blue_pct":0,"white_pct":0}}}"#,
                 ),
             )
             .await;
