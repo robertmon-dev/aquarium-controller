@@ -1113,9 +1113,11 @@ impl Options {
 struct SimPins(Water);
 
 impl WaterLevelPins for SimPins {
-    fn read_raw(&mut self) -> [(WaterLevelRole, bool); WaterLevelRole::COUNT] {
+    fn read_raw(
+        &mut self,
+    ) -> Result<[(WaterLevelRole, bool); WaterLevelRole::COUNT], &'static str> {
         let mut aquarium = self.0.lock().expect("aquarium poisoned");
-        WaterLevelRole::ALL.map(|role| (role, !aquarium.raw_wet(role)))
+        Ok(WaterLevelRole::ALL.map(|role| (role, !aquarium.raw_wet(role))))
     }
 }
 

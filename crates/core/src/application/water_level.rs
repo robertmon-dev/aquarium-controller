@@ -7,6 +7,7 @@ pub struct WaterLevelSampler<P, S> {
     sink: S,
     polarity: Polarity,
     filters: [LevelFilter; WaterLevelRole::COUNT],
+    read_failing: bool,
 }
 
 impl<P, S> WaterLevelSampler<P, S>
@@ -20,13 +21,31 @@ where
             sink,
             polarity,
             filters: WaterLevelRole::ALL.map(|_| LevelFilter::unsettled(config)),
+            read_failing: false,
         }
     }
 
     pub fn tick(&mut self) {
+        let raw = match self.pins.read_raw() {
+            Ok(raw) => {
+                if self.read_failing {
+                    tracing::info!("water level inputs readable again");
+                    self.read_failing = false;
+                }
+                raw
+            }
+            Err(error) => {
+                if !self.read_failing {
+                    tracing::warn!(%error, "water level inputs unreadable");
+                    self.read_failing = true;
+                }
+                return;
+            }
+        };
+
         let mut snapshot = WaterLevelSnapshot::dry();
 
-        for (role, pin_high) in self.pins.read_raw() {
+        for (role, pin_high) in raw {
             let filter = &mut self.filters[role.index()];
             filter.push(interpret(pin_high, self.polarity));
 

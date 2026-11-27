@@ -177,9 +177,9 @@ GND    ────────────────────────�
 ```
 
 Notes:
-* Both channels share LEDC `TIMER0` at 5 kHz with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
+* Both channels share LEDC `TIMER0` at 5 kHz (`lighting.pwm_freq_hz`) with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
 * Both outputs are driven to 0 % as soon as the firmware initialises them (`components.lighting` not `Off`). Before that the GPIOs float; fit a pull-down on each gate input if the module does not carry one.
-* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s, immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
+* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s (`lighting.update_interval`), immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
 * The supplied profile leaves `components.lighting` `Off`.
 
 ### Floor flood probes
@@ -213,22 +213,20 @@ GPA3 ─────────────────────────
 GPA4 ────────────────────────────────  OUT (yellow)                  makeup reservoir, bottom                    sump_reserve
 GPA5 ────────────────────────────────  OUT (yellow)                  sump chamber 5, at the operating level      sump_return_level
 GPA6 ────────────────────────────────  OUT (yellow)                  makeup reservoir, mid height                reservoir_ready
-GPA7 ────────────────────────────────  OUT (yellow)                  makeup reservoir, top                       reservoir_full
+GPB0 ────────────────────────────────  OUT (yellow)                  makeup reservoir, top                       reservoir_full
 
 A0, A1, A2 ── GND (address 0x20)
 RESET ─────── 3V3
 ```
 
 Notes:
-* The firmware expects an open-collector output that pulls the line low over water (`level.polarity: ActiveLow` in `crates/firmware/src/settings.rs`). Port A has the expander's internal 100 kΩ pull-ups enabled, so no resistors are needed, and the 5 V supply never reaches the expander.
-* The firmware configures all 16 expander pins as inputs; port B has no pull-ups and is unused. The sensor-to-pin map is fixed in `crates/firmware/src/startup/sensors.rs`.
+* The firmware expects an open-collector output that pulls the line low over water (`level.polarity: ActiveLow` in `crates/firmware/src/settings.rs`). Every expander input has its internal 100 kΩ pull-up enabled, so no resistors are needed, and the 5 V supply never reaches the expander.
+* Current MCP23017 silicon specifies `GPA7` and `GPB7` as output-only. The firmware drives both low and configures the other 14 pins as pulled-up inputs, so unused inputs never float. The sensor-to-pin map is `LEVEL_SENSOR_PINS` in `crates/firmware/src/board.rs`, checked at compile time against the input mask.
 * `RESET` is active low and has no internal pull-up: it must be tied to `3V3` (most breakout modules do this on board). The firmware does not drive it.
-* The sampler reads both ports in one transaction every 100 ms. A failed read is logged and the previous reading is reused.
+* The sampler reads both ports in one transaction every 100 ms. A failed read publishes nothing and does not count as a sample: the last published levels age out after `level_stale`, and the pump and barrel controllers then treat the levels as unavailable. The first failure and the recovery are logged once each.
 * `sump_return_level` sits in the return-pump chamber, the only chamber whose level moves with a top-off or a refill. It is the default refill-stop sensor. A sensor in a baffled chamber only gets wet once the whole sump has flooded above the baffles.
 * `reservoir_ready` marks enough water for a water change, and `reservoir_full` a full reservoir. `sump_reserve` marks an empty reservoir and protects the makeup pump.
 * Enable sampling with `components.water_level` in `crates/firmware/src/settings.rs`.
-
-> **Known issue:** current MCP23017 silicon specifies `GPA7` and `GPB7` as output-only, and the driver refuses to configure them as inputs. The firmware still requests all 16 pins as inputs and maps `reservoir_full` to `GPA7`, so with `water_level` not `Off` the expander fails to initialise and startup aborts. Until the map moves off `GPA7`, keep `water_level` `Off`.
 
 ### Pin map
 
@@ -246,7 +244,7 @@ Notes:
 | XKC-Y25 — makeup reservoir, bottom (empty) | MCP23017 `GPA4` | input, expander pull-up, active-low |
 | XKC-Y25 — sump return chamber, operating level | MCP23017 `GPA5` | input, expander pull-up, active-low |
 | XKC-Y25 — makeup reservoir, mid height (ready for a water change) | MCP23017 `GPA6` | input, expander pull-up, active-low |
-| XKC-Y25 — makeup reservoir, top (full) | MCP23017 `GPA7` | input, expander pull-up, active-low — see the known issue under [XKC-Y25](#xkc-y25-water-level-sensors) |
+| XKC-Y25 — makeup reservoir, top (full) | MCP23017 `GPB0` | input, expander pull-up, active-low |
 | LED MOSFET — white channel | `GPIO1` | LEDC PWM, `TIMER0`/`CHANNEL0`, 5 kHz, 12-bit, 0 % once initialised |
 | LED MOSFET — RGB channel | `GPIO2` | LEDC PWM, `TIMER0`/`CHANNEL1`, 5 kHz, 12-bit, 0 % once initialised |
 | Floor probe — under the reservoir | `GPIO38` | dry contact to ESP ground, internal pull-up, open = alarm |

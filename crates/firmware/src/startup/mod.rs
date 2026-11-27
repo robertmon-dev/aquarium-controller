@@ -20,14 +20,13 @@ use tracing::info;
 
 use self::control::{Heaters, Pumps, Reservoir};
 use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
-use crate::board::{Board, I2cBus};
+use crate::board::Board;
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
 use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 use aquarium_core::application::lighting::lighting_loop;
-use std::time::Duration;
 use tokio::sync::Notify;
 
 pub(super) async fn run(board: Board) -> anyhow::Result<()> {
@@ -92,7 +91,9 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let led_timer = components
         .lighting
         .is_initialized()
-        .then(|| LedMosfetOutputs::create_timer(board.lighting.timer, 5_000))
+        .then(|| {
+            LedMosfetOutputs::create_timer(board.lighting.timer, SETTINGS.lighting.pwm_freq_hz)
+        })
         .transpose()
         .context("Failed to initialize LED PWM timer")?;
     let led_outputs = led_timer
@@ -117,7 +118,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
                 outputs,
                 lighting.change_signal(),
                 Arc::clone(&lighting_republish),
-                Duration::from_secs(30),
+                SETTINGS.lighting.update_interval,
             )),
             None,
         ),
@@ -134,11 +135,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let i2c = needs_i2c.then(|| board.i2c.open()).transpose()?;
 
     let levels = Arc::new(InMemoryWaterLevelStore::new());
-    let expander = match (i2c.as_ref(), components.water_level.is_initialized()) {
-        (Some(bus), true) => Some(I2cBus::open_expander(bus.clone())?),
-        _ => None,
-    };
-    let level_loop = expander.and_then(|exp| sensors::levels(exp, Arc::clone(&levels)));
+    let level_loop = sensors::levels(i2c.as_ref(), Arc::clone(&levels))?;
 
     let calibration = sensors::calibration(nvs_partition.clone())?;
     let heaters = Heaters::load(nvs_partition.clone())?;
@@ -201,10 +198,15 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         None
     };
 
+    let lighting_changed = if lighting_loop.is_some() {
+        lighting_republish
+    } else {
+        lighting.change_signal()
+    };
     let telemetry_loop = match (collector, components.telemetry.is_running()) {
         (Some(collector), true) => Some(sensors::sensor_task(
             collector,
-            lighting_republish,
+            lighting_changed,
             Arc::clone(&heaters.republish),
             Arc::clone(&pumps.republish),
             Arc::clone(&reservoir.republish),

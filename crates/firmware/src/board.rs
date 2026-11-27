@@ -5,6 +5,7 @@ use aquarium_controller::adapters::outbound::i2c::mcp23017::Mcp23017;
 use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
 use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
+use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::protocol::ads1115::Channel;
 use esp_idf_hal::gpio::{
     Gpio1, Gpio16, Gpio17, Gpio18, Gpio2, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42, Gpio47, Gpio48,
@@ -21,8 +22,18 @@ use crate::SETTINGS;
 
 const I2C_BAUDRATE_KHZ: u32 = 400;
 const MCP23017_ADDRESS: u8 = 0x20;
-const EXPANDER_INPUT_MASK: u16 = 0xFFFF;
-const EXPANDER_PULLUP_MASK: u16 = 0x00FF;
+const EXPANDER_INPUT_MASK: u16 = 0x7F7F;
+const EXPANDER_PULLUP_MASK: u16 = EXPANDER_INPUT_MASK;
+
+pub const LEVEL_SENSOR_PINS: [u8; WaterLevelRole::COUNT] = [0, 1, 2, 3, 4, 5, 6, 8];
+
+const _: () = {
+    let mut i = 0;
+    while i < LEVEL_SENSOR_PINS.len() {
+        assert!(EXPANDER_INPUT_MASK & (1 << LEVEL_SENSOR_PINS[i]) != 0);
+        i += 1;
+    }
+};
 
 pub struct Board {
     pub i2c: I2cBus,
@@ -123,29 +134,29 @@ impl I2cBus {
 
         Ok(SharedI2c::new(driver))
     }
+}
 
-    pub fn open_analog(
-        bus: SharedI2c<'static>,
-        ph_channel: Option<Channel>,
-        tds_channel: Option<Channel>,
-    ) -> AnalogFrontEnd<'static> {
-        let analog = &SETTINGS.sensors.analog;
+pub fn analog_front_end(
+    bus: SharedI2c<'static>,
+    ph_channel: Option<Channel>,
+    tds_channel: Option<Channel>,
+) -> AnalogFrontEnd<'static> {
+    let analog = &SETTINGS.sensors.analog;
 
-        AnalogFrontEnd::new(
-            Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
-            ph_channel,
-            tds_channel,
-            analog.samples_per_reading,
-        )
-    }
+    AnalogFrontEnd::new(
+        Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
+        ph_channel,
+        tds_channel,
+        analog.samples_per_reading,
+    )
+}
 
-    pub fn open_expander(bus: SharedI2c<'static>) -> anyhow::Result<Mcp23017<'static>> {
-        Mcp23017::new(
-            bus,
-            MCP23017_ADDRESS,
-            EXPANDER_INPUT_MASK,
-            EXPANDER_PULLUP_MASK,
-        )
-        .context("Failed to initialize the MCP23017 expander")
-    }
+pub fn level_expander(bus: SharedI2c<'static>) -> anyhow::Result<Mcp23017<'static>> {
+    Mcp23017::new(
+        bus,
+        MCP23017_ADDRESS,
+        EXPANDER_INPUT_MASK,
+        EXPANDER_PULLUP_MASK,
+    )
+    .context("Failed to initialize the MCP23017 expander")
 }

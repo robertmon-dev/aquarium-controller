@@ -17,13 +17,12 @@ use tracing::info;
 
 use aquarium_controller::adapters::outbound::ds18b20::Ds18b20Adapter;
 use aquarium_controller::adapters::outbound::i2c::ads1115::AnalogFrontEnd;
-use aquarium_controller::adapters::outbound::i2c::mcp23017::Mcp23017;
 use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 
-use crate::board::{I2cBus, TemperaturePin};
+use crate::board::{analog_front_end, level_expander, TemperaturePin, LEVEL_SENSOR_PINS};
 use crate::SETTINGS;
 
 pub(super) fn temperature(pin: TemperaturePin) -> anyhow::Result<TemperatureSource<'static>> {
@@ -50,7 +49,7 @@ pub(super) fn analog(bus: SharedI2c<'static>) -> Option<AnalogFrontEnd<'static>>
     let components = &SETTINGS.components;
 
     if components.ph.is_initialized() || components.tds.is_initialized() {
-        let front_end = I2cBus::open_analog(
+        let front_end = analog_front_end(
             bus,
             SETTINGS
                 .sensors
@@ -77,24 +76,21 @@ pub(super) fn analog(bus: SharedI2c<'static>) -> Option<AnalogFrontEnd<'static>>
 }
 
 pub(super) fn levels(
-    expander: Mcp23017<'static>,
+    i2c: Option<&SharedI2c<'static>>,
     levels: Arc<InMemoryWaterLevelStore>,
-) -> Option<impl Future<Output = ()>> {
+) -> anyhow::Result<Option<impl Future<Output = ()>>> {
     let components = &SETTINGS.components;
-    let sampler = if components.water_level.is_initialized() {
-        let pins = Xkc25Adapter::new(expander, [0, 1, 2, 3, 4, 5, 6, 7]);
-
-        Some(WaterLevelSampler::new(
-            pins,
+    let sampler = match i2c.filter(|_| components.water_level.is_initialized()) {
+        Some(bus) => Some(WaterLevelSampler::new(
+            Xkc25Adapter::new(level_expander(bus.clone())?, LEVEL_SENSOR_PINS),
             levels,
             SETTINGS.sensors.level.polarity,
             SETTINGS.sensors.level.filter,
-        ))
-    } else {
-        None
+        )),
+        None => None,
     };
 
-    match (sampler, components.water_level.is_running()) {
+    Ok(match (sampler, components.water_level.is_running()) {
         (Some(sampler), true) => {
             info!("Water level sensors ready");
             Some(level_task(sampler))
@@ -104,7 +100,7 @@ pub(super) fn levels(
             None
         }
         (None, _) => None,
-    }
+    })
 }
 
 pub(super) fn calibration(

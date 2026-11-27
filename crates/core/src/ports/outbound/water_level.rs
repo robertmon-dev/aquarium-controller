@@ -9,7 +9,8 @@ pub struct LevelSample {
 }
 
 pub trait WaterLevelPins {
-    fn read_raw(&mut self) -> [(WaterLevelRole, bool); WaterLevelRole::COUNT];
+    fn read_raw(&mut self)
+        -> Result<[(WaterLevelRole, bool); WaterLevelRole::COUNT], &'static str>;
 }
 
 pub trait WaterLevelSink {
