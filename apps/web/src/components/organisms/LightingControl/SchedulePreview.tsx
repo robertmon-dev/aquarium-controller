@@ -1,6 +1,6 @@
-import type { ChannelLevels, LightingScheduleDto } from "@aquarium/api-client";
+import type { LightingScheduleDto } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
-import { CHANNEL_KEYS } from "@aquarium/view-model";
+import { CHANNEL_KEYS, channelLabels } from "@aquarium/view-model";
 import type uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import {
@@ -53,12 +53,7 @@ export const SchedulePreview = ({
       const minutes = schedule.white_pct.map(
         (_, index) => index * schedule.step_minutes,
       );
-      const labels: Record<keyof ChannelLevels, string> = {
-        red_pct: t("lighting.red"),
-        green_pct: t("lighting.green"),
-        blue_pct: t("lighting.blue"),
-        white_pct: t("lighting.white"),
-      };
+      const labels = channelLabels(t);
 
       return {
         options: {

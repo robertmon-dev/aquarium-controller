@@ -20,6 +20,17 @@ export const CHANNEL_KEYS: (keyof ChannelLevels)[] = [
   "white_pct",
 ];
 
+export function channelLabels(
+  t: Translate,
+): Record<keyof ChannelLevels, string> {
+  return {
+    red_pct: t("lighting.red"),
+    green_pct: t("lighting.green"),
+    blue_pct: t("lighting.blue"),
+    white_pct: t("lighting.white"),
+  };
+}
+
 export interface DurationChoice {
   label: string;
   seconds: number | null;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  channelLabels,
   durationChoices,
   channelRequest,
   profileRequest,
@@ -38,6 +39,17 @@ describe("channelRequest", () => {
         channels: { red_pct: 0, green_pct: 41, blue_pct: 100, white_pct: 60 },
       },
       duration_s: null,
+    });
+  });
+});
+
+describe("channelLabels", () => {
+  it("names every RGBW channel", () => {
+    expect(channelLabels(t)).toEqual({
+      red_pct: "red",
+      green_pct: "green",
+      blue_pct: "blue",
+      white_pct: "white",
     });
   });
 });

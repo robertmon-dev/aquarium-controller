@@ -55,7 +55,7 @@ export const SumpLightToggle = ({
 
         <Button
           variant={on ? "outline" : "primary"}
-          disabled={setSumpLight.isPending}
+          disabled={setSumpLight.isPending || (!available && !on)}
           onPress={() =>
             setSumpLight.mutate(
               on

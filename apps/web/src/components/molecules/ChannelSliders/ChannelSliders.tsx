@@ -1,6 +1,10 @@
 import type { ChannelLevels } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
-import { CHANNEL_KEYS, formatPercent } from "@aquarium/view-model";
+import {
+  CHANNEL_KEYS,
+  channelLabels,
+  formatPercent,
+} from "@aquarium/view-model";
 import "./ChannelSliders.scss";
 
 export function ChannelSliders({
@@ -16,12 +20,7 @@ export function ChannelSliders({
 }) {
   const t = useT();
 
-  const labels: Record<keyof ChannelLevels, string> = {
-    red_pct: t("lighting.red"),
-    green_pct: t("lighting.green"),
-    blue_pct: t("lighting.blue"),
-    white_pct: t("lighting.white"),
-  };
+  const labels = channelLabels(t);
   const rows = CHANNEL_KEYS.map((channel) => ({
     channel,
     label: labels[channel],

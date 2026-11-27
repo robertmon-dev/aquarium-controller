@@ -39,6 +39,7 @@ export type { WaterLevelCardData, WaterLevelChip } from "./water-level";
 
 export {
   CHANNEL_KEYS,
+  channelLabels,
   channelRequest,
   durationChoices,
   LIGHTING_PROFILES,
