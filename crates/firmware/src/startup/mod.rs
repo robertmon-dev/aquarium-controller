@@ -20,7 +20,7 @@ use tracing::info;
 
 use self::control::{Heaters, Pumps, Reservoir};
 use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
-use crate::board::Board;
+use crate::board::{Board, I2cBus};
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
 use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
@@ -128,8 +128,18 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         (None, _) => (None, None),
     };
 
+    let needs_i2c = components.ph.is_initialized()
+        || components.tds.is_initialized()
+        || components.water_level.is_initialized();
+    let i2c = needs_i2c.then(|| board.i2c.open()).transpose()?;
+
     let levels = Arc::new(InMemoryWaterLevelStore::new());
-    let level_loop = sensors::levels(board.levels, Arc::clone(&levels))?;
+    let expander = match (i2c.as_ref(), components.water_level.is_initialized()) {
+        (Some(bus), true) => Some(I2cBus::open_expander(bus.clone())?),
+        _ => None,
+    };
+    let level_loop = expander.and_then(|exp| sensors::levels(exp, Arc::clone(&levels)));
+
     let calibration = sensors::calibration(nvs_partition.clone())?;
     let heaters = Heaters::load(nvs_partition.clone())?;
     let (heater_task, _idle_ssr) = heaters.task(board.heaters, &store)?;
@@ -165,7 +175,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         reservoir.service.change_signal(),
         flood_heartbeat,
     );
-    let analog = sensors::analog(board.analog)?;
+    let analog = i2c.and_then(sensors::analog);
     let collector = if components.telemetry.is_initialized() {
         Some(TelemetryCollector::new(
             TelemetrySources {

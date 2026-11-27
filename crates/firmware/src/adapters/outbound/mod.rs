@@ -1,7 +1,7 @@
-pub mod ads1115;
 pub mod ds18b20;
 #[cfg(target_os = "espidf")]
 pub mod flood;
+pub mod i2c;
 pub mod influx;
 pub mod lighting;
 pub mod nvs_blob;

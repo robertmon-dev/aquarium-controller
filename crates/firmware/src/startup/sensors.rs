@@ -10,19 +10,20 @@ use aquarium_core::ports::outbound::{
     TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSampleSink, WaterLevelPins,
     WaterLevelSink, WaterLevelSource,
 };
-use esp_idf_hal::gpio::AnyInputPin;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use tracing::info;
 
-use aquarium_controller::adapters::outbound::ads1115::AnalogFrontEnd;
 use aquarium_controller::adapters::outbound::ds18b20::Ds18b20Adapter;
+use aquarium_controller::adapters::outbound::i2c::ads1115::AnalogFrontEnd;
+use aquarium_controller::adapters::outbound::i2c::mcp23017::Mcp23017;
+use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
 use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 
-use crate::board::{AnalogBus, TemperaturePin};
+use crate::board::{I2cBus, TemperaturePin};
 use crate::SETTINGS;
 
 pub(super) fn temperature(pin: TemperaturePin) -> anyhow::Result<TemperatureSource<'static>> {
@@ -45,46 +46,43 @@ pub(super) fn temperature(pin: TemperaturePin) -> anyhow::Result<TemperatureSour
     })
 }
 
-pub(super) fn analog(bus: AnalogBus) -> anyhow::Result<Option<AnalogFrontEnd<'static>>> {
+pub(super) fn analog(bus: SharedI2c<'static>) -> Option<AnalogFrontEnd<'static>> {
     let components = &SETTINGS.components;
-    Ok(
-        if components.ph.is_initialized() || components.tds.is_initialized() {
-            let front_end = bus
-                .open(
-                    SETTINGS
-                        .sensors
-                        .analog
-                        .ph_channel
-                        .filter(|_| components.ph.is_running()),
-                    SETTINGS
-                        .sensors
-                        .analog
-                        .tds_channel
-                        .filter(|_| components.tds.is_running()),
-                )
-                .context("Failed to initialize the ADS1115 front end")?;
 
-            info!(
-                ph = components.ph.is_running(),
-                tds = components.tds.is_running(),
-                "ADS1115 front end ready"
-            );
+    if components.ph.is_initialized() || components.tds.is_initialized() {
+        let front_end = I2cBus::open_analog(
+            bus,
+            SETTINGS
+                .sensors
+                .analog
+                .ph_channel
+                .filter(|_| components.ph.is_running()),
+            SETTINGS
+                .sensors
+                .analog
+                .tds_channel
+                .filter(|_| components.tds.is_running()),
+        );
 
-            Some(front_end)
-        } else {
-            None
-        },
-    )
+        info!(
+            ph = components.ph.is_running(),
+            tds = components.tds.is_running(),
+            "ADS1115 front end ready"
+        );
+
+        Some(front_end)
+    } else {
+        None
+    }
 }
 
 pub(super) fn levels(
-    inputs: [AnyInputPin<'static>; 8],
+    expander: Mcp23017<'static>,
     levels: Arc<InMemoryWaterLevelStore>,
-) -> anyhow::Result<Option<impl Future<Output = ()>>> {
+) -> Option<impl Future<Output = ()>> {
     let components = &SETTINGS.components;
     let sampler = if components.water_level.is_initialized() {
-        let pins =
-            Xkc25Adapter::new(inputs).context("Failed to initialize XKC-Y25 level inputs")?;
+        let pins = Xkc25Adapter::new(expander, [0, 1, 2, 3, 4, 5, 6, 7]);
 
         Some(WaterLevelSampler::new(
             pins,
@@ -96,7 +94,7 @@ pub(super) fn levels(
         None
     };
 
-    Ok(match (sampler, components.water_level.is_running()) {
+    match (sampler, components.water_level.is_running()) {
         (Some(sampler), true) => {
             info!("Water level sensors ready");
             Some(level_task(sampler))
@@ -106,7 +104,7 @@ pub(super) fn levels(
             None
         }
         (None, _) => None,
-    })
+    }
 }
 
 pub(super) fn calibration(

@@ -43,7 +43,7 @@ async fn run() -> anyhow::Result<()> {
     match SETTINGS.run_mode {
         RunMode::Normal => startup::run(board).await,
         RunMode::RomDiscovery => diagnostics::discover_roms(&mut board.temperature.open()?).await,
-        RunMode::AdcProbe => diagnostics::adc_probe(board.analog).await,
+        RunMode::AdcProbe => diagnostics::adc_probe(board.i2c).await,
         RunMode::SsrProbe => diagnostics::ssr_probe(&mut board.heaters.open()?).await,
         RunMode::RelayProbe => {
             diagnostics::probe_relays(&mut board.pumps.open()?, &mut board.reservoir.open()?).await

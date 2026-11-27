@@ -1,12 +1,14 @@
 use anyhow::Context;
-use aquarium_controller::adapters::outbound::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::ds18b20::OneWireBus;
+use aquarium_controller::adapters::outbound::i2c::ads1115::{Ads1115Bus, AnalogFrontEnd};
+use aquarium_controller::adapters::outbound::i2c::mcp23017::Mcp23017;
+use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
 use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
 use aquarium_core::protocol::ads1115::Channel;
 use esp_idf_hal::gpio::{
-    AnyInputPin, Gpio1, Gpio16, Gpio17, Gpio18, Gpio2, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42,
-    Gpio47, Gpio48, Gpio5, Gpio6, Gpio7, Gpio8, Gpio9,
+    Gpio1, Gpio16, Gpio17, Gpio18, Gpio2, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42, Gpio47, Gpio48,
+    Gpio5, Gpio6, Gpio7, Gpio8, Gpio9,
 };
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
 use esp_idf_hal::ledc::{CHANNEL0, CHANNEL1, TIMER0};
@@ -18,16 +20,18 @@ use esp_idf_hal::units::FromValueType;
 use crate::SETTINGS;
 
 const I2C_BAUDRATE_KHZ: u32 = 400;
+const MCP23017_ADDRESS: u8 = 0x20;
+const EXPANDER_INPUT_MASK: u16 = 0xFFFF;
+const EXPANDER_PULLUP_MASK: u16 = 0x00FF;
 
 pub struct Board {
+    pub i2c: I2cBus,
     pub pumps: PumpPins,
     pub reservoir: ReservoirPins,
     pub flood: (Gpio38<'static>, Gpio48<'static>),
     pub heaters: HeaterPins,
     pub lighting: LightingPins,
     pub temperature: TemperaturePin,
-    pub levels: [AnyInputPin<'static>; 8],
-    pub analog: AnalogBus,
     pub modem: Modem<'static>,
     pub twdt: TWDT<'static>,
 }
@@ -36,6 +40,7 @@ impl From<Peripherals> for Board {
     fn from(peripherals: Peripherals) -> Self {
         let pins = peripherals.pins;
         Self {
+            i2c: I2cBus(peripherals.i2c0, pins.gpio8, pins.gpio9),
             pumps: PumpPins(pins.gpio5, pins.gpio6, pins.gpio7, pins.gpio16),
             reservoir: ReservoirPins(pins.gpio40, pins.gpio41, pins.gpio42, pins.gpio47),
             flood: (pins.gpio38, pins.gpio48),
@@ -48,17 +53,6 @@ impl From<Peripherals> for Board {
                 rgb_pin: pins.gpio2,
             },
             temperature: TemperaturePin(pins.gpio4),
-            levels: [
-                pins.gpio11.degrade_input(),
-                pins.gpio12.degrade_input(),
-                pins.gpio13.degrade_input(),
-                pins.gpio14.degrade_input(),
-                pins.gpio15.degrade_input(),
-                pins.gpio21.degrade_input(),
-                pins.gpio10.degrade_input(),
-                pins.gpio39.degrade_input(),
-            ],
-            analog: AnalogBus(peripherals.i2c0, pins.gpio8, pins.gpio9),
             modem: peripherals.modem,
             twdt: peripherals.twdt,
         }
@@ -117,26 +111,41 @@ impl TemperaturePin {
     }
 }
 
-pub struct AnalogBus(I2C0<'static>, Gpio8<'static>, Gpio9<'static>);
+pub struct I2cBus(I2C0<'static>, Gpio8<'static>, Gpio9<'static>);
 
-impl AnalogBus {
-    pub fn open(
-        self,
-        ph_channel: Option<Channel>,
-        tds_channel: Option<Channel>,
-    ) -> anyhow::Result<AnalogFrontEnd<'static>> {
+impl I2cBus {
+    pub fn open(self) -> anyhow::Result<SharedI2c<'static>> {
         let Self(i2c, sda, scl) = self;
-        let analog = &SETTINGS.sensors.analog;
         let config = I2cConfig::new().baudrate(I2C_BAUDRATE_KHZ.kHz().into());
 
-        let driver = I2cDriver::new(i2c, sda, scl, &config)
-            .context("Failed to initialize the I2C bus for the ADS1115")?;
+        let driver =
+            I2cDriver::new(i2c, sda, scl, &config).context("Failed to initialize the I2C bus")?;
 
-        Ok(AnalogFrontEnd::new(
-            Ads1115Bus::new(driver, analog.address, analog.gain, analog.data_rate),
+        Ok(SharedI2c::new(driver))
+    }
+
+    pub fn open_analog(
+        bus: SharedI2c<'static>,
+        ph_channel: Option<Channel>,
+        tds_channel: Option<Channel>,
+    ) -> AnalogFrontEnd<'static> {
+        let analog = &SETTINGS.sensors.analog;
+
+        AnalogFrontEnd::new(
+            Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
             ph_channel,
             tds_channel,
             analog.samples_per_reading,
-        ))
+        )
+    }
+
+    pub fn open_expander(bus: SharedI2c<'static>) -> anyhow::Result<Mcp23017<'static>> {
+        Mcp23017::new(
+            bus,
+            MCP23017_ADDRESS,
+            EXPANDER_INPUT_MASK,
+            EXPANDER_PULLUP_MASK,
+        )
+        .context("Failed to initialize the MCP23017 expander")
     }
 }
