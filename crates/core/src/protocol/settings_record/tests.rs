@@ -191,3 +191,37 @@ fn a_damaged_record_does_not_fall_back_to_older_values() {
 
     assert_eq!(restored, Restored::Missing);
 }
+
+mod lighting {
+    use super::super::{decode_lighting, encode_lighting};
+    use crate::domain::lighting::{ChannelLevels, LightingPalette};
+
+    #[test]
+    fn a_palette_round_trips() {
+        let palette = LightingPalette {
+            moonlight: ChannelLevels::new(1, 2, 3, 4),
+            ..LightingPalette::DEFAULT
+        };
+        let bytes = encode_lighting(&palette).expect("encodes");
+        assert_eq!(decode_lighting(&bytes), Some(palette));
+    }
+
+    #[test]
+    fn an_out_of_range_palette_is_not_restored() {
+        let mut palette = LightingPalette::DEFAULT;
+        palette.daylight.white_pct = 120;
+        let bytes = encode_lighting(&palette).expect("encodes");
+        assert_eq!(decode_lighting(&bytes), None);
+    }
+
+    #[test]
+    fn garbage_is_not_restored() {
+        assert_eq!(decode_lighting(b"not json"), None);
+    }
+
+    #[test]
+    fn a_record_from_another_version_is_not_restored() {
+        let bytes = br#"{"version":99,"palette":{"sunrise":{"red_pct":0,"green_pct":0,"blue_pct":0,"white_pct":0},"daylight":{"red_pct":0,"green_pct":0,"blue_pct":0,"white_pct":0},"sunset":{"red_pct":0,"green_pct":0,"blue_pct":0,"white_pct":0},"moonlight":{"red_pct":0,"green_pct":0,"blue_pct":0,"white_pct":0}}}"#;
+        assert_eq!(decode_lighting(bytes), None);
+    }
+}
