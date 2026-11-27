@@ -27,7 +27,6 @@ use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 use aquarium_core::application::lighting::lighting_loop;
-use std::time::Duration;
 use tokio::sync::Notify;
 
 pub(super) async fn run(board: Board) -> anyhow::Result<()> {
@@ -92,7 +91,9 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let led_timer = components
         .lighting
         .is_initialized()
-        .then(|| LedMosfetOutputs::create_timer(board.lighting.timer, 5_000))
+        .then(|| {
+            LedMosfetOutputs::create_timer(board.lighting.timer, SETTINGS.lighting.pwm_freq_hz)
+        })
         .transpose()
         .context("Failed to initialize LED PWM timer")?;
     let led_outputs = led_timer
@@ -117,7 +118,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
                 outputs,
                 lighting.change_signal(),
                 Arc::clone(&lighting_republish),
-                Duration::from_secs(30),
+                SETTINGS.lighting.update_interval,
             )),
             None,
         ),
