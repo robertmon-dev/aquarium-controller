@@ -18,6 +18,7 @@ use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
 use esp_idf_hal::ledc::{CHANNEL0, CHANNEL1, CHANNEL2, CHANNEL3, TIMER0};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_hal::sys::EspError;
 use esp_idf_hal::task::watchdog::TWDT;
 use esp_idf_hal::units::FromValueType;
 
@@ -92,10 +93,14 @@ impl RgbwPins {
         ));
 
         let bank = LedcBank::new([
-            pwm::off_channel(self.red.0, timer, self.red.1)?,
-            pwm::off_channel(self.green.0, timer, self.green.1)?,
-            pwm::off_channel(self.blue.0, timer, self.blue.1)?,
-            pwm::off_channel(self.white.0, timer, self.white.1)?,
+            pwm::off_channel(self.red.0, timer, self.red.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.green.0, timer, self.green.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.blue.0, timer, self.blue.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.white.0, timer, self.white.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
         ]);
 
         Ok(RgbwOutputs::new(bank))
@@ -114,11 +119,15 @@ pub struct ReservedOutputPins(Gpio15<'static>, Gpio21<'static>);
 
 impl ReservedOutputPins {
     pub fn hold_low(self) -> anyhow::Result<[PinDriver<'static, Output>; 2]> {
-        let mut fans = PinDriver::output(self.0)?;
-        fans.set_low()?;
-        let mut spare = PinDriver::output(self.1)?;
-        spare.set_low()?;
-        Ok([fans, spare])
+        let drive = || -> Result<_, EspError> {
+            let mut fans = PinDriver::output(self.0)?;
+            fans.set_low()?;
+            let mut spare = PinDriver::output(self.1)?;
+            spare.set_low()?;
+            Ok([fans, spare])
+        };
+
+        drive().context("Failed to hold the reserved MOSFET outputs low")
     }
 }
 

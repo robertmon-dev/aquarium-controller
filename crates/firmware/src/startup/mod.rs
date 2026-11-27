@@ -27,6 +27,7 @@ use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
 
 pub(super) async fn run(board: Board) -> anyhow::Result<()> {
+    let _reserved_outputs = board.reserved.hold_low()?;
     let components = &SETTINGS.components;
     let flood_inputs = components
         .flood
@@ -87,7 +88,6 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let (lighting_task, _idle_rgbw) = lighting.task(board.rgbw, Arc::clone(&clock))?;
     let sump_light = SumpLight::new();
     let (sump_light_task, _idle_sump_light) = sump_light.task(board.sump_light)?;
-    let _reserved_outputs = board.reserved.hold_low()?;
 
     let needs_i2c = components.ph.is_initialized()
         || components.tds.is_initialized()

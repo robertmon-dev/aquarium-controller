@@ -43,7 +43,7 @@ mod hw {
         }
 
         pub fn set_pct(&mut self, index: usize, pct: u8) -> Result<(), &'static str> {
-            let driver = &mut self.channels[index];
+            let driver = self.channels.get_mut(index).ok_or("no such PWM channel")?;
             let duty = duty_for_pct(pct, driver.get_max_duty());
             driver
                 .set_duty(duty)
