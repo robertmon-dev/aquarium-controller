@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 use tokio::task::LocalSet;
+use tokio::time::timeout;
 
 use super::{lighting_loop, LightingService};
 use crate::adapters::outbound::memory::VolatileLightingStore;
@@ -304,6 +305,91 @@ async fn a_refused_write_is_retried_and_not_published() {
 
             assert_eq!(outputs.written(), vec![LightingPalette::DEFAULT.daylight]);
             assert!(service.lighting_status().available);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_apply_asks_for_a_republish() {
+    LocalSet::new()
+        .run_until(async {
+            let service = service();
+            let outputs = RecordingOutputs::default();
+            let republish = Arc::new(Notify::new());
+            spawn(&service, &outputs, &republish);
+            settle().await;
+
+            assert!(timeout(Duration::from_millis(1), republish.notified())
+                .await
+                .is_ok());
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_tick_does_not_ask_for_a_republish() {
+    LocalSet::new()
+        .run_until(async {
+            let service = service();
+            let outputs = RecordingOutputs::default();
+            let republish = Arc::new(Notify::new());
+            spawn(&service, &outputs, &republish);
+            settle().await;
+            timeout(Duration::from_millis(1), republish.notified())
+                .await
+                .expect("first apply notifies");
+
+            tokio::time::sleep(Duration::from_secs(31)).await;
+            settle().await;
+
+            assert!(timeout(Duration::from_millis(1), republish.notified())
+                .await
+                .is_err());
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn clearing_an_override_restores_the_schedule_without_waiting_for_the_tick() {
+    LocalSet::new()
+        .run_until(async {
+            let service = service();
+            let outputs = RecordingOutputs::default();
+            spawn(&service, &outputs, &Arc::new(Notify::new()));
+            settle().await;
+            service.set_override(LightingTarget::Channels(MOON), None);
+            settle().await;
+            assert_eq!(outputs.written().last(), Some(&MOON));
+
+            service.clear_override();
+            settle().await;
+
+            assert_eq!(
+                outputs.written().last(),
+                Some(&LightingPalette::DEFAULT.daylight)
+            );
+            let status = service.lighting_status();
+            assert!(!status.override_active);
+            assert_eq!(status.profile, LightingProfile::Daylight);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refused_write_keeps_the_previously_published_status() {
+    LocalSet::new()
+        .run_until(async {
+            let service = service();
+            let outputs = RecordingOutputs::default();
+            spawn(&service, &outputs, &Arc::new(Notify::new()));
+            settle().await;
+            let published = service.lighting_status();
+
+            outputs.fail(true);
+            service.set_override(LightingTarget::Channels(MOON), None);
+            settle().await;
+
+            assert_eq!(service.lighting_status(), published);
         })
         .await;
 }

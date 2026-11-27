@@ -107,8 +107,34 @@ fn every_month_has_sunrise_before_sunset() {
         let (sunrise, sunset) = LightingSchedule::get_solar_bounds(month);
         assert!(sunrise < sunset, "month {month}: {sunrise} !< {sunset}");
         assert!(
-            sunset - sunrise > 120,
-            "month {month}: window shorter than 2 h"
+            sunset - sunrise >= 2 * RAMP_MINUTES,
+            "month {month}: window shorter than both ramps"
+        );
+    }
+}
+
+#[test]
+fn every_minute_of_every_month_follows_the_daily_profile_order() {
+    for month in 1..=12 {
+        let mut order: Vec<LightingProfile> = Vec::new();
+        for minute in 0..1440 {
+            let profile = LightingSchedule::new()
+                .evaluate(minute, month, &palette())
+                .profile;
+            if order.last() != Some(&profile) {
+                order.push(profile);
+            }
+        }
+        assert_eq!(
+            order,
+            vec![
+                LightingProfile::Off,
+                LightingProfile::Sunrise,
+                LightingProfile::Daylight,
+                LightingProfile::Sunset,
+                LightingProfile::Off,
+            ],
+            "month {month}"
         );
     }
 }

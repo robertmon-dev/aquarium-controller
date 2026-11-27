@@ -144,14 +144,16 @@ fn health(snapshot: &TankTelemetryDto) -> Fields {
 }
 
 fn lighting(snapshot: &TankTelemetryDto) -> Fields {
-    let channels = snapshot.lighting.channels;
+    let lighting = &snapshot.lighting;
     let mut fields = Fields::new();
-    fields.string("profile", profile_name(snapshot.lighting.profile));
-    fields.integer("red_pct", channels.red_pct);
-    fields.integer("green_pct", channels.green_pct);
-    fields.integer("blue_pct", channels.blue_pct);
-    fields.integer("white_pct", channels.white_pct);
-    fields.boolean("override", snapshot.lighting.override_active);
+    if lighting.available {
+        fields.string("profile", profile_name(lighting.profile));
+        fields.integer("red_pct", lighting.channels.red_pct);
+        fields.integer("green_pct", lighting.channels.green_pct);
+        fields.integer("blue_pct", lighting.channels.blue_pct);
+        fields.integer("white_pct", lighting.channels.white_pct);
+        fields.boolean("override", lighting.override_active);
+    }
     fields
 }
 

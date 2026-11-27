@@ -1,7 +1,7 @@
 use super::*;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
 use crate::domain::lighting::ChannelLevels;
-use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
+use crate::domain::metrics::{LightingMetricsDto, LightingProfile, SystemMode, WaterLevelEntryDto};
 use crate::domain::pump::{
     OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState,
     PumpsTelemetry, Supervision,
@@ -41,6 +41,7 @@ fn populated() -> TankTelemetryDto {
 
     dto.lighting.profile = LightingProfile::Daylight;
     dto.lighting.channels = ChannelLevels::new(5, 10, 25, 60);
+    dto.lighting.available = true;
 
     dto.water_level.available = true;
     dto.water_level.sump_pump = WaterLevelEntryDto {
@@ -619,6 +620,16 @@ fn unavailable_water_levels_write_no_sensor_lines_and_no_level_based_ato_fields(
         encoded.contains("aquarium_ato pump_active=true,last_fill_ms=0i "),
         "{encoded}"
     );
+}
+
+#[test]
+fn unavailable_lighting_writes_no_lighting_line() {
+    let mut dto = populated();
+    dto.lighting = LightingMetricsDto::UNAVAILABLE;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(!encoded.contains("aquarium_lighting"), "{encoded}");
 }
 
 #[test]
