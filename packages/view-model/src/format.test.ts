@@ -7,7 +7,6 @@ import {
   formatLitresPerHour,
   formatMicrosiemens,
   formatPercent,
-  formatPercentPair,
   formatPh,
   formatPpm,
   formatRssi,
@@ -50,12 +49,6 @@ describe("formatPercent", () => {
 
   it("renders null as an em dash", () => {
     expect(formatPercent(null)).toBe(EM_DASH);
-  });
-});
-
-describe("formatPercentPair", () => {
-  it("joins two channels", () => {
-    expect(formatPercentPair(60, 40)).toBe("60% / 40%");
   });
 });
 

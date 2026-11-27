@@ -2,9 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::heater::{HeaterSettings, ZoneSettings};
+use crate::domain::lighting::LightingPalette;
 
 pub const HEATER_RECORD_KEY: &str = "heat_rec";
 pub const CALIBRATION_RECORD_KEY: &str = "cal_rec";
+pub const LIGHTING_RECORD_KEY: &str = "light_rec";
 
 const RECORD_VERSION: u8 = 1;
 const LEGACY_LAYOUT_VERSION: u8 = 1;
@@ -50,6 +52,12 @@ struct CalibrationRecord {
     ph_celsius: u32,
     makeup_celsius: u32,
     tds_factor: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LightingRecord {
+    version: u8,
+    palette: LightingPalette,
 }
 
 fn encode<T: Serialize>(record: &T) -> Result<Vec<u8>, &'static str> {
@@ -118,6 +126,23 @@ pub fn decode_calibration(bytes: &[u8]) -> Option<Calibration> {
     };
 
     value.validate().ok().map(|()| value)
+}
+
+pub fn encode_lighting(palette: &LightingPalette) -> Result<Vec<u8>, &'static str> {
+    encode(&LightingRecord {
+        version: RECORD_VERSION,
+        palette: *palette,
+    })
+}
+
+pub fn decode_lighting(bytes: &[u8]) -> Option<LightingPalette> {
+    let record = serde_json::from_slice::<LightingRecord>(bytes).ok()?;
+
+    if record.version != RECORD_VERSION {
+        return None;
+    }
+
+    record.palette.validate().ok().map(|()| record.palette)
 }
 
 pub fn legacy_heater(

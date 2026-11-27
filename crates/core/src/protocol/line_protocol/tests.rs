@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::heater::{HeaterFault, HeaterMode, HeaterStatus, HeatersStatus};
-use crate::domain::metrics::{LightingProfile, SystemMode, WaterLevelEntryDto};
+use crate::domain::lighting::ChannelLevels;
+use crate::domain::metrics::{LightingMetricsDto, LightingProfile, SystemMode, WaterLevelEntryDto};
 use crate::domain::pump::{
     OperationEvent, OperationKind, OperationRecord, OperationResult, OperationState,
     PumpsTelemetry, Supervision,
@@ -9,6 +10,7 @@ use crate::domain::reservoir::{
     FillEvent, FillFault, FillPhase, FillRecord, FillResult, FillTrigger, ReservoirTelemetry,
     RunningMarker,
 };
+use crate::domain::sump_light::SumpLightStatus;
 
 fn populated() -> TankTelemetryDto {
     let mut dto = TankTelemetryDto::empty();
@@ -39,8 +41,14 @@ fn populated() -> TankTelemetryDto {
     dto.temperature.sensors_healthy = true;
 
     dto.lighting.profile = LightingProfile::Daylight;
-    dto.lighting.channel_white_pct = 60;
-    dto.lighting.channel_rgb_pct = 40;
+    dto.lighting.channels = ChannelLevels::new(5, 10, 25, 60);
+    dto.lighting.available = true;
+
+    dto.sump_light = SumpLightStatus {
+        on: false,
+        expires_in_s: None,
+        available: true,
+    };
 
     dto.water_level.available = true;
     dto.water_level.sump_pump = WaterLevelEntryDto {
@@ -130,7 +138,7 @@ fn the_lighting_profile_is_a_quoted_string() {
 
     assert!(
         encoded.contains(
-            "aquarium_lighting profile=\"daylight\",white_pct=60i,rgb_pct=40i,override=false"
+            "aquarium_lighting profile=\"daylight\",red_pct=5i,green_pct=10i,blue_pct=25i,white_pct=60i,override=false,sump_light=false 1750000000"
         ),
         "got: {encoded}"
     );
@@ -619,6 +627,50 @@ fn unavailable_water_levels_write_no_sensor_lines_and_no_level_based_ato_fields(
         encoded.contains("aquarium_ato pump_active=true,last_fill_ms=0i "),
         "{encoded}"
     );
+}
+
+#[test]
+fn an_unavailable_sump_light_is_left_out_of_the_lighting_line() {
+    let mut dto = populated();
+    dto.sump_light = SumpLightStatus::UNAVAILABLE;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains(
+            "aquarium_lighting profile=\"daylight\",red_pct=5i,green_pct=10i,blue_pct=25i,white_pct=60i,override=false 1750000000"
+        ),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn the_sump_light_is_written_while_the_main_lighting_is_unavailable() {
+    let mut dto = populated();
+    dto.lighting = LightingMetricsDto::UNAVAILABLE;
+    dto.sump_light = SumpLightStatus {
+        on: true,
+        expires_in_s: Some(600),
+        available: true,
+    };
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(
+        encoded.contains("aquarium_lighting sump_light=true 1750000000"),
+        "got: {encoded}"
+    );
+}
+
+#[test]
+fn unavailable_lighting_and_sump_light_write_no_lighting_line() {
+    let mut dto = populated();
+    dto.lighting = LightingMetricsDto::UNAVAILABLE;
+    dto.sump_light = SumpLightStatus::UNAVAILABLE;
+
+    let encoded = encode(&dto).expect("encodes");
+
+    assert!(!encoded.contains("aquarium_lighting"), "{encoded}");
 }
 
 #[test]

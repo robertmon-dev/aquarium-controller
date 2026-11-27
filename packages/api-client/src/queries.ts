@@ -15,6 +15,8 @@ import type {
   LightingScheduleDto,
   ProbeVoltagesDto,
   SetOverrideRequest,
+  SetSumpLightRequest,
+  SumpLightStatus,
   SystemHealthDto,
   TankTelemetryDto,
 } from "./generated";
@@ -148,5 +150,28 @@ export function useResetFlood(
     mutationFn: () => createClient(transport).resetFlood(),
     onSuccess: () =>
       client.invalidateQueries({ queryKey: queryKeys.telemetry(transport.device) }),
+  });
+}
+
+export function useSumpLight(
+  transport: Transport,
+): UseQueryResult<SumpLightStatus> {
+  return useQuery({
+    queryKey: queryKeys.sumpLight(transport.device),
+    queryFn: () => createClient(transport).sumpLight(),
+  });
+}
+
+export function useSetSumpLight(
+  transport: Transport,
+): UseMutationResult<SumpLightStatus, Error, SetSumpLightRequest> {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: SetSumpLightRequest) =>
+      createClient(transport).setSumpLight(body),
+    onSuccess: (status) => {
+      queryClient.setQueryData(queryKeys.sumpLight(transport.device), status);
+    },
   });
 }

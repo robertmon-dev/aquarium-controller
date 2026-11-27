@@ -8,7 +8,7 @@ function renderSliders(onChange = vi.fn(), onCommit = vi.fn()) {
   render(
     <LocaleProvider adapter={memoryAdapter({ stored: "en", system: "en" })}>
       <ChannelSliders
-        levels={{ white_pct: 40, rgb_pct: 20 }}
+        levels={{ red_pct: 10, green_pct: 20, blue_pct: 30, white_pct: 40 }}
         onChange={onChange}
         onCommit={onCommit}
       />
@@ -21,16 +21,18 @@ describe("ChannelSliders", () => {
   it("renders one slider per channel at its current value", async () => {
     renderSliders();
 
-    await waitFor(() => expect(screen.getAllByRole("slider").length).toBe(2));
-    expect(screen.getByText("40%")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByRole("slider").length).toBe(4));
+    expect(screen.getByText("10%")).toBeTruthy();
     expect(screen.getByText("20%")).toBeTruthy();
+    expect(screen.getByText("30%")).toBeTruthy();
+    expect(screen.getByText("40%")).toBeTruthy();
   });
 
   it("reports a moved channel without committing until release", async () => {
     const { onChange, onCommit } = renderSliders();
 
-    await waitFor(() => expect(screen.getAllByRole("slider").length).toBe(2));
-    const [white] = screen.getAllByRole("slider");
+    await waitFor(() => expect(screen.getAllByRole("slider").length).toBe(4));
+    const white = screen.getAllByRole("slider")[3];
     if (!white) throw new Error("no slider rendered");
 
     fireEvent.change(white, { target: { value: "80" } });

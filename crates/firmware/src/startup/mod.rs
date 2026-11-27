@@ -1,13 +1,12 @@
 mod control;
+mod lighting;
 mod monitoring;
 mod network;
 mod sensors;
 
 use anyhow::Context;
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
-use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, InMemoryWaterLevelStore,
-};
+use aquarium_core::adapters::outbound::memory::{InMemoryTelemetryStore, InMemoryWaterLevelStore};
 use aquarium_core::application::pump::{startup_pump_outputs, stored_flood_latch};
 use aquarium_core::application::{TelemetryCollector, TelemetryConfig, TelemetrySources};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -19,17 +18,16 @@ use tokio::net::TcpListener;
 use tracing::info;
 
 use self::control::{Heaters, Pumps, Reservoir};
+use self::lighting::{Lighting, SumpLight};
 use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
 use crate::board::Board;
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
-use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
 use aquarium_controller::infrastructure::clock::SystemClock;
 use aquarium_controller::infrastructure::system_health::EspSystemHealth;
-use aquarium_core::application::lighting::lighting_loop;
-use tokio::sync::Notify;
 
 pub(super) async fn run(board: Board) -> anyhow::Result<()> {
+    let _reserved_outputs = board.reserved.hold_low()?;
     let components = &SETTINGS.components;
     let flood_inputs = components
         .flood
@@ -86,48 +84,10 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     );
     let store = Arc::new(InMemoryTelemetryStore::new());
 
-    let lighting = Arc::new(InMemoryLightingStore::new());
-    let lighting_republish = Arc::new(Notify::new());
-    let led_timer = components
-        .lighting
-        .is_initialized()
-        .then(|| {
-            LedMosfetOutputs::create_timer(board.lighting.timer, SETTINGS.lighting.pwm_freq_hz)
-        })
-        .transpose()
-        .context("Failed to initialize LED PWM timer")?;
-    let led_outputs = led_timer
-        .as_ref()
-        .map(|timer| {
-            LedMosfetOutputs::new(
-                timer,
-                board.lighting.white_ch,
-                board.lighting.white_pin,
-                board.lighting.rgb_ch,
-                board.lighting.rgb_pin,
-            )
-        })
-        .transpose()
-        .context("Failed to initialize LED MOSFET outputs")?;
-
-    let (lighting_loop, _idle_leds) = match (led_outputs, components.lighting.is_running()) {
-        (Some(outputs), true) => (
-            Some(lighting_loop(
-                Arc::clone(&clock),
-                Arc::clone(&lighting),
-                outputs,
-                lighting.change_signal(),
-                Arc::clone(&lighting_republish),
-                SETTINGS.lighting.update_interval,
-            )),
-            None,
-        ),
-        (Some(outputs), false) => {
-            info!("LED outputs initialized but lighting loop not running");
-            (None, Some(outputs))
-        }
-        (None, _) => (None, None),
-    };
+    let lighting = Lighting::load(nvs_partition.clone())?;
+    let (lighting_task, _idle_rgbw) = lighting.task(board.rgbw, Arc::clone(&clock))?;
+    let sump_light = SumpLight::new();
+    let (sump_light_task, _idle_sump_light) = sump_light.task(board.sump_light)?;
 
     let needs_i2c = components.ph.is_initialized()
         || components.tds.is_initialized()
@@ -179,13 +139,14 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
                 temperature,
                 clock: Arc::clone(&clock),
                 health: EspSystemHealth,
-                overrides: Arc::clone(&lighting),
+                lighting: Arc::clone(&lighting.service),
                 levels: Arc::clone(&levels),
                 analog,
                 calibration: Arc::clone(&calibration),
                 heaters: Arc::clone(&heaters.service),
                 pumps: Arc::clone(&pumps.service),
                 reservoir: Arc::clone(&reservoir.service),
+                sump_light: Arc::clone(&sump_light.service),
             },
             Arc::clone(&store),
             TelemetryConfig {
@@ -198,15 +159,11 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         None
     };
 
-    let lighting_changed = if lighting_loop.is_some() {
-        lighting_republish
-    } else {
-        lighting.change_signal()
-    };
     let telemetry_loop = match (collector, components.telemetry.is_running()) {
         (Some(collector), true) => Some(sensors::sensor_task(
             collector,
-            lighting_changed,
+            Arc::clone(&lighting.republish),
+            Arc::clone(&sump_light.republish),
             Arc::clone(&heaters.republish),
             Arc::clone(&pumps.republish),
             Arc::clone(&reservoir.republish),
@@ -232,11 +189,12 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         (Some(listener), true) => Some(http::run(
             listener,
             Arc::clone(&store),
-            Arc::clone(&lighting),
+            Arc::clone(&lighting.service),
             Arc::clone(&calibration),
             Arc::clone(&heaters.service),
             Arc::clone(&pumps.service),
             Arc::clone(&reservoir.service),
+            Arc::clone(&sump_light.service),
             HttpConfig {
                 token: SETTINGS.http.token.expose(),
                 max_connections: SETTINGS.http.max_connections,
@@ -254,7 +212,8 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let health_loop = components.health.is_running().then(health_watch);
 
     tokio::join!(
-        optional(lighting_loop),
+        optional(lighting_task),
+        optional(sump_light_task),
         optional(watchdog_task),
         optional(telemetry_loop),
         optional(level_loop),

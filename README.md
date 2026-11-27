@@ -162,25 +162,35 @@ supply ─┬─ RO valve (GPIO40) ─ booster (GPIO41) ─ RO membrane ─┐
                                                                  mixer (GPIO47), TDS (A0)
 ```
 
-`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads. GPIO1 and GPIO2 drive the [LED MOSFETs](#led-mosfet-outputs).
+`RunMode::RelayProbe` exercises the pump module first. On module 2 it opens RO, starts the booster two seconds later, stops the booster, closes RO, then cycles the tap valve and mixer individually. Verify GPIO40/41/42/47 through reset and the bootloader before connecting the loads.
 
-### LED MOSFET outputs
+### MOSFET outputs (D4184 modules)
 
-Two PWM outputs dim the lighting through a MOSFET module: one channel for the white LEDs, one for the RGB strip.
+D4184 40 V / 50 A MOSFET modules with a PC817 optocoupler on each input switch the 24 V loads. Four channels dim the RGBW main lighting, one switches the sump light, and two are reserved for the lid fans and a spare output.
 
 ```text
-ESP32-S3                               MOSFET module                 Load side
+ESP32-S3                               MOSFET module input           Load side (24 V)
 
-GPIO1  ──────────────────────────────  PWM in, channel 1             white LEDs
-GPIO2  ──────────────────────────────  PWM in, channel 2             RGB LEDs
-GND    ──────────────────────────────  GND
+GPIO10 ──────────────────────────────  IN+   channel R                main light, red
+GPIO11 ──────────────────────────────  IN+   channel G                main light, green
+GPIO12 ──────────────────────────────  IN+   channel B                main light, blue
+GPIO13 ──────────────────────────────  IN+   channel W                main light, white
+GPIO14 ──────────────────────────────  IN+   sump light               sump chamber light
+GPIO15 ──────────────────────────────  IN+   reserved                 lid fans (not controlled yet)
+GPIO21 ──────────────────────────────  IN+   reserved                 spare
+GND    ──────────────────────────────  IN−   (every module)
 ```
 
 Notes:
-* Both channels share LEDC `TIMER0` at 5 kHz (`lighting.pwm_freq_hz`) with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
-* Both outputs are driven to 0 % as soon as the firmware initialises them (`components.lighting` not `Off`). Before that the GPIOs float; fit a pull-down on each gate input if the module does not carry one.
-* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s (`lighting.update_interval`), immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
-* The supplied profile leaves `components.lighting` `Off`.
+* The optocoupler isolates the GPIOs from the 24 V side. A GPIO that floats during reset leaves the optocoupler dark and the MOSFET off, so the inputs need no pull-downs.
+* The D4184 is a logic-level MOSFET, and the module drives its gate from the 24 V side; 3.3 V on the input is enough.
+* RGBW share LEDC `TIMER0` at 1 kHz (`lighting.pwm_freq_hz`) with 12-bit resolution, on `CHANNEL0`–`CHANNEL3`. The PC817 needs tens of microseconds to switch off, so higher frequencies distort low brightness levels and heat the MOSFET. All four channels sit at 0 % once initialised.
+* Before connecting the lighting, confirm on the bench that a high input switches the MOSFET on, then find the lowest brightness at which the strip still lights evenly at 1 kHz. Raise `lighting.pwm_freq_hz` only if the module stays linear at the new frequency.
+* The sump light is a plain GPIO output, on or off. It is driven low at start unless `components.sump_light` is `Off`; then `GPIO14` floats, which the optocoupler turns into an off MOSFET.
+* In `RunMode::Normal`, `GPIO15` and `GPIO21` are driven low as the very first startup step, before any component is initialised, and held there; the lid fans stay off until fan control exists. The diagnostic run modes leave them floating, which the optocoupler keeps harmless.
+* With `components.lighting` set to `Running`, the lighting loop resolves the schedule, the active override and the stored palette every 30 s (`lighting.update_interval`), immediately after an override or the palette changes, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
+* With `components.sump_light` set to `Running`, the sump light loop drives the output a moment after each API request, switches it off when a timed request expires, and retries a refused output write every 5 s. Until the loop has published, `available` is false.
+* The supplied profile leaves `components.lighting` and `components.sump_light` `Off`. While the lighting loop is not running, telemetry reports `lighting.available: false` and the apps show lighting as unavailable instead of zero channel levels.
 
 ### Floor flood probes
 
@@ -245,8 +255,13 @@ Notes:
 | XKC-Y25 — sump return chamber, operating level | MCP23017 `GPA5` | input, expander pull-up, active-low |
 | XKC-Y25 — makeup reservoir, mid height (ready for a water change) | MCP23017 `GPA6` | input, expander pull-up, active-low |
 | XKC-Y25 — makeup reservoir, top (full) | MCP23017 `GPB0` | input, expander pull-up, active-low |
-| LED MOSFET — white channel | `GPIO1` | LEDC PWM, `TIMER0`/`CHANNEL0`, 5 kHz, 12-bit, 0 % once initialised |
-| LED MOSFET — RGB channel | `GPIO2` | LEDC PWM, `TIMER0`/`CHANNEL1`, 5 kHz, 12-bit, 0 % once initialised |
+| MOSFET — main light, red | `GPIO10` | LEDC PWM, `TIMER0`/`CHANNEL0`, 1 kHz, 12-bit, 0 % once initialised |
+| MOSFET — main light, green | `GPIO11` | LEDC PWM, `TIMER0`/`CHANNEL1`, 1 kHz, 12-bit, 0 % once initialised |
+| MOSFET — main light, blue | `GPIO12` | LEDC PWM, `TIMER0`/`CHANNEL2`, 1 kHz, 12-bit, 0 % once initialised |
+| MOSFET — main light, white | `GPIO13` | LEDC PWM, `TIMER0`/`CHANNEL3`, 1 kHz, 12-bit, 0 % once initialised |
+| MOSFET — sump light | `GPIO14` | push-pull output, low at start unless `components.sump_light` is `Off` |
+| MOSFET — lid fans (reserved) | `GPIO15` | push-pull output, held low in `RunMode::Normal` |
+| MOSFET — spare (reserved) | `GPIO21` | push-pull output, held low in `RunMode::Normal` |
 | Floor probe — under the reservoir | `GPIO38` | dry contact to ESP ground, internal pull-up, open = alarm |
 | Floor probe — under the sump | `GPIO48` | dry contact to ESP ground, internal pull-up, open = alarm |
 | Heater SSR — main tank | `GPIO17` | push-pull output, low at boot, drives the SSR input directly |
@@ -290,12 +305,13 @@ The panel refuses to capture a point while the reading is still moving. That gat
 * **Water level with fault detection:** eight XKC-Y25 inputs read through an MCP23017 expander and sampled at 10 Hz, debounced over a sample window, with flap detection that marks a chattering sensor faulty instead of acting on it.
 * **pH and TDS on one external ADC:** an ADS1115 over I2C serves both probes; 16 averaged samples per reading at 16-bit resolution. pH goes through a two-point calibration with a nominal Nernst slope and sump-temperature compensation; TDS through DFRobot's polynomial with a hand-entered compensation temperature and a correction factor.
 * **Calibration over the API, persisted in NVS:** buffer points, the top-up tank temperature and the TDS factor are set from the apps and survive a reboot. The write goes to flash before the value takes effect, so a calibration that cannot be stored is refused rather than silently lost at the next power cycle.
-* **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, and pump control.
-* **Lighting:** a seasonal schedule and overrides — a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit channel percentages, optionally time-boxed — drive two PWM channels (white, RGB) through LED MOSFETs. With the lighting loop running, an override reaches the outputs and telemetry immediately rather than waiting for the next sample tick.
+* **HTTP API + SSE:** a bearer-token-guarded `picoserve` router serving telemetry snapshots, a live `text/event-stream` feed, a health probe, lighting override control, the lighting palette, the sump light, and pump control.
+* **Lighting:** an RGBW main light follows a seasonal schedule whose sunrise, daylight, sunset and moonlight colours live in NVS and are set over the API. Overrides take a profile (`off`, `sunrise`, `daylight`, `sunset`, `moonlight`) or explicit RGBW percentages, optionally time-boxed, and reach the outputs and telemetry immediately.
+* **Sump light:** a 24 V light in the sump chamber, switched over the API with an optional auto-off time, independent of the main lighting schedule. The apps disable switching it on while its control reports `available: false`; switching it off stays possible.
 * **Makeup barrel.** The second relay module fills the barrel with RO or mixes RO and tap water to a target TDS. Telemetry includes the barrel state. InfluxDB receives snapshots in `aquarium_reservoir` and fill records in `aquarium_reservoir_fill`.
 * **Pumps, UV, top-off and water changes:** four relay channels (return pump, UV lamp, makeup pump, drain pump) with water-level interlocks, cron-scheduled or on-demand top-offs and water changes, OFF overrides, runtime counters, and checkpoints in NVS so an interrupted operation resumes after a restart.
 * **InfluxDB 2.x export:** optional, compile-time gated on the `INFLUX_*` variables being present. Snapshots are buffered and batched, with bounded retry backoff, on a dedicated worker.
-* **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, heaters, pumps, flood, reservoir, lighting, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
+* **Component modes:** every subsystem (WiFi, HTTP, telemetry, temperature, water level, pH, TDS, Influx, heaters, pumps, flood, reservoir, lighting, sump light, health) is independently `Off` / `Initialized` / `Running`, so peripherals can be brought up without being wired into the runtime — useful when bisecting a hardware fault.
 * **Secrets that do not leak:** credentials and the API token are wrapped in a `Secret` newtype whose `Debug`/`Display` redact the value.
 
 ## Installation
@@ -327,7 +343,7 @@ make flash         # build release, flash the board, attach the serial monitor
 * `make monitor` — attach the serial monitor without reflashing
 * `make size` — measure the real image against the `factory` partition and warn when headroom drops below 15%
 * `make partitions` — dump the partition table ESP-IDF actually generated, to confirm it matches `partitions.csv`
-* `make smoke IP=192.168.1.50` — end-to-end probe of a flashed device (auth, telemetry, SSE, lighting override lifecycle)
+* `make smoke IP=192.168.1.50` — end-to-end probe of a flashed device (auth, telemetry, SSE, lighting override lifecycle, sump light)
 * `make telemetry IP=...` / `make events IP=...` — pretty-print one snapshot, or follow the SSE stream
 * `make erase` — wipe the whole flash, NVS included
 * `make erase-nvs` — wipe only the NVS partition; the service step when the firmware reports the partition as unusable
@@ -362,6 +378,8 @@ Everything that is not a secret is a `const` in `crates/firmware/src/settings.rs
 
 `Settings.timezone` (a POSIX TZ string, default `CET-1CEST,M3.5.0,M10.5.0/3`) sets the local time used by the lighting schedule and the pump cron schedules.
 
+`lighting.pwm_freq_hz` (default 1 kHz) sets the RGBW PWM frequency and `lighting.update_interval` (default 30 s) how often the lighting loop re-evaluates the schedule. The palette defaults in `LightingPalette::DEFAULT` apply only while NVS holds no palette.
+
 Calibration is the exception: `sensors.calibration` holds only the **defaults used when NVS is empty**. Once a calibration has been written over the API it comes from flash, and editing the constants no longer changes what the device uses. `make erase` wipes NVS — and with it both the calibration and the stored WiFi credentials.
 
 The firmware never erases NVS on its own. If the partition cannot be opened (for example `ESP_ERR_NVS_NO_FREE_PAGES` or `ESP_ERR_NVS_NEW_VERSION_FOUND` after a firmware change), it leaves the data untouched, logs the error code on the serial console every 30 s, and boots in a degraded mode: heaters regulate on the `settings.rs` defaults, calibration uses its defaults, settings writes fail (`503` for the barrel), and pump and barrel automation stay stopped with their relays released. To recover, read out anything worth keeping, then run `make erase-nvs` (or `espflash erase-parts --partition-table crates/firmware/partitions.csv nvs`) and reflash or restart; settings, calibration, pump schedules and WiFi data start from scratch.
@@ -383,6 +401,11 @@ All routes sit behind a bearer-token layer: `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/api/lighting/override` | Current override, or `204` when none is active |
 | `PUT` | `/api/lighting/override` | Set an override; `400` on an invalid target or a zero duration |
 | `DELETE` | `/api/lighting/override` | Clear the override (`204`) |
+| `GET` | `/api/lighting/palette` | Stored sunrise, daylight, sunset and moonlight colours (RGBW percentages) |
+| `PATCH` | `/api/lighting/palette` | Partial update, merged and validated as a whole; each colour present must carry all four channels. `400` on a channel above 100, `500` when it cannot write them to NVS |
+| `GET` | `/api/lighting/schedule/{month}` | Schedule preview for a month (1-12, `400` otherwise) in 5-minute steps, one array per RGBW channel, computed from the stored palette |
+| `GET` | `/api/sump-light` | Sump light state: `on` (the output as driven), `expires_in_s` (only while the light is on), `available` |
+| `PUT` | `/api/sump-light` | `{"on":true}`, `{"on":true,"duration_s":1800}` (60–86400 s) or `{"on":false}`; `400` otherwise. The response shows `on` as the output is driven right now, so straight after a request it can still show the previous value, with `expires_in_s` null until the light is on: the loop switches the output a moment later and republishes telemetry. The state lives in RAM: the light is off after a restart |
 | `GET` | `/api/heaters` | Status of both heaters (`tank`, `sump`) |
 | `GET` | `/api/heaters/settings` | Stored thermostat settings: per-heater target and hysteresis, shared cutoff |
 | `PATCH` | `/api/heaters/settings` | Partial update, merged and validated as a whole; `400` on values the device rejects, `500` when it cannot write them to NVS |
@@ -417,7 +440,15 @@ curl -X PUT http://192.168.1.50/api/lighting/override \
 
 curl -X PUT http://192.168.1.50/api/lighting/override \
   -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"target":{"channels":{"white_pct":40,"rgb_pct":20}}}'
+  -d '{"target":{"channels":{"red_pct":10,"green_pct":10,"blue_pct":30,"white_pct":40}}}'
+
+curl -X PATCH http://192.168.1.50/api/lighting/palette \
+  -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"moonlight":{"red_pct":6,"green_pct":0,"blue_pct":12,"white_pct":0}}'
+
+curl -X PUT http://192.168.1.50/api/sump-light \
+  -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"on":true,"duration_s":1800}'
 
 curl -H "Authorization: Bearer $API_TOKEN" http://192.168.1.50/api/probe
 
@@ -471,7 +502,7 @@ Cron schedules are evaluated in local time (`Settings.timezone`), and need an SN
 
 > **Avoid pump windows between 02:00 and 02:59 local time.** With the default `CET-1CEST` zone that hour does not exist on the last Sunday of March, so a window there (for example `30 2 * * *` or `30 2 * * sun`) silently does not run that day, with no `last_skipped` record.
 
-A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting`, `water_level` (wet/faulty flags for `sump_mechanical`, `sump_biological`, `sump_pump`, `main_tank`, `sump_reserve`, `sump_return_level`, `reservoir_ready` and `reservoir_full`, plus `sensors_healthy`, exported to InfluxDB as `aquarium_water_level,sensor=<name>`) and `leak_detected` (at least one current floor alarm). The `flood` section adds `probes.reservoir`, `probes.sump` and the persistent `latched` lockout. Before sampling, `probes` is null. Clearing a restored lockout requires running flood monitoring and a dry reading from both probes. InfluxDB records these as `flood_reservoir`, `flood_sump` and `flood_latched` on `aquarium_health`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB.
+A snapshot covers `system_mode`, `system_health` (uptime, RSSI, free heap), `temperature` (tank and sump readings, sensor health), `heaters` (per heater: `active`, `mode` — `auto`, `manual_on` or `manual_off` — `fault` — `sensor_fault`, `over_temperature`, `unavailable` or `null` — `override_expires_in_s` and `target_celsius`), `filtration`, `co2` (including the current pH and electrode health), `tds` (parts per million and conductivity), `ato`, `pumps` (per channel on/off state plus the running operation's kind and state), `lighting` (`profile`, `channels` with `red_pct`/`green_pct`/`blue_pct`/`white_pct`, `override_active`, `available` — false while the lighting loop is not running), `sump_light` (`on`, `expires_in_s` — reported only while the light is on — `available`), `water_level` (wet/faulty flags for `sump_mechanical`, `sump_biological`, `sump_pump`, `main_tank`, `sump_reserve`, `sump_return_level`, `reservoir_ready` and `reservoir_full`, plus `sensors_healthy`, exported to InfluxDB as `aquarium_water_level,sensor=<name>`) and `leak_detected` (at least one current floor alarm). The `flood` section adds `probes.reservoir`, `probes.sump` and the persistent `latched` lockout. Before sampling, `probes` is null. Clearing a restored lockout requires running flood monitoring and a dry reading from both probes. InfluxDB records these as `flood_reservoir`, `flood_sump` and `flood_latched` on `aquarium_health`. Raw probe voltages are deliberately **not** part of the snapshot — they are diagnostics for the calibration screen, served by `/api/probe`, and are not exported to InfluxDB. InfluxDB records lighting as `aquarium_lighting` with `profile`, `red_pct`, `green_pct`, `blue_pct`, `white_pct` and `override` only while the lighting loop has published (`lighting.available`), and `sump_light` only while the sump light control is available; with neither, no `aquarium_lighting` line is written. Every `expires_in_s` value (lighting override, heaters, sump light) rounds up to whole seconds.
 
 The same contract is available to TypeScript clients as `packages/api-client`,
 generated from these Rust types — see [The HTTP contract](#the-http-contract).
@@ -522,10 +553,10 @@ Cancelling an idle or active fill returns `204`. If NVS cannot retire the marker
 ├── crates/
 │   ├── core/                    # aquarium-core — hardware-free, host-testable
 │   │   ├── src/
-│   │   │   ├── domain/          # lighting, water, heater, pump, reservoir, flood, cron, metrics, calibration
+│   │   │   ├── domain/          # lighting, sump_light, water, heater, pump, reservoir, flood, cron, metrics, calibration
 │   │   │   ├── protocol/        # ds18b20, xkc_y25, ads1115, ph, tds, influx line protocol, settings_record
-│   │   │   ├── ports/           # inbound (telemetry, lighting, calibration, probe, heater, pump, reservoir) / outbound
-│   │   │   ├── application/     # collector, water_level sampler, calibration, heater, pump, reservoir, lighting loop, metrics_export
+│   │   │   ├── ports/           # inbound (telemetry, lighting, calibration, probe, heater, pump, reservoir, sump_light) / outbound
+│   │   │   ├── application/     # collector, water_level sampler, calibration, heater, pump, reservoir, lighting loop, sump_light, metrics_export
 │   │   │   ├── adapters/
 │   │   │   │   ├── inbound/http/  # picoserve router, auth layer, SSE, handlers
 │   │   │   │   └── outbound/    # in-memory stores
@@ -534,9 +565,9 @@ Cancelling an idle or active fill returns `204`. If NVS cannot retire the marker
 │   └── firmware/                # aquarium-controller — ESP32-S3 firmware
 │       ├── .cargo/config.toml   # xtensa target, linker, ESP-IDF env
 │       ├── src/
-│       │   ├── adapters/outbound/  # i2c/ (shared bus, ads1115, mcp23017), ds18b20, xkc_y25, ssr, relay, flood, lighting, influx, nvs_*
+│       │   ├── adapters/outbound/  # i2c/ (shared bus, ads1115, mcp23017), ds18b20, xkc_y25, ssr, relay, flood, pwm, lighting, sump_light, nvs_lighting, influx, nvs_*
 │       │   ├── infrastructure/  # wifi, clock (SNTP), system_health
-│       │   ├── startup/         # task graph: sensors, control loops, network, monitoring
+│       │   ├── startup/         # task graph: sensors, lighting, control loops, network, monitoring
 │       │   ├── board.rs         # peripheral and pin assignment
 │       │   ├── diagnostics.rs   # ROM discovery, ADC, SSR and relay probe modes
 │       │   ├── settings.rs      # compile-time configuration
@@ -646,4 +677,4 @@ Two workflows, split by toolchain and by path:
 
 The firmware logs through `tracing` to the serial console (`make monitor`). With the `health` component set to `Running`, it reports stack high-water mark, free internal heap and the minimum free heap every 30 seconds, and raises an error-level log once stack headroom drops below 16 KiB. `CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK` is enabled on purpose — it turns a stack overrun into an immediate, legible abort instead of corruption elsewhere.
 
-For a flashed board on the network, `make smoke IP=...` exercises authentication, telemetry, the SSE stream and the full lighting-override lifecycle in one run.
+For a flashed board on the network, `make smoke IP=...` exercises authentication, telemetry, the SSE stream and the full lighting-override lifecycle and the sump light in one run.

@@ -1,10 +1,16 @@
 import type { HistorySeries } from "@/history/csv";
-import { REFERENCE, SERIES } from "./chart-tokens";
+import { CHANNEL_COLORS, REFERENCE, SERIES } from "./chart-tokens";
 
 export interface PlottedSeries {
   field: string;
   color: string;
   isReference: boolean;
+}
+
+function channelColor(field: string): string | undefined {
+  return Object.hasOwn(CHANNEL_COLORS, field)
+    ? CHANNEL_COLORS[field as keyof typeof CHANNEL_COLORS]
+    : undefined;
 }
 
 export function plotSeries(
@@ -20,7 +26,7 @@ export function plotSeries(
       field,
       color: isReference
         ? REFERENCE
-        : (SERIES[slot++ % SERIES.length] ?? REFERENCE),
+        : (channelColor(field) ?? SERIES[slot++ % SERIES.length] ?? REFERENCE),
       isReference,
     };
   });

@@ -1,8 +1,12 @@
-import type { LightingMetricsDto, Transport } from "@aquarium/api-client";
+import type {
+  LightingMetricsDto,
+  SumpLightStatus,
+  Transport,
+} from "@aquarium/api-client";
 import { spacing } from "@aquarium/theme";
 import {
+  formatChannelLevels,
   formatDuration,
-  formatPercentPair,
   useOverrideControl,
 } from "@aquarium/view-model";
 import { useEffect, useRef } from "react";
@@ -16,13 +20,16 @@ import {
 } from "@/components/molecules";
 import { useT } from "@/i18n/use-locale";
 import type { ReactNode } from "react";
+import { SumpLightToggle } from "./SumpLightToggle";
 
 export const LightingControl = ({
   transport,
   lighting,
+  sumpLight,
 }: {
   transport: Transport;
   lighting: LightingMetricsDto;
+  sumpLight: SumpLightStatus | undefined;
 }): ReactNode => {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
@@ -77,38 +84,45 @@ export const LightingControl = ({
         </Alert>
       ) : null}
 
-      <MetricCard
-        title={t("lighting.currentState")}
-        status={control.active ? "degraded" : "ok"}
-        statusLabel={
-          control.active ? t("lighting.override") : t("lighting.onSchedule")
-        }
-        metrics={[
-          {
-            label: t("lighting.profile"),
-            value: control.manualChannels
-              ? t("lighting.custom")
-              : t(`profiles.${lighting.profile}`),
-          },
-          {
-            label: t("lighting.whiteRgb"),
-            value: formatPercentPair(
-              lighting.channel_white_pct,
-              lighting.channel_rgb_pct,
-            ),
-          },
-        ]}
-      >
-        {control.remaining !== null &&
-        control.total !== null &&
-        control.total > 0 ? (
-          <Meter
-            value={control.remaining / control.total}
-            label={t("lighting.expiresIn")}
-            valueText={formatDuration(control.remaining)}
-          />
-        ) : null}
-      </MetricCard>
+      {lighting.available ? (
+        <MetricCard
+          title={t("lighting.currentState")}
+          status={control.active ? "degraded" : "ok"}
+          statusLabel={
+            control.active ? t("lighting.override") : t("lighting.onSchedule")
+          }
+          metrics={[
+            {
+              label: t("lighting.profile"),
+              value: control.manualChannels
+                ? t("lighting.custom")
+                : t(`profiles.${lighting.profile}`),
+            },
+            {
+              label: t("lighting.channels"),
+              value: formatChannelLevels(lighting.channels),
+            },
+          ]}
+        >
+          {control.remaining !== null &&
+          control.total !== null &&
+          control.total > 0 ? (
+            <Meter
+              value={control.remaining / control.total}
+              label={t("lighting.expiresIn")}
+              valueText={formatDuration(control.remaining)}
+            />
+          ) : null}
+        </MetricCard>
+      ) : (
+        <MetricCard
+          title={t("lighting.currentState")}
+          status="off"
+          statusLabel={t("common.noData")}
+        >
+          <Alert variant="warning">{t("lighting.unavailable")}</Alert>
+        </MetricCard>
+      )}
 
       <MetricCard
         title={t("lighting.override")}
@@ -134,6 +148,8 @@ export const LightingControl = ({
           />
         </View>
       </MetricCard>
+
+      <SumpLightToggle transport={transport} status={sumpLight} />
     </View>
   );
 };

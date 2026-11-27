@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use tokio::task::LocalSet;
 
-use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore,
-};
+use aquarium_core::adapters::outbound::memory::{InMemoryTelemetryStore, VolatileCalibrationStore};
 use aquarium_core::application::CalibrationService;
 use aquarium_core::domain::calibration::Calibration;
 
@@ -29,7 +27,7 @@ fn service() -> Arc<TestCalibration> {
 async fn serve(calibration: Arc<TestCalibration>) -> SocketAddr {
     start_with_calibration(
         Arc::new(InMemoryTelemetryStore::new()),
-        Arc::new(InMemoryLightingStore::new()),
+        common::lighting(),
         calibration,
     )
     .await

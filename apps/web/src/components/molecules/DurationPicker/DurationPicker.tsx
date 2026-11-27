@@ -1,20 +1,22 @@
 import { useT } from "@aquarium/i18n/use-locale";
-import { durationChoices } from "@aquarium/view-model";
+import { durationChoices, type DurationChoice } from "@aquarium/view-model";
 import { Button } from "@/components/atoms";
 import type { ReactNode } from "react";
 
 export const DurationPicker = ({
   selected,
   onSelect,
+  choices,
 }: {
   selected: number | null;
   onSelect: (seconds: number | null) => void;
+  choices?: DurationChoice[];
 }): ReactNode => {
   const t = useT();
 
   return (
     <div className="picker">
-      {durationChoices(t).map((choice) => (
+      {(choices ?? durationChoices(t)).map((choice) => (
         <Button
           key={choice.label}
           variant={choice.seconds === selected ? "primary" : "outline"}

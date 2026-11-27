@@ -1,3 +1,5 @@
+import type { ChannelLevels } from "@aquarium/api-client";
+
 export const EM_DASH = "—";
 
 export function formatCelsius(value: number | null): string {
@@ -24,8 +26,18 @@ export function formatPercent(value: number | null): string {
   return value === null ? EM_DASH : `${value}%`;
 }
 
-export function formatPercentPair(white: number, rgb: number): string {
-  return `${white}% / ${rgb}%`;
+const CHANNEL_SHORT: Record<keyof ChannelLevels, string> = {
+  red_pct: "R",
+  green_pct: "G",
+  blue_pct: "B",
+  white_pct: "W",
+};
+
+export function formatChannelLevels(levels: ChannelLevels): string {
+  const parts = (Object.keys(CHANNEL_SHORT) as (keyof ChannelLevels)[]).map(
+    (key) => `${CHANNEL_SHORT[key]} ${levels[key]}`,
+  );
+  return `${parts.join(" · ")} %`;
 }
 
 export function formatDuration(totalSeconds: number): string {

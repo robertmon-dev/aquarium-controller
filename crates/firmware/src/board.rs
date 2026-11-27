@@ -3,18 +3,22 @@ use aquarium_controller::adapters::outbound::ds18b20::OneWireBus;
 use aquarium_controller::adapters::outbound::i2c::ads1115::{Ads1115Bus, AnalogFrontEnd};
 use aquarium_controller::adapters::outbound::i2c::mcp23017::Mcp23017;
 use aquarium_controller::adapters::outbound::i2c::shared::SharedI2c;
+use aquarium_controller::adapters::outbound::lighting::RgbwOutputs;
+use aquarium_controller::adapters::outbound::pwm::{self, LedcBank};
 use aquarium_controller::adapters::outbound::relay::{RelayOutputs, ReservoirRelayOutputs};
 use aquarium_controller::adapters::outbound::ssr::SsrOutputs;
+use aquarium_controller::adapters::outbound::sump_light::SumpLightOutput;
 use aquarium_core::domain::water::WaterLevelRole;
 use aquarium_core::protocol::ads1115::Channel;
 use esp_idf_hal::gpio::{
-    Gpio1, Gpio16, Gpio17, Gpio18, Gpio2, Gpio38, Gpio4, Gpio40, Gpio41, Gpio42, Gpio47, Gpio48,
-    Gpio5, Gpio6, Gpio7, Gpio8, Gpio9,
+    Gpio10, Gpio11, Gpio12, Gpio13, Gpio14, Gpio15, Gpio16, Gpio17, Gpio18, Gpio21, Gpio38, Gpio4,
+    Gpio40, Gpio41, Gpio42, Gpio47, Gpio48, Gpio5, Gpio6, Gpio7, Gpio8, Gpio9, Output, PinDriver,
 };
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver, I2C0};
-use esp_idf_hal::ledc::{CHANNEL0, CHANNEL1, TIMER0};
+use esp_idf_hal::ledc::{CHANNEL0, CHANNEL1, CHANNEL2, CHANNEL3, TIMER0};
 use esp_idf_hal::modem::Modem;
 use esp_idf_hal::peripherals::Peripherals;
+use esp_idf_hal::sys::EspError;
 use esp_idf_hal::task::watchdog::TWDT;
 use esp_idf_hal::units::FromValueType;
 
@@ -41,7 +45,9 @@ pub struct Board {
     pub reservoir: ReservoirPins,
     pub flood: (Gpio38<'static>, Gpio48<'static>),
     pub heaters: HeaterPins,
-    pub lighting: LightingPins,
+    pub rgbw: RgbwPins,
+    pub sump_light: SumpLightPin,
+    pub reserved: ReservedOutputPins,
     pub temperature: TemperaturePin,
     pub modem: Modem<'static>,
     pub twdt: TWDT<'static>,
@@ -56,13 +62,15 @@ impl From<Peripherals> for Board {
             reservoir: ReservoirPins(pins.gpio40, pins.gpio41, pins.gpio42, pins.gpio47),
             flood: (pins.gpio38, pins.gpio48),
             heaters: HeaterPins(pins.gpio17, pins.gpio18),
-            lighting: LightingPins {
+            rgbw: RgbwPins {
                 timer: peripherals.ledc.timer0,
-                white_ch: peripherals.ledc.channel0,
-                white_pin: pins.gpio1,
-                rgb_ch: peripherals.ledc.channel1,
-                rgb_pin: pins.gpio2,
+                red: (peripherals.ledc.channel0, pins.gpio10),
+                green: (peripherals.ledc.channel1, pins.gpio11),
+                blue: (peripherals.ledc.channel2, pins.gpio12),
+                white: (peripherals.ledc.channel3, pins.gpio13),
             },
+            sump_light: SumpLightPin(pins.gpio14),
+            reserved: ReservedOutputPins(pins.gpio15, pins.gpio21),
             temperature: TemperaturePin(pins.gpio4),
             modem: peripherals.modem,
             twdt: peripherals.twdt,
@@ -70,12 +78,57 @@ impl From<Peripherals> for Board {
     }
 }
 
-pub struct LightingPins {
-    pub timer: TIMER0<'static>,
-    pub white_ch: CHANNEL0<'static>,
-    pub white_pin: Gpio1<'static>,
-    pub rgb_ch: CHANNEL1<'static>,
-    pub rgb_pin: Gpio2<'static>,
+pub struct RgbwPins {
+    timer: TIMER0<'static>,
+    red: (CHANNEL0<'static>, Gpio10<'static>),
+    green: (CHANNEL1<'static>, Gpio11<'static>),
+    blue: (CHANNEL2<'static>, Gpio12<'static>),
+    white: (CHANNEL3<'static>, Gpio13<'static>),
+}
+
+impl RgbwPins {
+    pub fn open(self, freq_hz: u32) -> anyhow::Result<RgbwOutputs<'static>> {
+        let timer: &'static _ = Box::leak(Box::new(
+            pwm::timer(self.timer, freq_hz).context("Failed to initialize the RGBW PWM timer")?,
+        ));
+
+        let bank = LedcBank::new([
+            pwm::off_channel(self.red.0, timer, self.red.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.green.0, timer, self.green.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.blue.0, timer, self.blue.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+            pwm::off_channel(self.white.0, timer, self.white.1)
+                .context("Failed to initialize the RGBW PWM channels")?,
+        ]);
+
+        Ok(RgbwOutputs::new(bank))
+    }
+}
+
+pub struct SumpLightPin(Gpio14<'static>);
+
+impl SumpLightPin {
+    pub fn open(self) -> anyhow::Result<SumpLightOutput<'static>> {
+        SumpLightOutput::new(self.0).context("Failed to initialize the sump light output")
+    }
+}
+
+pub struct ReservedOutputPins(Gpio15<'static>, Gpio21<'static>);
+
+impl ReservedOutputPins {
+    pub fn hold_low(self) -> anyhow::Result<[PinDriver<'static, Output>; 2]> {
+        let drive = || -> Result<_, EspError> {
+            let mut fans = PinDriver::output(self.0)?;
+            fans.set_low()?;
+            let mut spare = PinDriver::output(self.1)?;
+            spare.set_low()?;
+            Ok([fans, spare])
+        };
+
+        drive().context("Failed to hold the reserved MOSFET outputs low")
+    }
 }
 
 pub struct PumpPins(

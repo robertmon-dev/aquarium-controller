@@ -6,4 +6,5 @@ pub mod lighting;
 pub mod metrics;
 pub mod pump;
 pub mod reservoir;
+pub mod sump_light;
 pub mod water;

@@ -5,7 +5,12 @@ import {
   type LightingAction,
 } from "./lighting-reducer";
 
-const start = initialLightingState({ white_pct: 40, rgb_pct: 20 });
+const start = initialLightingState({
+  red_pct: 10,
+  green_pct: 10,
+  blue_pct: 20,
+  white_pct: 40,
+});
 
 function run(...actions: LightingAction[]) {
   return actions.reduce(lightingReducer, start);
@@ -15,7 +20,7 @@ describe("lightingReducer", () => {
   it("starts on schedule, with the device's current levels and no dirt", () => {
     expect(start).toEqual({
       mode: "schedule",
-      levels: { white_pct: 40, rgb_pct: 20 },
+      levels: { red_pct: 10, green_pct: 10, blue_pct: 20, white_pct: 40 },
       duration: 900,
       dirty: false,
       confirming: false,
@@ -36,16 +41,23 @@ describe("lightingReducer", () => {
     const state = run({ type: "setChannel", channel: "white_pct", value: 80 });
 
     expect(state.mode).toBe("channels");
-    expect(state.levels).toEqual({ white_pct: 80, rgb_pct: 20 });
+    expect(state.levels).toEqual({
+      red_pct: 10,
+      green_pct: 10,
+      blue_pct: 20,
+      white_pct: 80,
+    });
     expect(state.dirty).toBe(true);
   });
 
   it("clamps a channel to 0..100", () => {
     expect(
-      run({ type: "setChannel", channel: "rgb_pct", value: 140 }).levels.rgb_pct,
+      run({ type: "setChannel", channel: "blue_pct", value: 140 }).levels
+        .blue_pct,
     ).toBe(100);
     expect(
-      run({ type: "setChannel", channel: "rgb_pct", value: -5 }).levels.rgb_pct,
+      run({ type: "setChannel", channel: "blue_pct", value: -5 }).levels
+        .blue_pct,
     ).toBe(0);
   });
 
@@ -73,12 +85,15 @@ describe("lightingReducer", () => {
   it("restoring the schedule resets mode, levels and dirt", () => {
     const state = run(
       { type: "setChannel", channel: "white_pct", value: 90 },
-      { type: "restore", levels: { white_pct: 55, rgb_pct: 35 } },
+      {
+        type: "restore",
+        levels: { red_pct: 15, green_pct: 15, blue_pct: 35, white_pct: 55 },
+      },
     );
 
     expect(state).toMatchObject({
       mode: "schedule",
-      levels: { white_pct: 55, rgb_pct: 35 },
+      levels: { red_pct: 15, green_pct: 15, blue_pct: 35, white_pct: 55 },
       dirty: false,
     });
   });
@@ -104,12 +119,15 @@ describe("lightingReducer", () => {
     const state = run(
       { type: "setChannel", channel: "white_pct", value: 90 },
       { type: "confirmRestore" },
-      { type: "restore", levels: { white_pct: 55, rgb_pct: 35 } },
+      {
+        type: "restore",
+        levels: { red_pct: 15, green_pct: 15, blue_pct: 35, white_pct: 55 },
+      },
     );
 
     expect(state).toMatchObject({
       mode: "schedule",
-      levels: { white_pct: 55, rgb_pct: 35 },
+      levels: { red_pct: 15, green_pct: 15, blue_pct: 35, white_pct: 55 },
       dirty: false,
       confirming: false,
     });

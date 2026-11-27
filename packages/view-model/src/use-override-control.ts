@@ -7,7 +7,11 @@ import {
   type LightingProfile,
   type Transport,
 } from "@aquarium/api-client";
-import { channelRequest, profileRequest } from "./lighting-request";
+import {
+  CHANNEL_KEYS,
+  channelRequest,
+  profileRequest,
+} from "./lighting-request";
 import { useCountdown } from "./use-countdown";
 import { useEffect, useReducer, useState } from "react";
 import {
@@ -62,10 +66,7 @@ export function useOverrideControl(
 
   const [state, dispatch] = useReducer(
     lightingReducer,
-    {
-      white_pct: lighting.channel_white_pct,
-      rgb_pct: lighting.channel_rgb_pct,
-    },
+    lighting.channels,
     initialLightingState,
   );
 
@@ -75,10 +76,7 @@ export function useOverrideControl(
   });
   const total = useCountdownScale(remaining);
 
-  const deviceLevels: ChannelLevels = {
-    white_pct: lighting.channel_white_pct,
-    rgb_pct: lighting.channel_rgb_pct,
-  };
+  const deviceLevels: ChannelLevels = lighting.channels;
 
   const committed = { onSuccess: () => dispatch({ type: "committed" }) };
 
@@ -123,16 +121,9 @@ export function useOverrideControl(
     },
 
     commitLevels: (levels) => {
-      dispatch({
-        type: "setChannel",
-        channel: "white_pct",
-        value: levels.white_pct,
-      });
-      dispatch({
-        type: "setChannel",
-        channel: "rgb_pct",
-        value: levels.rgb_pct,
-      });
+      for (const channel of CHANNEL_KEYS) {
+        dispatch({ type: "setChannel", channel, value: levels[channel] });
+      }
       setOverride.mutate(channelRequest(levels, state.duration), committed);
     },
 

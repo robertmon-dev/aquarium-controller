@@ -14,7 +14,7 @@ export {
   formatHeap,
   formatLitresPerHour,
   formatPercent,
-  formatPercentPair,
+  formatChannelLevels,
   formatMicrosiemens,
   formatPh,
   formatPpm,
@@ -38,10 +38,13 @@ export { waterLevelCard } from "./water-level";
 export type { WaterLevelCardData, WaterLevelChip } from "./water-level";
 
 export {
+  CHANNEL_KEYS,
+  channelLabels,
   channelRequest,
   durationChoices,
   LIGHTING_PROFILES,
   profileRequest,
+  sumpLightDurations,
   tickCountdown,
 } from "./lighting-request";
 export type { DurationChoice } from "./lighting-request";

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio::task::LocalSet;
 
-use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
+use aquarium_core::adapters::outbound::memory::InMemoryTelemetryStore;
 
 use common::{body, get, raw, start, start_with_lighting, OVERRIDE_PATH, TOKEN};
 
@@ -26,7 +26,7 @@ async fn setting_a_profile_override_is_reflected_in_telemetry() {
     LocalSet::new()
         .run_until(async {
             let telemetry = Arc::new(InMemoryTelemetryStore::new());
-            let lighting = Arc::new(InMemoryLightingStore::new());
+            let lighting = common::lighting();
             let addr = start_with_lighting(Arc::clone(&telemetry), Arc::clone(&lighting)).await;
 
             let set = raw(
@@ -60,7 +60,7 @@ async fn setting_raw_channels_round_trips() {
                     "PUT",
                     OVERRIDE_PATH,
                     Some(TOKEN),
-                    r#"{"target":{"channels":{"white_pct":80,"rgb_pct":20}}}"#,
+                    r#"{"target":{"channels":{"red_pct":0,"green_pct":0,"blue_pct":20,"white_pct":80}}}"#,
                 ),
             )
             .await;
@@ -82,7 +82,7 @@ async fn a_channel_level_above_one_hundred_is_rejected() {
                     "PUT",
                     OVERRIDE_PATH,
                     Some(TOKEN),
-                    r#"{"target":{"channels":{"white_pct":150,"rgb_pct":20}}}"#,
+                    r#"{"target":{"channels":{"red_pct":150,"green_pct":0,"blue_pct":0,"white_pct":0}}}"#,
                 ),
             )
             .await;

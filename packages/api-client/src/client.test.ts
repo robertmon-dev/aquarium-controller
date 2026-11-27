@@ -116,14 +116,18 @@ describe("createClient", () => {
   it("puts a channels override with duration_s, not expires_in_s", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
-        target: { channels: { white_pct: 20, rgb_pct: 10 } },
+        target: {
+          channels: { red_pct: 5, green_pct: 5, blue_pct: 10, white_pct: 20 },
+        },
         expires_in_s: 600,
       }),
     );
     const client = createClient({ device, fetchImpl });
 
     await client.setLightingOverride({
-      target: { channels: { white_pct: 20, rgb_pct: 10 } },
+      target: {
+        channels: { red_pct: 5, green_pct: 5, blue_pct: 10, white_pct: 20 },
+      },
       duration_s: 600,
     });
 
@@ -131,9 +135,27 @@ describe("createClient", () => {
     expect(url).toBe("http://10.0.0.2:80/api/lighting/override");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body)).toEqual({
-      target: { channels: { white_pct: 20, rgb_pct: 10 } },
+      target: {
+        channels: { red_pct: 5, green_pct: 5, blue_pct: 10, white_pct: 20 },
+      },
       duration_s: 600,
     });
+  });
+
+  it("puts the sump light request", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ on: true, expires_in_s: 1800, available: true }),
+      );
+    const client = createClient({ device, fetchImpl });
+
+    await client.setSumpLight({ on: true, duration_s: 1800 });
+
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("http://10.0.0.2:80/api/sump-light");
+    expect(init.method).toBe("PUT");
+    expect(init.body).toBe('{"on":true,"duration_s":1800}');
   });
 
   it("puts a profile override", async () => {

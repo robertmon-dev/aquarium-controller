@@ -9,7 +9,7 @@ import {
   formatLitresPerHour,
   formatMicrosiemens,
   formatPercent,
-  formatPercentPair,
+  formatChannelLevels,
   formatPh,
   formatPpm,
   formatRssi,
@@ -211,9 +211,34 @@ export function atoCard(s: TankTelemetryDto, t: Translate): CardData {
   };
 }
 
+function sumpLightMetrics(s: TankTelemetryDto, t: Translate): Metric[] {
+  const sumpLight = s.sump_light;
+  if (!sumpLight?.available) return [];
+
+  const state = sumpLight.on ? t("sumpLight.on") : t("sumpLight.off");
+  const value =
+    sumpLight.expires_in_s === null
+      ? state
+      : `${state} · ${formatDuration(sumpLight.expires_in_s)}`;
+
+  return [{ label: t("sumpLight.title"), value }];
+}
+
 export function lightingCard(s: TankTelemetryDto, t: Translate): CardData {
-  const { profile, channel_white_pct, channel_rgb_pct, override_active } =
-    s.lighting;
+  const { profile, channels, override_active, available } = s.lighting;
+
+  if (!available) {
+    return {
+      title: t("cards.lighting.title"),
+      status: "off",
+      statusLabel: t("common.noData"),
+      metrics: [
+        { label: t("cards.lighting.profile"), value: EM_DASH },
+        { label: t("cards.lighting.channels"), value: EM_DASH },
+        ...sumpLightMetrics(s, t),
+      ],
+    };
+  }
 
   return {
     title: t("cards.lighting.title"),
@@ -227,9 +252,10 @@ export function lightingCard(s: TankTelemetryDto, t: Translate): CardData {
         value: translateProfile(profile, t),
       },
       {
-        label: t("cards.lighting.whiteRgb"),
-        value: formatPercentPair(channel_white_pct, channel_rgb_pct),
+        label: t("cards.lighting.channels"),
+        value: formatChannelLevels(channels),
       },
+      ...sumpLightMetrics(s, t),
     ],
   };
 }

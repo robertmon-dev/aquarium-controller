@@ -7,6 +7,7 @@ pub mod ph;
 pub mod probe;
 pub mod pump;
 pub mod reservoir;
+pub mod sump_light;
 pub mod system_health;
 pub mod tds;
 pub mod telemetry;
@@ -16,7 +17,7 @@ pub mod water_level;
 pub use calibration::{CalibrationPersistence, CalibrationSource};
 pub use clock::Clock;
 pub use heater::{HeaterOutputs, HeaterPersistence, HeaterStatusSource};
-pub use lighting::{LightingOutputs, LightingOverrideSource};
+pub use lighting::{LightingOutputs, LightingPersistence, LightingStatusSource};
 pub use metrics_export::{ExportError, MetricsWriter};
 pub use ph::PhReader;
 pub use probe::ProbeVoltageSink;
@@ -25,6 +26,7 @@ pub use reservoir::{
     LeakSource, ReservoirOutputs, ReservoirRecord, ReservoirStatusSource, ReservoirStore,
     WaterChangeActivity,
 };
+pub use sump_light::{SumpLightOutputs, SumpLightStatusSource};
 pub use system_health::SystemHealthProvider;
 pub use tds::TdsReader;
 pub use telemetry::{

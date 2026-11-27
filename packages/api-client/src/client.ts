@@ -8,6 +8,8 @@ import type {
   HeaterStatus,
   HeatersStatus,
   LightingOverride,
+  LightingPalette,
+  LightingPalettePatch,
   LightingScheduleDto,
   ProbeVoltagesDto,
   PumpId,
@@ -17,7 +19,9 @@ import type {
   SetHeaterOverrideRequest,
   SetOverrideRequest,
   SetPumpOverrideRequest,
+  SetSumpLightRequest,
   StartTopOffRequest,
+  SumpLightStatus,
   SystemHealthDto,
   TankTelemetryDto,
   WaterChangePlan,
@@ -39,6 +43,12 @@ export interface DeviceClient {
   setLightingOverride: (body: SetOverrideRequest) => Promise<LightingOverride>;
   clearLightingOverride: () => Promise<void>;
   lightingSchedule: (month: number) => Promise<LightingScheduleDto>;
+  lightingPalette: () => Promise<LightingPalette>;
+  patchLightingPalette: (
+    body: LightingPalettePatch,
+  ) => Promise<LightingPalette>;
+  sumpLight: () => Promise<SumpLightStatus>;
+  setSumpLight: (body: SetSumpLightRequest) => Promise<SumpLightStatus>;
   probeVoltages: () => Promise<ProbeVoltagesDto>;
   calibration: () => Promise<Calibration>;
   patchCalibration: (body: CalibrationPatch) => Promise<Calibration>;
@@ -98,6 +108,23 @@ export const createClient = (transport: Transport): DeviceClient => {
         transport,
         `/api/lighting/schedule/${month}`,
       ),
+
+    lightingPalette: () =>
+      request<LightingPalette>(transport, "/api/lighting/palette"),
+
+    patchLightingPalette: (body) =>
+      request<LightingPalette>(transport, "/api/lighting/palette", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+
+    sumpLight: () => request<SumpLightStatus>(transport, "/api/sump-light"),
+
+    setSumpLight: (body) =>
+      request<SumpLightStatus>(transport, "/api/sump-light", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
 
     probeVoltages: () => request<ProbeVoltagesDto>(transport, "/api/probe"),
 

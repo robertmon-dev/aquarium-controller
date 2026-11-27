@@ -44,9 +44,9 @@ const snapshot: TankTelemetryDto = {
   },
   lighting: {
     profile: "daylight",
-    channel_white_pct: 60,
-    channel_rgb_pct: 40,
+    channels: { red_pct: 10, green_pct: 10, blue_pct: 25, white_pct: 60 },
     override_active: false,
+    available: true,
   },
   water_level: {
     sump_mechanical: { wet: true, faulty: false },
@@ -235,8 +235,8 @@ describe("lightingCard", () => {
     const card = lightingCard(snapshot, t);
 
     expect(card.statusLabel).toBe("daylight");
-    expect(card.metrics.find((m) => m.label === "white / rgb")?.value).toBe(
-      "60% / 40%",
+    expect(card.metrics.find((m) => m.label === "R / G / B / W")?.value).toBe(
+      "R 10 · G 10 · B 25 · W 60 %",
     );
   });
 
@@ -251,6 +251,66 @@ describe("lightingCard", () => {
 
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("override");
+  });
+
+  it("reads as off with no channel levels while the lighting loop is not running", () => {
+    const card = lightingCard(
+      { ...snapshot, lighting: { ...snapshot.lighting, available: false } },
+      t,
+    );
+
+    expect(card.status).toBe("off");
+    expect(card.statusLabel).toBe("no data");
+    expect(card.metrics.find((m) => m.label === "R / G / B / W")?.value).toBe(
+      EM_DASH,
+    );
+    expect(card.metrics.find((m) => m.label === "profile")?.value).toBe(
+      EM_DASH,
+    );
+  });
+
+  it("shows the sump light with its remaining time while it is on", () => {
+    const card = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: true, expires_in_s: 1800, available: true },
+      },
+      t,
+    );
+
+    expect(card.metrics.find((m) => m.label === "sump light")?.value).toBe(
+      "on · 30m 00s",
+    );
+  });
+
+  it("shows the sump light as off", () => {
+    const card = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: false, expires_in_s: null, available: true },
+      },
+      t,
+    );
+
+    expect(card.metrics.find((m) => m.label === "sump light")?.value).toBe(
+      "off",
+    );
+  });
+
+  it("leaves the sump light out when it is absent or unavailable", () => {
+    const absent = lightingCard(snapshot, t);
+    const unavailable = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: false, expires_in_s: null, available: false },
+      },
+      t,
+    );
+
+    expect(absent.metrics.some((m) => m.label === "sump light")).toBe(false);
+    expect(unavailable.metrics.some((m) => m.label === "sump light")).toBe(
+      false,
+    );
   });
 });
 
@@ -373,10 +433,8 @@ describe("pumpsCard", () => {
 
     for (const supervision of ["active", "off"] as const) {
       expect(
-        pumpsCard(
-          { ...snapshot, pumps: { ...snapshot.pumps, supervision } },
-          t,
-        ).status,
+        pumpsCard({ ...snapshot, pumps: { ...snapshot.pumps, supervision } }, t)
+          .status,
       ).toBe("ok");
     }
   });

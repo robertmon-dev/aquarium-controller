@@ -399,7 +399,7 @@ smoke: ## Probe a flashed device over HTTP (make smoke IP=192.168.1.50)
 	@$(SUB) "override: level above 100 -> expecting 400"
 	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X PUT \
 	  -H "Authorization: Bearer $$API_TOKEN" -H 'Content-Type: application/json' \
-	  -d '{"target":{"channels":{"white_pct":150,"rgb_pct":20}}}' \
+	  -d '{"target":{"channels":{"red_pct":150,"green_pct":0,"blue_pct":0,"white_pct":0}}}' \
 	  http://$(IP)/api/lighting/override); \
 	[ "$$code" = "400" ] || { $(ERR) "channel validation is broken: $$code"; exit 1; }
 	@$(SUB) "override: set moonlight -> expecting 200"
@@ -416,6 +416,16 @@ smoke: ## Probe a flashed device over HTTP (make smoke IP=192.168.1.50)
 	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X DELETE \
 	  -H "Authorization: Bearer $$API_TOKEN" http://$(IP)/api/lighting/override); \
 	[ "$$code" = "204" ] || { $(ERR) "got $$code instead of 204"; exit 1; }
+	@$(SUB) "sump light on for 60 s -> expecting 200"
+	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X PUT \
+	  -H "Authorization: Bearer $$API_TOKEN" -H 'Content-Type: application/json' \
+	  -d '{"on":true,"duration_s":60}' http://$(IP)/api/sump-light); \
+	[ "$$code" = "200" ] || { $(ERR) "got $$code instead of 200"; exit 1; }
+	@$(SUB) "sump light off -> expecting 200"
+	@$(LOAD_ENV) code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X PUT \
+	  -H "Authorization: Bearer $$API_TOKEN" -H 'Content-Type: application/json' \
+	  -d '{"on":false}' http://$(IP)/api/sump-light); \
+	[ "$$code" = "200" ] || { $(ERR) "got $$code instead of 200"; exit 1; }
 	@$(OK) "Smoke test passed"
 	@$(WARN) "still manual: secrets in log, slot limit, sensor hot-unplug, 15-min heap drift"
 

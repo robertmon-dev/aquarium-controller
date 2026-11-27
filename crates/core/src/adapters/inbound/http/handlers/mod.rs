@@ -6,4 +6,5 @@ pub mod lighting;
 pub mod probe;
 pub mod pumps;
 pub mod reservoir;
+pub mod sump_light;
 pub mod telemetry;

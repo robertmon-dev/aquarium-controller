@@ -100,6 +100,13 @@ const reservoirGuard = z.object({
     .nullable(),
 });
 
+const channelLevelsGuard = z.object({
+  red_pct: z.number(),
+  green_pct: z.number(),
+  blue_pct: z.number(),
+  white_pct: z.number(),
+});
+
 const telemetryGuard = z.object({
   timestamp_epoch_s: z.number(),
   system_mode: z.enum(["normal", "maintenance", "emergency_lockout"]),
@@ -133,10 +140,17 @@ const telemetryGuard = z.object({
   }),
   lighting: z.object({
     profile: z.enum(["off", "sunrise", "daylight", "sunset", "moonlight"]),
-    channel_white_pct: z.number(),
-    channel_rgb_pct: z.number(),
+    channels: channelLevelsGuard,
     override_active: z.boolean(),
+    available: z.boolean(),
   }),
+  sump_light: z
+    .object({
+      on: z.boolean(),
+      expires_in_s: z.number().nullable(),
+      available: z.boolean(),
+    })
+    .optional(),
   flood: z
     .object({
       probes: z.object({ reservoir: z.boolean(), sump: z.boolean() }).nullable(),

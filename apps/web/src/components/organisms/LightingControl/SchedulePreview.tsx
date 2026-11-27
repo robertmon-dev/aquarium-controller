@@ -1,12 +1,13 @@
 import type { LightingScheduleDto } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
+import { CHANNEL_KEYS, channelLabels } from "@aquarium/view-model";
 import type uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import {
+  CHANNEL_COLORS,
   GRID,
   LINE_WIDTH,
   REFERENCE,
-  SERIES,
   TEXT_MUTED,
 } from "@/components/atoms/Chart/chart-tokens";
 import { useUplot, type ChartSpec } from "@/components/atoms/Chart/use-uplot";
@@ -52,6 +53,7 @@ export const SchedulePreview = ({
       const minutes = schedule.white_pct.map(
         (_, index) => index * schedule.step_minutes,
       );
+      const labels = channelLabels(t);
 
       return {
         options: {
@@ -78,25 +80,18 @@ export const SchedulePreview = ({
           ],
           series: [
             {},
-            {
-              label: t("lighting.white"),
-              stroke: SERIES[0],
+            ...CHANNEL_KEYS.map((key) => ({
+              label: labels[key],
+              stroke: CHANNEL_COLORS[key],
               width: LINE_WIDTH,
               points: { show: false },
-            },
-            {
-              label: t("lighting.rgb"),
-              stroke: SERIES[1],
-              width: LINE_WIDTH,
-              points: { show: false },
-            },
+            })),
           ],
           hooks: { draw: [nowMarker(nowMinute)] },
         },
         data: [
           minutes,
-          schedule.white_pct,
-          schedule.rgb_pct,
+          ...CHANNEL_KEYS.map((key) => schedule[key]),
         ] as uPlot.AlignedData,
       };
     },

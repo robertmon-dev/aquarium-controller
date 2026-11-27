@@ -24,6 +24,8 @@ export type ApiPath =
   | "/api/heaters/settings"
   | `/api/heaters/${HeaterId}/override`
   | "/api/lighting/override"
+  | "/api/lighting/palette"
+  | "/api/sump-light"
   | `/api/lighting/schedule/${number}`;
 
 export const EVENTS_PATH = "/api/events";

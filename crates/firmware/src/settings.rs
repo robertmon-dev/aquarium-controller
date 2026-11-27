@@ -46,6 +46,7 @@ pub struct ComponentSettings {
     pub flood: ComponentMode,
     pub reservoir: ComponentMode,
     pub lighting: ComponentMode,
+    pub sump_light: ComponentMode,
     pub health: ComponentMode,
 }
 
@@ -168,6 +169,7 @@ impl Settings {
                 flood: ComponentMode::Off,
                 reservoir: ComponentMode::Off,
                 lighting: ComponentMode::Off,
+                sump_light: ComponentMode::Off,
                 health: ComponentMode::Running,
             },
             wifi: WifiSettings {
@@ -238,7 +240,7 @@ impl Settings {
                 defaults: ReservoirSettings::DEFAULT,
             },
             lighting: LightingSettings {
-                pwm_freq_hz: 5_000,
+                pwm_freq_hz: 1_000,
                 update_interval: Duration::from_secs(30),
             },
             pumps: PumpControlSettings {

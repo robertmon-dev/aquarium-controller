@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HistorySeries } from "@/history/csv";
 import { axisTickFormat, latestValue, plotSeries } from "./chart-series";
-import { REFERENCE, SERIES } from "./chart-tokens";
+import { CHANNEL_COLORS, REFERENCE, SERIES } from "./chart-tokens";
 
 function series(field: string, points: [number, number][] = []): HistorySeries {
   return {
@@ -25,6 +25,22 @@ describe("plotSeries", () => {
     expect(plotted[0]).toMatchObject({ color: REFERENCE, isReference: true });
     expect(plotted[1]?.color).toBe(SERIES[0]);
     expect(plotted[2]?.color).toBe(SERIES[1]);
+  });
+
+  it("colours lighting channels by the channel they plot", () => {
+    const plotted = plotSeries([
+      "red_pct",
+      "green_pct",
+      "blue_pct",
+      "white_pct",
+    ]);
+
+    expect(plotted.map((one) => one.color)).toEqual([
+      CHANNEL_COLORS.red_pct,
+      CHANNEL_COLORS.green_pct,
+      CHANNEL_COLORS.blue_pct,
+      CHANNEL_COLORS.white_pct,
+    ]);
   });
 });
 

@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 use crate::ports::inbound::{
     CalibrationControl, HeaterControl, LightingControl, ProbeVoltageQuery, PumpControl,
-    ReservoirControl, TelemetryQuery,
+    ReservoirControl, SumpLightControl, TelemetryQuery,
 };
 
 const HTTP_BUFFER_BYTES: usize = 2048;
@@ -28,7 +28,7 @@ pub struct HttpConfig {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run<Q, L, C, H, P, R>(
+pub async fn run<Q, L, C, H, P, R, S>(
     listener: TcpListener,
     telemetry: Arc<Q>,
     lighting: Arc<L>,
@@ -36,6 +36,7 @@ pub async fn run<Q, L, C, H, P, R>(
     heaters: Arc<H>,
     pumps: Arc<P>,
     reservoir: Arc<R>,
+    sump_light: Arc<S>,
     config: HttpConfig,
 ) -> !
 where
@@ -45,6 +46,7 @@ where
     H: HeaterControl + 'static,
     P: PumpControl + 'static,
     R: ReservoirControl + 'static,
+    S: SumpLightControl + 'static,
 {
     let router: &'static _ = Box::leak(Box::new(routes::router(
         routes::AppState {
@@ -54,6 +56,7 @@ where
             heaters,
             pumps,
             reservoir,
+            sump_light,
         },
         config.token,
         config.sse_keepalive,

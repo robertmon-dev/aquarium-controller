@@ -2,39 +2,114 @@ use serde::{Deserialize, Serialize};
 
 use super::metrics::{LightingMetricsDto, LightingProfile, LightingScheduleDto};
 
-pub const DAYLIGHT_WHITE_PCT: u8 = 60;
-pub const DAYLIGHT_RGB_PCT: u8 = 40;
-
-pub const MOONLIGHT_WHITE_PCT: u8 = 0;
-pub const MOONLIGHT_RGB_PCT: u8 = 5;
-
 pub const MAX_CHANNEL_PCT: u8 = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+const RAMP_MINUTES: u16 = 60;
+const HALF_RAMP_MINUTES: u16 = RAMP_MINUTES / 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-export", ts(export))]
 pub struct ChannelLevels {
+    pub red_pct: u8,
+    pub green_pct: u8,
+    pub blue_pct: u8,
     pub white_pct: u8,
-    pub rgb_pct: u8,
 }
 
 impl ChannelLevels {
-    pub const fn new(white_pct: u8, rgb_pct: u8) -> Self {
-        Self { white_pct, rgb_pct }
+    pub const OFF: Self = Self::new(0, 0, 0, 0);
+
+    pub const fn new(red_pct: u8, green_pct: u8, blue_pct: u8, white_pct: u8) -> Self {
+        Self {
+            red_pct,
+            green_pct,
+            blue_pct,
+            white_pct,
+        }
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.white_pct > MAX_CHANNEL_PCT || self.rgb_pct > MAX_CHANNEL_PCT {
+        let channels = [self.red_pct, self.green_pct, self.blue_pct, self.white_pct];
+
+        if channels.iter().any(|&pct| pct > MAX_CHANNEL_PCT) {
             return Err("channel level out of range");
         }
 
         Ok(())
     }
 
-    pub const fn from_metrics(metrics: &LightingMetricsDto) -> Self {
-        Self {
-            white_pct: metrics.channel_white_pct,
-            rgb_pct: metrics.channel_rgb_pct,
+    pub fn lerp(from: Self, to: Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let mix =
+            |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * progress).round() as u8;
+
+        Self::new(
+            mix(from.red_pct, to.red_pct),
+            mix(from.green_pct, to.green_pct),
+            mix(from.blue_pct, to.blue_pct),
+            mix(from.white_pct, to.white_pct),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct LightingPalette {
+    pub sunrise: ChannelLevels,
+    pub daylight: ChannelLevels,
+    pub sunset: ChannelLevels,
+    pub moonlight: ChannelLevels,
+}
+
+impl LightingPalette {
+    pub const DEFAULT: Self = Self {
+        sunrise: ChannelLevels::new(40, 15, 0, 20),
+        daylight: ChannelLevels::new(10, 10, 25, 60),
+        sunset: ChannelLevels::new(45, 10, 5, 15),
+        moonlight: ChannelLevels::new(4, 0, 10, 0),
+    };
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        for levels in [self.sunrise, self.daylight, self.sunset, self.moonlight] {
+            levels.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for LightingPalette {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-export", ts(export))]
+pub struct LightingPalettePatch {
+    #[serde(default)]
+    pub sunrise: Option<ChannelLevels>,
+
+    #[serde(default)]
+    pub daylight: Option<ChannelLevels>,
+
+    #[serde(default)]
+    pub sunset: Option<ChannelLevels>,
+
+    #[serde(default)]
+    pub moonlight: Option<ChannelLevels>,
+}
+
+impl LightingPalettePatch {
+    pub fn merge_onto(&self, base: LightingPalette) -> LightingPalette {
+        LightingPalette {
+            sunrise: self.sunrise.unwrap_or(base.sunrise),
+            daylight: self.daylight.unwrap_or(base.daylight),
+            sunset: self.sunset.unwrap_or(base.sunset),
+            moonlight: self.moonlight.unwrap_or(base.moonlight),
         }
     }
 }
@@ -49,9 +124,9 @@ pub enum LightingTarget {
 }
 
 impl LightingTarget {
-    pub fn levels(&self) -> ChannelLevels {
+    pub fn levels(&self, palette: &LightingPalette) -> ChannelLevels {
         match self {
-            Self::Profile(profile) => profile.static_levels(),
+            Self::Profile(profile) => profile.levels(palette),
             Self::Channels(levels) => *levels,
         }
     }
@@ -73,13 +148,13 @@ pub struct LightingOverride {
 }
 
 impl LightingProfile {
-    pub const fn static_levels(self) -> ChannelLevels {
+    pub const fn levels(self, palette: &LightingPalette) -> ChannelLevels {
         match self {
-            Self::Off => ChannelLevels::new(0, 0),
-            Self::Sunrise | Self::Daylight | Self::Sunset => {
-                ChannelLevels::new(DAYLIGHT_WHITE_PCT, DAYLIGHT_RGB_PCT)
-            }
-            Self::Moonlight => ChannelLevels::new(MOONLIGHT_WHITE_PCT, MOONLIGHT_RGB_PCT),
+            Self::Off => ChannelLevels::OFF,
+            Self::Sunrise => palette.sunrise,
+            Self::Daylight => palette.daylight,
+            Self::Sunset => palette.sunset,
+            Self::Moonlight => palette.moonlight,
         }
     }
 }
@@ -109,52 +184,52 @@ impl LightingSchedule {
         }
     }
 
-    pub fn evaluate(&self, current_minute: u16, current_month: u8) -> LightingMetricsDto {
-        let current_minute = current_minute % 1440;
-        let (sunrise_min, sunset_min) = Self::get_solar_bounds(current_month);
+    pub fn evaluate(
+        &self,
+        current_minute: u16,
+        current_month: u8,
+        palette: &LightingPalette,
+    ) -> LightingMetricsDto {
+        let minute = current_minute % 1440;
+        let (sunrise, sunset) = Self::get_solar_bounds(current_month);
+        let daylight_start = sunrise + RAMP_MINUTES;
+        let sunset_start = sunset.saturating_sub(RAMP_MINUTES);
 
-        let daylight_start_min = sunrise_min + 60;
-        let sunset_start_min = sunset_min.saturating_sub(60);
-        let night_start_min = sunset_min;
-
-        if current_minute < sunrise_min || current_minute >= night_start_min {
-            LightingMetricsDto {
-                profile: LightingProfile::Off,
-                channel_white_pct: 0,
-                channel_rgb_pct: 0,
-                override_active: false,
-            }
-        } else if current_minute >= sunrise_min && current_minute < daylight_start_min {
-            let elapsed = current_minute - sunrise_min;
-            let progress = (elapsed as f32 / 60.0).clamp(0.0, 1.0);
-
-            LightingMetricsDto {
-                profile: LightingProfile::Sunrise,
-                channel_white_pct: (progress * DAYLIGHT_WHITE_PCT as f32) as u8,
-                channel_rgb_pct: (progress * DAYLIGHT_RGB_PCT as f32) as u8,
-                override_active: false,
-            }
-        } else if current_minute >= daylight_start_min && current_minute < sunset_start_min {
-            LightingMetricsDto {
-                profile: LightingProfile::Daylight,
-                channel_white_pct: DAYLIGHT_WHITE_PCT,
-                channel_rgb_pct: DAYLIGHT_RGB_PCT,
-                override_active: false,
-            }
+        let (profile, channels) = if minute < sunrise || minute >= sunset {
+            (LightingProfile::Off, ChannelLevels::OFF)
+        } else if minute < daylight_start {
+            (
+                LightingProfile::Sunrise,
+                ramp(
+                    minute - sunrise,
+                    ChannelLevels::OFF,
+                    palette.sunrise,
+                    palette.daylight,
+                ),
+            )
+        } else if minute < sunset_start {
+            (LightingProfile::Daylight, palette.daylight)
         } else {
-            let elapsed = current_minute - sunset_start_min;
-            let progress = 1.0 - (elapsed as f32 / 60.0).clamp(0.0, 1.0);
+            (
+                LightingProfile::Sunset,
+                ramp(
+                    minute - sunset_start,
+                    palette.daylight,
+                    palette.sunset,
+                    ChannelLevels::OFF,
+                ),
+            )
+        };
 
-            LightingMetricsDto {
-                profile: LightingProfile::Sunset,
-                channel_white_pct: (progress * DAYLIGHT_WHITE_PCT as f32) as u8,
-                channel_rgb_pct: (progress * DAYLIGHT_RGB_PCT as f32) as u8,
-                override_active: false,
-            }
-        }
+        LightingMetricsDto::scheduled(profile, channels)
     }
 
-    pub fn try_preview(&self, month: u8, step_minutes: u16) -> Option<LightingScheduleDto> {
+    pub fn try_preview(
+        &self,
+        month: u8,
+        step_minutes: u16,
+        palette: &LightingPalette,
+    ) -> Option<LightingScheduleDto> {
         if !(1..=12).contains(&month) {
             return None;
         }
@@ -164,54 +239,73 @@ impl LightingSchedule {
         }
 
         let samples = (1440 / step_minutes) as usize;
-        let mut white_pct = Vec::with_capacity(samples);
-        let mut rgb_pct = Vec::with_capacity(samples);
-
-        for index in 0..samples {
-            let minute = index as u16 * step_minutes;
-            let point = self.evaluate(minute, month);
-            white_pct.push(point.channel_white_pct);
-            rgb_pct.push(point.channel_rgb_pct);
-        }
-
-        Some(LightingScheduleDto {
+        let mut preview = LightingScheduleDto {
             month,
             step_minutes,
-            white_pct,
-            rgb_pct,
-        })
-    }
+            red_pct: Vec::with_capacity(samples),
+            green_pct: Vec::with_capacity(samples),
+            blue_pct: Vec::with_capacity(samples),
+            white_pct: Vec::with_capacity(samples),
+        };
 
-    pub fn preview(&self, month: u8, step_minutes: u16) -> LightingScheduleDto {
-        self.try_preview(month, step_minutes)
-            .expect("caller passed a valid month and step")
-    }
-}
+        for index in 0..samples {
+            let channels = self
+                .evaluate(index as u16 * step_minutes, month, palette)
+                .channels;
+            preview.red_pct.push(channels.red_pct);
+            preview.green_pct.push(channels.green_pct);
+            preview.blue_pct.push(channels.blue_pct);
+            preview.white_pct.push(channels.white_pct);
+        }
 
-pub fn resolve(
-    scheduled: LightingMetricsDto,
-    over: Option<&LightingOverride>,
-) -> LightingMetricsDto {
-    let Some(over) = over else {
-        return scheduled;
-    };
-
-    let levels = over.target.levels();
-
-    LightingMetricsDto {
-        profile: match over.target {
-            LightingTarget::Profile(profile) => profile,
-            LightingTarget::Channels(_) => scheduled.profile,
-        },
-        channel_white_pct: levels.white_pct,
-        channel_rgb_pct: levels.rgb_pct,
-        override_active: true,
+        Some(preview)
     }
 }
 
 impl Default for LightingSchedule {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn ramp(
+    elapsed: u16,
+    start: ChannelLevels,
+    middle: ChannelLevels,
+    end: ChannelLevels,
+) -> ChannelLevels {
+    if elapsed < HALF_RAMP_MINUTES {
+        ChannelLevels::lerp(
+            start,
+            middle,
+            f32::from(elapsed) / f32::from(HALF_RAMP_MINUTES),
+        )
+    } else {
+        ChannelLevels::lerp(
+            middle,
+            end,
+            f32::from(elapsed - HALF_RAMP_MINUTES) / f32::from(HALF_RAMP_MINUTES),
+        )
+    }
+}
+
+pub fn resolve(
+    scheduled: LightingMetricsDto,
+    over: Option<&LightingOverride>,
+    palette: &LightingPalette,
+) -> LightingMetricsDto {
+    let Some(over) = over else {
+        return scheduled;
+    };
+
+    LightingMetricsDto {
+        profile: match over.target {
+            LightingTarget::Profile(profile) => profile,
+            LightingTarget::Channels(_) => scheduled.profile,
+        },
+        channels: over.target.levels(palette),
+        override_active: true,
+        available: true,
     }
 }
 
