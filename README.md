@@ -177,9 +177,9 @@ GND    ────────────────────────�
 ```
 
 Notes:
-* Both channels share LEDC `TIMER0` at 5 kHz with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
+* Both channels share LEDC `TIMER0` at 5 kHz (`lighting.pwm_freq_hz`) with 12-bit resolution; white uses `CHANNEL0`, RGB `CHANNEL1`. A percentage maps to a duty cycle rounded to the nearest step, values above 100 % are clamped.
 * Both outputs are driven to 0 % as soon as the firmware initialises them (`components.lighting` not `Off`). Before that the GPIOs float; fit a pull-down on each gate input if the module does not carry one.
-* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s, immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
+* With `components.lighting` set to `Running`, the lighting loop resolves the schedule and the active override every 30 s (`lighting.update_interval`), immediately after an override is set or cleared over the API, and right after a timed override expires. It writes the outputs only when the levels change; a refused write is logged and retried on the next pass. Without a synchronised clock the schedule resolves to `off`.
 * The supplied profile leaves `components.lighting` `Off`.
 
 ### Floor flood probes
