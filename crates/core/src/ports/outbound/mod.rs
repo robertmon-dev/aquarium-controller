@@ -7,6 +7,7 @@ pub mod ph;
 pub mod probe;
 pub mod pump;
 pub mod reservoir;
+pub mod sump_light;
 pub mod system_health;
 pub mod tds;
 pub mod telemetry;
@@ -25,6 +26,7 @@ pub use reservoir::{
     LeakSource, ReservoirOutputs, ReservoirRecord, ReservoirStatusSource, ReservoirStore,
     WaterChangeActivity,
 };
+pub use sump_light::{SumpLightOutputs, SumpLightStatusSource};
 pub use system_health::SystemHealthProvider;
 pub use tds::TdsReader;
 pub use telemetry::{
