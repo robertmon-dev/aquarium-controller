@@ -153,3 +153,58 @@ async fn a_refused_write_is_retried_every_five_seconds() {
         })
         .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_new_request_replaces_the_timer() {
+    LocalSet::new()
+        .run_until(async {
+            let service = Arc::new(SumpLightService::new());
+            let pin = Pin::default();
+            spawn(&service, &pin, &Arc::new(Notify::new()));
+            settle().await;
+
+            service.set(true, Some(1800)).unwrap();
+            settle().await;
+            let status = service.set(true, None).unwrap();
+            assert_eq!(status.expires_in_s, None);
+            settle().await;
+
+            tokio::time::sleep(Duration::from_secs(1800)).await;
+            settle().await;
+
+            assert_eq!(pin.writes(), vec![false, true]);
+            assert!(service.status().on);
+
+            service.set(true, Some(1800)).unwrap();
+            settle().await;
+            let status = service.set(false, None).unwrap();
+            assert_eq!(status.expires_in_s, None);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn retiming_republishes() {
+    LocalSet::new()
+        .run_until(async {
+            let service = Arc::new(SumpLightService::new());
+            let pin = Pin::default();
+            let republish = Arc::new(Notify::new());
+            spawn(&service, &pin, &republish);
+            service.set(true, None).unwrap();
+            settle().await;
+            assert!(service.status().on);
+            while tokio::time::timeout(Duration::from_millis(1), republish.notified())
+                .await
+                .is_ok()
+            {}
+
+            service.set(true, Some(600)).unwrap();
+            settle().await;
+
+            tokio::time::timeout(Duration::from_millis(1), republish.notified())
+                .await
+                .expect("the new expiry is republished");
+        })
+        .await;
+}

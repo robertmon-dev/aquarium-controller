@@ -50,7 +50,7 @@ pub async fn lighting_loop<C, O, P>(
 
         let wake_at = active
             .and_then(|over| over.expires_in_s)
-            .map(|secs| Instant::now() + Duration::from_secs(u64::from(secs) + 1));
+            .map(|secs| Instant::now() + Duration::from_secs(u64::from(secs)));
 
         tokio::select! {
             biased;

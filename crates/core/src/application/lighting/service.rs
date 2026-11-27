@@ -69,7 +69,7 @@ fn live(over: Option<StoredOverride>, now: Instant) -> Option<LightingOverride> 
     let expires_in_s = match stored.expires_at {
         None => None,
         Some(at) if now >= at => return None,
-        Some(at) => Some(at.saturating_duration_since(now).as_secs() as u32),
+        Some(at) => Some(at.saturating_duration_since(now).as_millis().div_ceil(1000) as u32),
     };
 
     Some(LightingOverride {

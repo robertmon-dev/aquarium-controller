@@ -168,6 +168,21 @@ async fn a_timed_override_expires() {
     assert!(service.current_override().is_none());
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_remaining_override_time_rounds_up() {
+    let service = service();
+    service.set_override(LightingTarget::Profile(LightingProfile::Off), Some(10));
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    assert_eq!(
+        service
+            .current_override()
+            .and_then(|over| over.expires_in_s),
+        Some(10)
+    );
+}
+
 async fn settle() {
     for _ in 0..10 {
         tokio::task::yield_now().await;
@@ -275,7 +290,7 @@ async fn a_timed_override_ends_on_time() {
 
             service.set_override(LightingTarget::Channels(MOON), Some(5));
             settle().await;
-            tokio::time::sleep(Duration::from_secs(7)).await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
             settle().await;
 
             assert_eq!(
