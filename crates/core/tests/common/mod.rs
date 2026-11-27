@@ -14,13 +14,14 @@ use tokio::task::JoinHandle;
 
 use aquarium_core::adapters::inbound::http::{self, HttpConfig};
 use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore, VolatileHeaterStore,
+    InMemoryTelemetryStore, VolatileCalibrationStore, VolatileHeaterStore, VolatileLightingStore,
     VolatilePumpStore,
 };
-use aquarium_core::application::{CalibrationService, HeaterService, PumpService};
+use aquarium_core::application::{CalibrationService, HeaterService, LightingService, PumpService};
 use aquarium_core::domain::calibration::{Calibration, PhCalibration};
 use aquarium_core::domain::cron::CivilTime;
 use aquarium_core::domain::heater::{HeaterSettings, ZoneSettings};
+use aquarium_core::domain::lighting::LightingPalette;
 use aquarium_core::domain::pump::PumpSettings;
 use aquarium_core::ports::inbound::PumpControl;
 use aquarium_core::ports::outbound::Clock;
@@ -52,13 +53,22 @@ pub fn calibration_defaults() -> Calibration {
     }
 }
 
+pub type TestLighting = LightingService<VolatileLightingStore>;
+
+pub fn lighting() -> Arc<TestLighting> {
+    Arc::new(LightingService::new(
+        LightingPalette::DEFAULT,
+        VolatileLightingStore::default(),
+    ))
+}
+
 pub async fn start(store: Arc<InMemoryTelemetryStore>) -> SocketAddr {
-    start_with_lighting(store, Arc::new(InMemoryLightingStore::new())).await
+    start_with_lighting(store, lighting()).await
 }
 
 pub async fn start_with_lighting(
     store: Arc<InMemoryTelemetryStore>,
-    lighting: Arc<InMemoryLightingStore>,
+    lighting: Arc<TestLighting>,
 ) -> SocketAddr {
     let calibration = Arc::new(CalibrationService::new(
         calibration_defaults(),
@@ -128,7 +138,7 @@ pub fn pumps() -> Arc<TestPumps> {
 pub async fn start_with_pumps(pumps: Arc<TestPumps>) -> SocketAddr {
     start_with_all(
         Arc::new(InMemoryTelemetryStore::new()),
-        Arc::new(InMemoryLightingStore::new()),
+        lighting(),
         Arc::new(CalibrationService::new(
             calibration_defaults(),
             VolatileCalibrationStore,
@@ -141,7 +151,7 @@ pub async fn start_with_pumps(pumps: Arc<TestPumps>) -> SocketAddr {
 
 pub async fn start_with_calibration(
     store: Arc<InMemoryTelemetryStore>,
-    lighting: Arc<InMemoryLightingStore>,
+    lighting: Arc<TestLighting>,
     calibration: Arc<TestCalibration>,
 ) -> SocketAddr {
     start_with_all(store, lighting, calibration, heaters(), pumps()).await
@@ -150,7 +160,7 @@ pub async fn start_with_calibration(
 pub async fn start_with_heaters(heaters: Arc<TestHeaters>) -> SocketAddr {
     start_with_all(
         Arc::new(InMemoryTelemetryStore::new()),
-        Arc::new(InMemoryLightingStore::new()),
+        lighting(),
         Arc::new(CalibrationService::new(
             calibration_defaults(),
             VolatileCalibrationStore,
@@ -163,7 +173,7 @@ pub async fn start_with_heaters(heaters: Arc<TestHeaters>) -> SocketAddr {
 
 pub async fn start_with_all(
     store: Arc<InMemoryTelemetryStore>,
-    lighting: Arc<InMemoryLightingStore>,
+    lighting: Arc<TestLighting>,
     calibration: Arc<TestCalibration>,
     heaters: Arc<TestHeaters>,
     pumps: Arc<TestPumps>,
@@ -199,7 +209,7 @@ pub async fn serve_pump_control<P: PumpControl + 'static>(
         http::run(
             listener,
             Arc::new(InMemoryTelemetryStore::new()),
-            Arc::new(InMemoryLightingStore::new()),
+            lighting(),
             Arc::new(CalibrationService::new(
                 calibration_defaults(),
                 VolatileCalibrationStore,

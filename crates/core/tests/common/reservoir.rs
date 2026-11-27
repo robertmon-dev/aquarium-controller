@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 use aquarium_core::adapters::inbound::http;
 use aquarium_core::adapters::outbound::memory::{
-    InMemoryLightingStore, InMemoryTelemetryStore, VolatileCalibrationStore, VolatileReservoirStore,
+    InMemoryTelemetryStore, VolatileCalibrationStore, VolatileReservoirStore,
 };
 use aquarium_core::application::reservoir::Observation;
 use aquarium_core::application::{CalibrationService, ReservoirService, ReservoirTiming};
@@ -17,7 +17,7 @@ use aquarium_core::domain::reservoir::{ReservoirConditions, ReservoirSettings};
 use aquarium_core::ports::inbound::ReservoirControl;
 use aquarium_core::ports::outbound::{Clock, ReservoirRecord, ReservoirStore, TdsSample};
 
-use super::{body, calibration_defaults, config, heaters, pumps, raw, FixedClock, TOKEN};
+use super::{body, calibration_defaults, config, heaters, lighting, pumps, raw, FixedClock, TOKEN};
 
 pub type TestReservoir = ReservoirService<VolatileReservoirStore, FixedClock>;
 
@@ -90,7 +90,7 @@ pub async fn start_with_reservoir<R: ReservoirControl + 'static>(reservoir: Arc<
     tokio::task::spawn_local(http::run(
         listener,
         Arc::new(InMemoryTelemetryStore::new()),
-        Arc::new(InMemoryLightingStore::new()),
+        lighting(),
         Arc::new(CalibrationService::new(
             calibration_defaults(),
             VolatileCalibrationStore,

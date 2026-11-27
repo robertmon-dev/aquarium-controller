@@ -16,7 +16,9 @@ pub mod water_level;
 pub use calibration::{CalibrationPersistence, CalibrationSource};
 pub use clock::Clock;
 pub use heater::{HeaterOutputs, HeaterPersistence, HeaterStatusSource};
-pub use lighting::{LightingOutputs, LightingOverrideSource};
+pub use lighting::{
+    LightingOutputs, LightingOverrideSource, LightingPersistence, LightingStatusSource,
+};
 pub use metrics_export::{ExportError, MetricsWriter};
 pub use ph::PhReader;
 pub use probe::ProbeVoltageSink;

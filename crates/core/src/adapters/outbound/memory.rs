@@ -1,17 +1,17 @@
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{watch, Notify};
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::domain::calibration::Calibration;
 use crate::domain::heater::HeaterSettings;
-use crate::domain::lighting::{LightingOverride, LightingTarget};
+use crate::domain::lighting::LightingPalette;
 use crate::domain::metrics::{ProbeVoltagesDto, TankTelemetryDto};
 use crate::domain::reservoir::ReservoirTelemetry;
 use crate::domain::water::WaterLevelSnapshot;
-use crate::ports::inbound::{LightingControl, ProbeVoltageQuery, TelemetryQuery};
+use crate::ports::inbound::{ProbeVoltageQuery, TelemetryQuery};
 use crate::ports::outbound::{
-    CalibrationPersistence, HeaterPersistence, LeakSource, LevelSample, LightingOverrideSource,
+    CalibrationPersistence, HeaterPersistence, LeakSource, LevelSample, LightingPersistence,
     ProbeVoltageSink, PumpRecord, PumpStore, ReservoirRecord, ReservoirStatusSource,
     ReservoirStore, TdsSample, TdsSampleSink, TelemetrySink, TemperatureSample,
     TemperatureSampleSink, WaterLevelSink, WaterLevelSource,
@@ -117,103 +117,6 @@ impl ProbeVoltageQuery for InMemoryTelemetryStore {
     }
 }
 
-struct StoredOverride {
-    target: LightingTarget,
-    expires_at: Option<Instant>,
-}
-
-pub struct InMemoryLightingStore {
-    state: Mutex<Option<StoredOverride>>,
-    notify: Arc<Notify>,
-}
-
-impl InMemoryLightingStore {
-    pub fn new() -> Self {
-        Self {
-            state: Mutex::new(None),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    pub fn change_signal(&self) -> Arc<Notify> {
-        Arc::clone(&self.notify)
-    }
-
-    fn read(&self) -> Option<LightingOverride> {
-        let guard = self.state.lock().expect("mutex poisoned by a panic");
-        let stored = guard.as_ref()?;
-
-        let expires_in_s = match stored.expires_at {
-            None => None,
-            Some(at) => {
-                let now = Instant::now();
-                if now >= at {
-                    return None;
-                }
-                Some(at.saturating_duration_since(now).as_secs() as u32)
-            }
-        };
-
-        Some(LightingOverride {
-            target: stored.target,
-            expires_in_s,
-        })
-    }
-}
-
-impl Default for InMemoryLightingStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LightingControl for InMemoryLightingStore {
-    fn set_override(&self, target: LightingTarget, duration_s: Option<u32>) {
-        let expires_at =
-            duration_s.map(|s| Instant::now() + std::time::Duration::from_secs(s as u64));
-
-        *self.state.lock().expect("mutex poisoned by a panic") =
-            Some(StoredOverride { target, expires_at });
-
-        self.notify.notify_one();
-    }
-
-    fn clear_override(&self) {
-        *self.state.lock().expect("mutex poisoned by a panic") = None;
-        self.notify.notify_one();
-    }
-
-    fn current_override(&self) -> Option<LightingOverride> {
-        self.read()
-    }
-}
-
-impl LightingOverrideSource for InMemoryLightingStore {
-    fn active_override(&self) -> Option<LightingOverride> {
-        self.read()
-    }
-}
-
-impl LightingControl for Arc<InMemoryLightingStore> {
-    fn set_override(&self, target: LightingTarget, duration_s: Option<u32>) {
-        self.as_ref().set_override(target, duration_s);
-    }
-
-    fn clear_override(&self) {
-        self.as_ref().clear_override();
-    }
-
-    fn current_override(&self) -> Option<LightingOverride> {
-        self.as_ref().current_override()
-    }
-}
-
-impl LightingOverrideSource for Arc<InMemoryLightingStore> {
-    fn active_override(&self) -> Option<LightingOverride> {
-        self.as_ref().active_override()
-    }
-}
-
 pub struct InMemoryWaterLevelStore {
     tx: watch::Sender<Option<LevelSample>>,
 }
@@ -283,6 +186,22 @@ impl HeaterPersistence for VolatileHeaterStore {
     }
 
     fn store(&self, _value: &HeaterSettings) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct VolatileLightingStore {
+    stored: Mutex<Option<LightingPalette>>,
+}
+
+impl LightingPersistence for VolatileLightingStore {
+    fn load(&self) -> Option<LightingPalette> {
+        *self.stored.lock().expect("lighting store mutex poisoned")
+    }
+
+    fn store(&self, value: &LightingPalette) -> Result<(), &'static str> {
+        *self.stored.lock().expect("lighting store mutex poisoned") = Some(*value);
         Ok(())
     }
 }

@@ -8,7 +8,7 @@ pub mod telemetry;
 
 pub use calibration::{CalibrationControl, CalibrationError};
 pub use heater::{HeaterControl, HeaterSettingsError};
-pub use lighting::LightingControl;
+pub use lighting::{LightingControl, LightingPaletteError};
 pub use probe::ProbeVoltageQuery;
 pub use pump::{
     CancelError, FloodResetError, OverrideError, PumpControl, PumpSettingsError, StartError,

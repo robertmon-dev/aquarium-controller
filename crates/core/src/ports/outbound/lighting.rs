@@ -1,4 +1,5 @@
-use crate::domain::lighting::{ChannelLevels, LightingOverride};
+use crate::domain::lighting::{ChannelLevels, LightingOverride, LightingPalette};
+use crate::domain::metrics::LightingMetricsDto;
 
 pub trait LightingOverrideSource {
     fn active_override(&self) -> Option<LightingOverride>;
@@ -6,4 +7,13 @@ pub trait LightingOverrideSource {
 
 pub trait LightingOutputs {
     fn set_levels(&mut self, levels: ChannelLevels) -> Result<(), &'static str>;
+}
+
+pub trait LightingPersistence {
+    fn load(&self) -> Option<LightingPalette>;
+    fn store(&self, value: &LightingPalette) -> Result<(), &'static str>;
+}
+
+pub trait LightingStatusSource {
+    fn lighting_status(&self) -> LightingMetricsDto;
 }

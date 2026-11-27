@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio::task::LocalSet;
 
-use aquarium_core::adapters::outbound::memory::{InMemoryLightingStore, InMemoryTelemetryStore};
+use aquarium_core::adapters::outbound::memory::InMemoryTelemetryStore;
 
 use common::{body, get, raw, start, start_with_lighting, OVERRIDE_PATH, TOKEN};
 
@@ -26,7 +26,7 @@ async fn setting_a_profile_override_is_reflected_in_telemetry() {
     LocalSet::new()
         .run_until(async {
             let telemetry = Arc::new(InMemoryTelemetryStore::new());
-            let lighting = Arc::new(InMemoryLightingStore::new());
+            let lighting = common::lighting();
             let addr = start_with_lighting(Arc::clone(&telemetry), Arc::clone(&lighting)).await;
 
             let set = raw(
