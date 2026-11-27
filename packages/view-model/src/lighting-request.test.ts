@@ -3,6 +3,7 @@ import {
   durationChoices,
   channelRequest,
   profileRequest,
+  sumpLightDurations,
   tickCountdown,
 } from "./lighting-request";
 import { translator } from "@aquarium/i18n";
@@ -26,27 +27,29 @@ describe("profileRequest", () => {
 });
 
 describe("channelRequest", () => {
-  it("wraps channel levels in the externally tagged target", () => {
-    expect(channelRequest({ white_pct: 20, rgb_pct: 10 }, 3600)).toEqual({
-      target: { channels: { white_pct: 20, rgb_pct: 10 } },
-      duration_s: 3600,
+  it("clamps and rounds every RGBW channel", () => {
+    expect(
+      channelRequest(
+        { red_pct: -5, green_pct: 40.6, blue_pct: 120, white_pct: 60 },
+        null,
+      ),
+    ).toEqual({
+      target: {
+        channels: { red_pct: 0, green_pct: 41, blue_pct: 100, white_pct: 60 },
+      },
+      duration_s: null,
     });
   });
+});
 
-  it("clamps levels into the range the domain accepts", () => {
-    expect(
-      channelRequest({ white_pct: 140, rgb_pct: -5 }, null).target,
-    ).toEqual({
-      channels: { white_pct: 100, rgb_pct: 0 },
-    });
-  });
-
-  it("rounds fractional slider values to integers", () => {
-    expect(
-      channelRequest({ white_pct: 59.6, rgb_pct: 40.2 }, null).target,
-    ).toEqual({
-      channels: { white_pct: 60, rgb_pct: 40 },
-    });
+describe("sumpLightDurations", () => {
+  it("offers 30 min, 1 h and no limit", () => {
+    const t = (key: string) => key;
+    expect(sumpLightDurations(t as never).map((c) => c.seconds)).toEqual([
+      1800,
+      3600,
+      null,
+    ]);
   });
 });
 

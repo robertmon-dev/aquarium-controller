@@ -51,8 +51,10 @@ export const pl: DeepString<typeof en> = {
       ph: "ph",
       ph_target: "docelowe",
       electrode_health: "zdrowie",
+      red_pct: "czerwony",
+      green_pct: "zielony",
+      blue_pct: "niebieski",
       white_pct: "biały",
-      rgb_pct: "rgb",
       flow_lph: "przepływ",
       rssi_dbm: "rssi",
       free_heap_kb: "wolna pamięć",
@@ -212,9 +214,11 @@ export const pl: DeepString<typeof en> = {
     duration: "czas trwania",
     profile: "profil",
     manualChannels: "kanały ręczne",
+    red: "czerwony",
+    green: "zielony",
+    blue: "niebieski",
     white: "biały",
-    rgb: "rgb",
-    whiteRgb: "biały / rgb",
+    channels: "R / G / B / W",
     expiresIn: "wygasa za",
     manualActive: "tryb ręczny aktywny",
     custom: "własne (ręcznie)",
@@ -224,10 +228,21 @@ export const pl: DeepString<typeof en> = {
   },
 
   durations: {
+    m30: "30 min",
     m5: "5 min",
     m15: "15 min",
     h1: "1 godz.",
     none: "bez limitu",
+  },
+
+  sumpLight: {
+    title: "światło w sumpie",
+    on: "włączone",
+    off: "wyłączone",
+    turnOn: "włącz",
+    turnOff: "wyłącz",
+    expiresIn: "wyłączy się za",
+    unavailable: "sterowanie światłem w sumpie nie działa",
   },
 
   profiles: {
@@ -300,7 +315,7 @@ export const pl: DeepString<typeof en> = {
       title: "oświetlenie",
       override: "nadpisanie",
       profile: "profil",
-      whiteRgb: "biały / rgb",
+      channels: "R / G / B / W",
     },
     system: {
       title: "system",

@@ -13,6 +13,13 @@ export const LIGHTING_PROFILES: LightingProfile[] = [
   "moonlight",
 ];
 
+export const CHANNEL_KEYS: (keyof ChannelLevels)[] = [
+  "red_pct",
+  "green_pct",
+  "blue_pct",
+  "white_pct",
+];
+
 export interface DurationChoice {
   label: string;
   seconds: number | null;
@@ -22,6 +29,14 @@ export function durationChoices(t: Translate): DurationChoice[] {
   return [
     { label: t("durations.m5"), seconds: 300 },
     { label: t("durations.m15"), seconds: 900 },
+    { label: t("durations.h1"), seconds: 3600 },
+    { label: t("durations.none"), seconds: null },
+  ];
+}
+
+export function sumpLightDurations(t: Translate): DurationChoice[] {
+  return [
+    { label: t("durations.m30"), seconds: 1800 },
     { label: t("durations.h1"), seconds: 3600 },
     { label: t("durations.none"), seconds: null },
   ];
@@ -45,8 +60,10 @@ export function channelRequest(
   return {
     target: {
       channels: {
+        red_pct: clampPct(levels.red_pct),
+        green_pct: clampPct(levels.green_pct),
+        blue_pct: clampPct(levels.blue_pct),
         white_pct: clampPct(levels.white_pct),
-        rgb_pct: clampPct(levels.rgb_pct),
       },
     },
     duration_s: duration,

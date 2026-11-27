@@ -9,7 +9,7 @@ import {
   formatLitresPerHour,
   formatMicrosiemens,
   formatPercent,
-  formatPercentPair,
+  formatChannelLevels,
   formatPh,
   formatPpm,
   formatRssi,
@@ -212,8 +212,7 @@ export function atoCard(s: TankTelemetryDto, t: Translate): CardData {
 }
 
 export function lightingCard(s: TankTelemetryDto, t: Translate): CardData {
-  const { profile, channel_white_pct, channel_rgb_pct, override_active } =
-    s.lighting;
+  const { profile, channels, override_active } = s.lighting;
 
   return {
     title: t("cards.lighting.title"),
@@ -227,8 +226,8 @@ export function lightingCard(s: TankTelemetryDto, t: Translate): CardData {
         value: translateProfile(profile, t),
       },
       {
-        label: t("cards.lighting.whiteRgb"),
-        value: formatPercentPair(channel_white_pct, channel_rgb_pct),
+        label: t("cards.lighting.channels"),
+        value: formatChannelLevels(channels),
       },
     ],
   };

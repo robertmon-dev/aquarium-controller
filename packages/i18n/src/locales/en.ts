@@ -48,8 +48,10 @@ export const en = {
       ph: "ph",
       ph_target: "target",
       electrode_health: "health",
+      red_pct: "red",
+      green_pct: "green",
+      blue_pct: "blue",
       white_pct: "white",
-      rgb_pct: "rgb",
       flow_lph: "flow",
       rssi_dbm: "rssi",
       free_heap_kb: "free heap",
@@ -210,9 +212,11 @@ export const en = {
     duration: "duration",
     profile: "profile",
     manualChannels: "manual channels",
+    red: "red",
+    green: "green",
+    blue: "blue",
     white: "white",
-    rgb: "rgb",
-    whiteRgb: "white / rgb",
+    channels: "R / G / B / W",
     expiresIn: "expires in",
     manualActive: "manual mode active",
     custom: "custom (manual)",
@@ -222,10 +226,21 @@ export const en = {
   },
 
   durations: {
+    m30: "30 min",
     m5: "5 min",
     m15: "15 min",
     h1: "1 h",
     none: "no limit",
+  },
+
+  sumpLight: {
+    title: "sump light",
+    on: "on",
+    off: "off",
+    turnOn: "turn on",
+    turnOff: "turn off",
+    expiresIn: "switches off in",
+    unavailable: "sump light control is not running",
   },
 
   profiles: {
@@ -298,7 +313,7 @@ export const en = {
       title: "lighting",
       override: "override",
       profile: "profile",
-      whiteRgb: "white / rgb",
+      channels: "R / G / B / W",
     },
     system: {
       title: "system",

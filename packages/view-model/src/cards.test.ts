@@ -44,9 +44,9 @@ const snapshot: TankTelemetryDto = {
   },
   lighting: {
     profile: "daylight",
-    channel_white_pct: 60,
-    channel_rgb_pct: 40,
+    channels: { red_pct: 10, green_pct: 10, blue_pct: 25, white_pct: 60 },
     override_active: false,
+    available: true,
   },
   water_level: {
     sump_mechanical: { wet: true, faulty: false },
@@ -235,8 +235,8 @@ describe("lightingCard", () => {
     const card = lightingCard(snapshot, t);
 
     expect(card.statusLabel).toBe("daylight");
-    expect(card.metrics.find((m) => m.label === "white / rgb")?.value).toBe(
-      "60% / 40%",
+    expect(card.metrics.find((m) => m.label === "R / G / B / W")?.value).toBe(
+      "R 10 · G 10 · B 25 · W 60 %",
     );
   });
 
@@ -373,10 +373,8 @@ describe("pumpsCard", () => {
 
     for (const supervision of ["active", "off"] as const) {
       expect(
-        pumpsCard(
-          { ...snapshot, pumps: { ...snapshot.pumps, supervision } },
-          t,
-        ).status,
+        pumpsCard({ ...snapshot, pumps: { ...snapshot.pumps, supervision } }, t)
+          .status,
       ).toBe("ok");
     }
   });
