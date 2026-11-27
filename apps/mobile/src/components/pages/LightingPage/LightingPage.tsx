@@ -28,7 +28,11 @@ function LightingContent({ transport }: { transport: Transport }) {
       style={screenStyles.page}
       contentContainerStyle={{ padding: spacing.sm, gap: spacing.sm }}
     >
-      <LightingControl transport={transport} lighting={data.lighting} />
+      <LightingControl
+        transport={transport}
+        lighting={data.lighting}
+        sumpLight={data.sump_light}
+      />
     </ScrollView>
   );
 }

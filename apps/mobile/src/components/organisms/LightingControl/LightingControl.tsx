@@ -1,8 +1,12 @@
-import type { LightingMetricsDto, Transport } from "@aquarium/api-client";
+import type {
+  LightingMetricsDto,
+  SumpLightStatus,
+  Transport,
+} from "@aquarium/api-client";
 import { spacing } from "@aquarium/theme";
 import {
+  formatChannelLevels,
   formatDuration,
-  formatPercentPair,
   useOverrideControl,
 } from "@aquarium/view-model";
 import { useEffect, useRef } from "react";
@@ -16,13 +20,16 @@ import {
 } from "@/components/molecules";
 import { useT } from "@/i18n/use-locale";
 import type { ReactNode } from "react";
+import { SumpLightToggle } from "./SumpLightToggle";
 
 export const LightingControl = ({
   transport,
   lighting,
+  sumpLight,
 }: {
   transport: Transport;
   lighting: LightingMetricsDto;
+  sumpLight: SumpLightStatus | undefined;
 }): ReactNode => {
   const t = useT();
   const control = useOverrideControl(transport, lighting);
@@ -91,11 +98,8 @@ export const LightingControl = ({
               : t(`profiles.${lighting.profile}`),
           },
           {
-            label: t("lighting.whiteRgb"),
-            value: formatPercentPair(
-              lighting.channel_white_pct,
-              lighting.channel_rgb_pct,
-            ),
+            label: t("lighting.channels"),
+            value: formatChannelLevels(lighting.channels),
           },
         ]}
       >
@@ -134,6 +138,8 @@ export const LightingControl = ({
           />
         </View>
       </MetricCard>
+
+      <SumpLightToggle transport={transport} status={sumpLight} />
     </View>
   );
 };
