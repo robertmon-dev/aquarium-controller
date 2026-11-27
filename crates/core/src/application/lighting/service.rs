@@ -9,7 +9,7 @@ use crate::domain::lighting::{
 };
 use crate::domain::metrics::LightingMetricsDto;
 use crate::ports::inbound::{LightingControl, LightingPaletteError};
-use crate::ports::outbound::{LightingOverrideSource, LightingPersistence, LightingStatusSource};
+use crate::ports::outbound::{LightingPersistence, LightingStatusSource};
 
 #[derive(Debug, Clone, Copy)]
 struct StoredOverride {
@@ -123,21 +123,9 @@ impl<P: LightingPersistence> LightingControl for LightingService<P> {
     }
 }
 
-impl<P: LightingPersistence> LightingOverrideSource for LightingService<P> {
-    fn active_override(&self) -> Option<LightingOverride> {
-        self.current_override()
-    }
-}
-
 impl<P: LightingPersistence> LightingStatusSource for LightingService<P> {
     fn lighting_status(&self) -> LightingMetricsDto {
         self.lock().status
-    }
-}
-
-impl<P: LightingPersistence> LightingOverrideSource for Arc<LightingService<P>> {
-    fn active_override(&self) -> Option<LightingOverride> {
-        self.as_ref().current_override()
     }
 }
 

@@ -8,9 +8,9 @@ use crate::adapters::outbound::memory::NoReservoir;
 use crate::domain::calibration::{Calibration, PhCalibration};
 use crate::domain::cron::CivilTime;
 use crate::domain::heater::{HeaterMode, HeaterStatus, HeatersStatus};
-use crate::domain::lighting::{ChannelLevels, LightingOverride, LightingPalette, LightingTarget};
+use crate::domain::lighting::ChannelLevels;
 use crate::domain::metrics::{
-    LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
+    LightingMetricsDto, LightingProfile, ProbeVoltagesDto, TankTelemetryDto, WaterTemperature,
 };
 use crate::domain::pump::{
     OperationKind, OperationRecord, OperationResult, OperationState, PumpsTelemetry, Supervision,
@@ -18,7 +18,7 @@ use crate::domain::pump::{
 use crate::domain::reservoir::{FillPhase, ReservoirTelemetry};
 use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 use crate::ports::outbound::{
-    CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingOverrideSource, PhReader,
+    CalibrationSource, Clock, HeaterStatusSource, LevelSample, LightingStatusSource, PhReader,
     ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
     TdsSample, TdsSampleSink, TelemetrySink, TemperatureError, TemperatureReader,
     TemperatureSample, TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
@@ -114,23 +114,20 @@ impl Clock for FakeClock {
     }
 }
 
-struct FakeOverrides(Option<LightingOverride>);
+struct FakeLighting(LightingMetricsDto);
 
-impl FakeOverrides {
-    fn none() -> Self {
-        Self(None)
+impl FakeLighting {
+    fn unavailable() -> Self {
+        Self(LightingMetricsDto::UNAVAILABLE)
     }
 
-    fn forcing(target: LightingTarget) -> Self {
-        Self(Some(LightingOverride {
-            target,
-            expires_in_s: None,
-        }))
+    fn publishing(status: LightingMetricsDto) -> Self {
+        Self(status)
     }
 }
 
-impl LightingOverrideSource for FakeOverrides {
-    fn active_override(&self) -> Option<LightingOverride> {
+impl LightingStatusSource for FakeLighting {
+    fn lighting_status(&self) -> LightingMetricsDto {
         self.0
     }
 }
@@ -375,7 +372,7 @@ type Subject<'a> = TelemetryCollector<
     FakeClock,
     FakeHealth,
     &'a RecordingSink,
-    FakeOverrides,
+    FakeLighting,
     FakeLevels,
     FakeAnalog,
     FakeCalibration,
@@ -389,18 +386,9 @@ fn collector(reader: FakeReader, clock: FakeClock, sink: &RecordingSink) -> Subj
         reader,
         clock,
         sink,
-        FakeOverrides::none(),
+        FakeLighting::unavailable(),
         FakeLevels::all_dry(),
     )
-}
-
-fn with_overrides(
-    reader: FakeReader,
-    clock: FakeClock,
-    sink: &RecordingSink,
-    overrides: FakeOverrides,
-) -> Subject<'_> {
-    build(reader, clock, sink, overrides, FakeLevels::all_dry())
 }
 
 fn with_levels(sink: &RecordingSink, levels: FakeLevels) -> Subject<'_> {
@@ -408,7 +396,7 @@ fn with_levels(sink: &RecordingSink, levels: FakeLevels) -> Subject<'_> {
         FakeReader::healthy(),
         FakeClock::synced_at_noon_in_june(),
         sink,
-        FakeOverrides::none(),
+        FakeLighting::unavailable(),
         levels,
     )
 }
@@ -417,14 +405,14 @@ fn build(
     reader: FakeReader,
     clock: FakeClock,
     sink: &RecordingSink,
-    overrides: FakeOverrides,
+    lighting: FakeLighting,
     levels: FakeLevels,
 ) -> Subject<'_> {
     with_analog(
         reader,
         clock,
         sink,
-        overrides,
+        lighting,
         levels,
         FakeAnalog::nothing_attached(),
         FakeCalibration::standard(),
@@ -435,7 +423,7 @@ fn with_analog(
     reader: FakeReader,
     clock: FakeClock,
     sink: &RecordingSink,
-    overrides: FakeOverrides,
+    lighting: FakeLighting,
     levels: FakeLevels,
     analog: FakeAnalog,
     calibration: FakeCalibration,
@@ -445,7 +433,7 @@ fn with_analog(
             temperature: reader,
             clock,
             health: FakeHealth,
-            overrides,
+            lighting,
             levels,
             analog,
             calibration,
@@ -468,7 +456,7 @@ fn analog_subject(
         reader,
         FakeClock::synced_at_noon_in_june(),
         sink,
-        FakeOverrides::none(),
+        FakeLighting::unavailable(),
         FakeLevels::all_dry(),
         analog,
         calibration,
@@ -567,7 +555,7 @@ async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: OfflineHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::all_dry(),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -585,23 +573,7 @@ async fn an_unreadable_wifi_signal_is_reported_as_absent_not_zero() {
 }
 
 #[tokio::test]
-async fn evaluates_lighting_from_the_clock() {
-    let sink = RecordingSink::default();
-    collector(
-        FakeReader::healthy(),
-        FakeClock::synced_at_noon_in_june(),
-        &sink,
-    )
-    .sample()
-    .await;
-
-    let s = sink.last();
-    assert_eq!(s.lighting.profile, LightingProfile::Daylight);
-    assert_eq!(s.lighting.channels, LightingPalette::DEFAULT.daylight);
-}
-
-#[tokio::test]
-async fn unsynced_clock_reports_zero_timestamp_and_lights_off() {
+async fn unsynced_clock_reports_zero_timestamp() {
     let sink = RecordingSink::default();
     collector(FakeReader::healthy(), FakeClock::unsynced(), &sink)
         .sample()
@@ -610,8 +582,6 @@ async fn unsynced_clock_reports_zero_timestamp_and_lights_off() {
     let s = sink.last();
     assert_eq!(s.timestamp_epoch_s, 0, "0 is a sentinel, not a faked date");
     assert_eq!(s.system_health.uptime_seconds, 12, "uptime is always known");
-    assert_eq!(s.lighting.profile, LightingProfile::Off);
-    assert_eq!(s.lighting.channels.white_pct, 0);
 }
 
 #[tokio::test]
@@ -632,61 +602,6 @@ async fn out_of_safe_range_reading_is_reported_not_dropped() {
         Some(21.0),
         "an unsafe temperature MUST reach telemetry"
     );
-}
-
-#[tokio::test]
-async fn an_override_beats_the_schedule() {
-    let sink = RecordingSink::default();
-    with_overrides(
-        FakeReader::healthy(),
-        FakeClock::synced_at_noon_in_june(),
-        &sink,
-        FakeOverrides::forcing(LightingTarget::Profile(LightingProfile::Off)),
-    )
-    .sample()
-    .await;
-
-    let s = sink.last();
-    assert_eq!(
-        s.lighting.profile,
-        LightingProfile::Off,
-        "at noon the schedule wants Daylight, but the override wins"
-    );
-    assert_eq!(s.lighting.channels.white_pct, 0);
-    assert!(s.lighting.override_active);
-}
-
-#[tokio::test]
-async fn without_an_override_the_schedule_still_rules() {
-    let sink = RecordingSink::default();
-    collector(
-        FakeReader::healthy(),
-        FakeClock::synced_at_noon_in_june(),
-        &sink,
-    )
-    .sample()
-    .await;
-
-    let s = sink.last();
-    assert_eq!(s.lighting.profile, LightingProfile::Daylight);
-    assert!(!s.lighting.override_active);
-}
-
-#[tokio::test]
-async fn a_channels_override_applies_raw_levels() {
-    let sink = RecordingSink::default();
-    with_overrides(
-        FakeReader::healthy(),
-        FakeClock::synced_at_noon_in_june(),
-        &sink,
-        FakeOverrides::forcing(LightingTarget::Channels(ChannelLevels::new(0, 0, 20, 80))),
-    )
-    .sample()
-    .await;
-
-    let s = sink.last();
-    assert_eq!(s.lighting.channels, ChannelLevels::new(0, 0, 20, 80));
-    assert!(s.lighting.override_active);
 }
 
 #[tokio::test]
@@ -891,7 +806,7 @@ async fn ato_with(
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: FakeHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::wet(&[WaterLevelRole::SumpPump, WaterLevelRole::SumpReserve]),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -1456,7 +1371,7 @@ async fn the_heater_status_is_copied_into_the_snapshot() {
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: FakeHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::all_dry(),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -1495,7 +1410,7 @@ async fn the_pump_state_is_copied_into_the_snapshot() {
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: FakeHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::all_dry(),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -1575,7 +1490,7 @@ async fn telemetry_carries_the_reservoir_section() {
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: FakeHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::all_dry(),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -1614,7 +1529,7 @@ fn a_flood_republish_updates_each_zone_and_keeps_the_lock_visible_after_drying()
             temperature: FakeReader::healthy(),
             clock: FakeClock::synced_at_noon_in_june(),
             health: FakeHealth,
-            overrides: FakeOverrides::none(),
+            lighting: FakeLighting::unavailable(),
             levels: FakeLevels::all_dry(),
             analog: FakeAnalog::nothing_attached(),
             calibration: FakeCalibration::standard(),
@@ -1637,4 +1552,42 @@ fn a_flood_republish_updates_each_zone_and_keeps_the_lock_visible_after_drying()
     pumps.reset_flood().unwrap();
     collector.republish();
     assert_eq!(sink.last().system_mode, SystemMode::Normal);
+}
+
+#[tokio::test]
+async fn telemetry_reports_the_published_lighting_status() {
+    let sink = RecordingSink::default();
+    let published = LightingMetricsDto {
+        profile: LightingProfile::Moonlight,
+        channels: ChannelLevels::new(4, 0, 10, 0),
+        override_active: true,
+        available: true,
+    };
+    let mut c = build(
+        FakeReader::healthy(),
+        FakeClock::synced_at_noon_in_june(),
+        &sink,
+        FakeLighting::publishing(published),
+        FakeLevels::all_dry(),
+    );
+
+    c.sample().await;
+
+    assert_eq!(sink.last().lighting, published);
+}
+
+#[tokio::test]
+async fn lighting_is_unavailable_when_nothing_was_published() {
+    let sink = RecordingSink::default();
+    let mut c = build(
+        FakeReader::healthy(),
+        FakeClock::synced_at_noon_in_june(),
+        &sink,
+        FakeLighting::unavailable(),
+        FakeLevels::all_dry(),
+    );
+
+    c.sample().await;
+
+    assert!(!sink.last().lighting.available);
 }

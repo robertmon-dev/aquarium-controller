@@ -3,16 +3,13 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::domain::calibration::{Calibration, PhCalibration};
-use crate::domain::lighting::{self, ChannelLevels, LightingPalette, LightingSchedule};
-use crate::domain::metrics::{
-    LightingMetricsDto, LightingProfile, TankTelemetryDto, WaterLevelMetricsDto,
-};
+use crate::domain::metrics::{TankTelemetryDto, WaterLevelMetricsDto};
 use crate::domain::pump::{LevelConditions, OperationKind};
 use crate::ports::outbound::{
-    CalibrationSource, Clock, HeaterStatusSource, LightingOverrideSource, PhReader,
-    ProbeVoltageSink, PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader,
-    TdsSample, TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSample,
-    TemperatureSampleSink, TemperatureSensorRole, WaterLevelSource,
+    CalibrationSource, Clock, HeaterStatusSource, LightingStatusSource, PhReader, ProbeVoltageSink,
+    PumpStatusSource, ReservoirStatusSource, SystemHealthProvider, TdsReader, TdsSample,
+    TdsSampleSink, TelemetrySink, TemperatureReader, TemperatureSample, TemperatureSampleSink,
+    TemperatureSensorRole, WaterLevelSource,
 };
 use crate::protocol::{ph, tds};
 
@@ -20,7 +17,7 @@ pub struct TelemetrySources<R, C, H, O, W, A, K, T, P, V> {
     pub temperature: R,
     pub clock: C,
     pub health: H,
-    pub overrides: O,
+    pub lighting: O,
     pub levels: W,
     pub analog: A,
     pub calibration: K,
@@ -47,7 +44,6 @@ struct Readings {
 pub struct TelemetryCollector<R, C, H, S, O, W, A, K, T, P, V> {
     sources: TelemetrySources<R, C, H, O, W, A, K, T, P, V>,
     sink: S,
-    lighting: LightingSchedule,
     config: TelemetryConfig,
     last: Readings,
 }
@@ -58,7 +54,7 @@ where
     C: Clock,
     H: SystemHealthProvider,
     S: TelemetrySink + ProbeVoltageSink + TemperatureSampleSink + TdsSampleSink,
-    O: LightingOverrideSource,
+    O: LightingStatusSource,
     W: WaterLevelSource,
     A: PhReader + TdsReader,
     K: CalibrationSource,
@@ -74,7 +70,6 @@ where
         Self {
             sources,
             sink,
-            lighting: LightingSchedule::new(),
             config,
             last: Readings::default(),
         }
@@ -181,7 +176,7 @@ where
             dto.tds.ec_us_cm = Some(reading.ec_us_cm);
         }
 
-        dto.lighting = self.evaluate_lighting();
+        dto.lighting = self.sources.lighting.lighting_status();
         let now = Instant::now();
         let levels = self.sources.levels.levels().filter(|sample| {
             now.saturating_duration_since(sample.measured_at) < self.config.level_stale
@@ -244,25 +239,6 @@ where
         }
 
         Some(cal.volts_per_ph() / self.config.ph_nominal_volts_per_ph)
-    }
-
-    fn evaluate_lighting(&self) -> LightingMetricsDto {
-        let scheduled = match (
-            self.sources.clock.local_minute_of_day(),
-            self.sources.clock.local_month(),
-        ) {
-            (Some(minute), Some(month)) => {
-                self.lighting
-                    .evaluate(minute, month, &LightingPalette::DEFAULT)
-            }
-            _ => LightingMetricsDto::scheduled(LightingProfile::Off, ChannelLevels::OFF),
-        };
-
-        lighting::resolve(
-            scheduled,
-            self.sources.overrides.active_override().as_ref(),
-            &LightingPalette::DEFAULT,
-        )
     }
 }
 
