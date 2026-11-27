@@ -7,13 +7,19 @@ use crate::domain::water::{WaterLevelRole, WaterLevelSnapshot, WaterLevelState};
 struct FakePins {
     levels: Rc<RefCell<[bool; WaterLevelRole::COUNT]>>,
     reads: Rc<RefCell<usize>>,
+    failing: Rc<RefCell<bool>>,
 }
 
 impl WaterLevelPins for FakePins {
-    fn read_raw(&mut self) -> [(WaterLevelRole, bool); WaterLevelRole::COUNT] {
+    fn read_raw(
+        &mut self,
+    ) -> Result<[(WaterLevelRole, bool); WaterLevelRole::COUNT], &'static str> {
         *self.reads.borrow_mut() += 1;
+        if *self.failing.borrow() {
+            return Err("bus down");
+        }
         let levels = *self.levels.borrow();
-        WaterLevelRole::ALL.map(|role| (role, levels[role.index()]))
+        Ok(WaterLevelRole::ALL.map(|role| (role, levels[role.index()])))
     }
 }
 
@@ -43,6 +49,7 @@ const DEBOUNCE_THREE: FilterConfig = FilterConfig {
 struct Harness {
     levels: Rc<RefCell<[bool; WaterLevelRole::COUNT]>>,
     reads: Rc<RefCell<usize>>,
+    failing: Rc<RefCell<bool>>,
 }
 
 impl Harness {
@@ -50,6 +57,7 @@ impl Harness {
         Self {
             levels: Rc::new(RefCell::new([false; WaterLevelRole::COUNT])),
             reads: Rc::new(RefCell::new(0)),
+            failing: Rc::new(RefCell::new(false)),
         }
     }
 
@@ -57,11 +65,16 @@ impl Harness {
         FakePins {
             levels: Rc::clone(&self.levels),
             reads: Rc::clone(&self.reads),
+            failing: Rc::clone(&self.failing),
         }
     }
 
     fn set(&self, role: WaterLevelRole, high: bool) {
         self.levels.borrow_mut()[role.index()] = high;
+    }
+
+    fn fail(&self, failing: bool) {
+        *self.failing.borrow_mut() = failing;
     }
 }
 
@@ -255,4 +268,55 @@ fn an_implausible_pair_is_published_faulty() {
     assert!(snapshot.get(WaterLevelRole::SumpReturnLevel).faulty);
     assert!(snapshot.get(WaterLevelRole::SumpPump).faulty);
     assert!(!snapshot.get(WaterLevelRole::MainTank).faulty);
+}
+
+#[test]
+fn a_failed_read_publishes_nothing() {
+    let harness = Harness::new();
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, IMMEDIATE);
+
+    sampler.tick();
+    harness.fail(true);
+    sampler.tick();
+    sampler.tick();
+
+    assert_eq!(
+        sink.published.borrow().len(),
+        1,
+        "a dead bus must let the last sample age out instead of refreshing it"
+    );
+
+    harness.fail(false);
+    sampler.tick();
+
+    assert_eq!(
+        sink.published.borrow().len(),
+        2,
+        "publishing resumes with the bus"
+    );
+}
+
+#[test]
+fn a_failed_read_is_not_a_sample() {
+    let harness = Harness::new();
+    let sink = RecordingSink::default();
+    let mut sampler =
+        WaterLevelSampler::new(harness.pins(), &sink, Polarity::ActiveHigh, DEBOUNCE_THREE);
+
+    sampler.tick();
+    sampler.tick();
+    harness.fail(true);
+    sampler.tick();
+    harness.fail(false);
+
+    assert!(sink.published.borrow().is_empty());
+
+    sampler.tick();
+    assert_eq!(
+        sink.published.borrow().len(),
+        1,
+        "only real readings count towards settling"
+    );
 }
