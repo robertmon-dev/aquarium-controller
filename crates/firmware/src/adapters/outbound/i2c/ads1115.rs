@@ -3,6 +3,8 @@ pub use hw::{Ads1115Bus, AnalogFrontEnd};
 
 #[cfg(target_os = "espidf")]
 mod hw {
+    use std::time::Duration;
+
     use esp_idf_hal::sys::EspError;
     use tokio::time::sleep;
 
@@ -15,6 +17,11 @@ mod hw {
     use aquarium_core::protocol::tds::TdsError;
 
     use super::super::shared::SharedI2c;
+
+    const CONFIG_OS_IDLE: u16 = 0x8000;
+
+    const READY_POLL_STEPS: u32 = 16;
+    const READY_POLL_MIN_INTERVAL: Duration = Duration::from_micros(100);
 
     pub struct Ads1115Bus<'d> {
         i2c: SharedI2c<'d>,
@@ -39,6 +46,36 @@ mod hw {
             self.i2c.write(self.address, &[REG_CONFIG, high, low])
         }
 
+        fn conversion_ready(&mut self) -> Result<bool, EspError> {
+            let mut buffer = [0_u8; 2];
+
+            self.i2c
+                .write_read(self.address, &[REG_CONFIG], &mut buffer)?;
+
+            Ok(u16::from_be_bytes(buffer) & CONFIG_OS_IDLE != 0)
+        }
+
+        async fn wait_for_conversion(&mut self) -> Result<(), &'static str> {
+            let nominal = conversion_time(self.rate);
+            let interval = (nominal / READY_POLL_STEPS).max(READY_POLL_MIN_INTERVAL);
+
+            sleep(nominal).await;
+
+            for _ in 0..=READY_POLL_STEPS {
+                let ready = self
+                    .conversion_ready()
+                    .map_err(|_| "ADS1115 did not return its status")?;
+
+                if ready {
+                    return Ok(());
+                }
+
+                sleep(interval).await;
+            }
+
+            Err("ADS1115 conversion did not complete in time")
+        }
+
         fn read_raw(&mut self) -> Result<i16, EspError> {
             let mut buffer = [0_u8; 2];
 
@@ -60,7 +97,7 @@ mod hw {
                 self.start_conversion(channel)
                     .map_err(|_| "ADS1115 did not accept the config write")?;
 
-                sleep(conversion_time(self.rate)).await;
+                self.wait_for_conversion().await?;
 
                 let raw = self
                     .read_raw()
