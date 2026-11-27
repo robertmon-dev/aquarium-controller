@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::time::{sleep, MissedTickBehavior};
 use tracing::{error, info};
 
-use crate::board::I2cBus;
+use crate::board::{analog_front_end, I2cBus};
 
 const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -28,7 +28,7 @@ pub async fn ssr_probe(outputs: &mut SsrOutputs<'_>) -> anyhow::Result<()> {
 
 pub async fn adc_probe(bus: I2cBus) -> anyhow::Result<()> {
     let i2c = bus.open()?;
-    let mut front_end = I2cBus::open_analog(i2c, Some(Channel::A1), Some(Channel::A0));
+    let mut front_end = analog_front_end(i2c, Some(Channel::A1), Some(Channel::A0));
     let mut ticker = tokio::time::interval(PROBE_INTERVAL);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 

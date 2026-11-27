@@ -20,7 +20,7 @@ use tracing::info;
 
 use self::control::{Heaters, Pumps, Reservoir};
 use self::monitoring::{health_watch, nvs_unavailable_alarm, Supervised};
-use crate::board::{Board, I2cBus};
+use crate::board::Board;
 use crate::SETTINGS;
 use aquarium_controller::adapters::outbound::flood::FloodInputs;
 use aquarium_controller::adapters::outbound::lighting::LedMosfetOutputs;
@@ -135,11 +135,7 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
     let i2c = needs_i2c.then(|| board.i2c.open()).transpose()?;
 
     let levels = Arc::new(InMemoryWaterLevelStore::new());
-    let expander = match (i2c.as_ref(), components.water_level.is_initialized()) {
-        (Some(bus), true) => Some(I2cBus::open_expander(bus.clone())?),
-        _ => None,
-    };
-    let level_loop = expander.and_then(|exp| sensors::levels(exp, Arc::clone(&levels)));
+    let level_loop = sensors::levels(i2c.as_ref(), Arc::clone(&levels))?;
 
     let calibration = sensors::calibration(nvs_partition.clone())?;
     let heaters = Heaters::load(nvs_partition.clone())?;

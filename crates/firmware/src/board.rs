@@ -134,29 +134,29 @@ impl I2cBus {
 
         Ok(SharedI2c::new(driver))
     }
+}
 
-    pub fn open_analog(
-        bus: SharedI2c<'static>,
-        ph_channel: Option<Channel>,
-        tds_channel: Option<Channel>,
-    ) -> AnalogFrontEnd<'static> {
-        let analog = &SETTINGS.sensors.analog;
+pub fn analog_front_end(
+    bus: SharedI2c<'static>,
+    ph_channel: Option<Channel>,
+    tds_channel: Option<Channel>,
+) -> AnalogFrontEnd<'static> {
+    let analog = &SETTINGS.sensors.analog;
 
-        AnalogFrontEnd::new(
-            Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
-            ph_channel,
-            tds_channel,
-            analog.samples_per_reading,
-        )
-    }
+    AnalogFrontEnd::new(
+        Ads1115Bus::new(bus, analog.address, analog.gain, analog.data_rate),
+        ph_channel,
+        tds_channel,
+        analog.samples_per_reading,
+    )
+}
 
-    pub fn open_expander(bus: SharedI2c<'static>) -> anyhow::Result<Mcp23017<'static>> {
-        Mcp23017::new(
-            bus,
-            MCP23017_ADDRESS,
-            EXPANDER_INPUT_MASK,
-            EXPANDER_PULLUP_MASK,
-        )
-        .context("Failed to initialize the MCP23017 expander")
-    }
+pub fn level_expander(bus: SharedI2c<'static>) -> anyhow::Result<Mcp23017<'static>> {
+    Mcp23017::new(
+        bus,
+        MCP23017_ADDRESS,
+        EXPANDER_INPUT_MASK,
+        EXPANDER_PULLUP_MASK,
+    )
+    .context("Failed to initialize the MCP23017 expander")
 }
