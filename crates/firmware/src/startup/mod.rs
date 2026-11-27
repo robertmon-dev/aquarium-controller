@@ -201,10 +201,15 @@ pub(super) async fn run(board: Board) -> anyhow::Result<()> {
         None
     };
 
+    let lighting_changed = if lighting_loop.is_some() {
+        lighting_republish
+    } else {
+        lighting.change_signal()
+    };
     let telemetry_loop = match (collector, components.telemetry.is_running()) {
         (Some(collector), true) => Some(sensors::sensor_task(
             collector,
-            lighting_republish,
+            lighting_changed,
             Arc::clone(&heaters.republish),
             Arc::clone(&pumps.republish),
             Arc::clone(&reservoir.republish),
