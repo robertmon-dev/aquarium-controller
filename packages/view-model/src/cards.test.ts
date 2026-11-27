@@ -252,6 +252,66 @@ describe("lightingCard", () => {
     expect(card.status).toBe("degraded");
     expect(card.statusLabel).toBe("override");
   });
+
+  it("reads as off with no channel levels while the lighting loop is not running", () => {
+    const card = lightingCard(
+      { ...snapshot, lighting: { ...snapshot.lighting, available: false } },
+      t,
+    );
+
+    expect(card.status).toBe("off");
+    expect(card.statusLabel).toBe("no data");
+    expect(card.metrics.find((m) => m.label === "R / G / B / W")?.value).toBe(
+      EM_DASH,
+    );
+    expect(card.metrics.find((m) => m.label === "profile")?.value).toBe(
+      EM_DASH,
+    );
+  });
+
+  it("shows the sump light with its remaining time while it is on", () => {
+    const card = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: true, expires_in_s: 1800, available: true },
+      },
+      t,
+    );
+
+    expect(card.metrics.find((m) => m.label === "sump light")?.value).toBe(
+      "on · 30m 00s",
+    );
+  });
+
+  it("shows the sump light as off", () => {
+    const card = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: false, expires_in_s: null, available: true },
+      },
+      t,
+    );
+
+    expect(card.metrics.find((m) => m.label === "sump light")?.value).toBe(
+      "off",
+    );
+  });
+
+  it("leaves the sump light out when it is absent or unavailable", () => {
+    const absent = lightingCard(snapshot, t);
+    const unavailable = lightingCard(
+      {
+        ...snapshot,
+        sump_light: { on: false, expires_in_s: null, available: false },
+      },
+      t,
+    );
+
+    expect(absent.metrics.some((m) => m.label === "sump light")).toBe(false);
+    expect(unavailable.metrics.some((m) => m.label === "sump light")).toBe(
+      false,
+    );
+  });
 });
 
 describe("systemCard", () => {

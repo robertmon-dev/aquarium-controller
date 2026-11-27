@@ -225,6 +225,7 @@ export const pl: DeepString<typeof en> = {
     schedulePreview: "harmonogram na 24 h",
     manualBody: "harmonogram wstrzymany — pozostało {{remaining}}",
     currentState: "stan bieżący",
+    unavailable: "sterowanie oświetleniem nie działa",
   },
 
   durations: {

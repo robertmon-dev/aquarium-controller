@@ -1,7 +1,7 @@
 import type { LightingMetricsDto } from "@aquarium/api-client";
 import { useT } from "@aquarium/i18n/use-locale";
 import { formatDuration } from "@aquarium/view-model";
-import { Meter } from "@/components/atoms";
+import { Alert, Meter } from "@/components/atoms";
 import { MetricCard } from "@/components/molecules";
 import "./LightingControl.scss";
 
@@ -25,6 +25,18 @@ export const LightingStatus = ({
     { name: t("lighting.blue"), pct: lighting.channels.blue_pct },
     { name: t("lighting.white"), pct: lighting.channels.white_pct },
   ];
+
+  if (!lighting.available) {
+    return (
+      <MetricCard
+        title={t("lighting.currentState")}
+        status="off"
+        statusLabel={t("common.noData")}
+      >
+        <Alert variant="warning">{t("lighting.unavailable")}</Alert>
+      </MetricCard>
+    );
+  }
 
   return (
     <MetricCard

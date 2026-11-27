@@ -223,6 +223,7 @@ export const en = {
     schedulePreview: "24h schedule preview",
     manualBody: "the schedule is paused — {{remaining}} left",
     currentState: "current state",
+    unavailable: "lighting control is not running",
   },
 
   durations: {
