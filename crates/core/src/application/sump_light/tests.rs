@@ -177,8 +177,16 @@ async fn a_new_request_replaces_the_timer() {
 
             service.set(true, Some(1800)).unwrap();
             settle().await;
-            let status = service.set(false, None).unwrap();
-            assert_eq!(status.expires_in_s, None);
+            service.set(false, None).unwrap();
+            settle().await;
+            let writes_before_deadline = pin.writes().len();
+
+            tokio::time::sleep(Duration::from_secs(1801)).await;
+            settle().await;
+
+            assert_eq!(pin.writes().last(), Some(&false));
+            assert!(!service.status().on);
+            assert_eq!(pin.writes().len(), writes_before_deadline);
         })
         .await;
 }
