@@ -50,9 +50,9 @@ const valid = {
   },
   lighting: {
     profile: "daylight",
-    channel_white_pct: 60,
-    channel_rgb_pct: 40,
+    channels: { red_pct: 10, green_pct: 10, blue_pct: 25, white_pct: 60 },
     override_active: false,
+    available: true,
   },
   leak_detected: false,
 };

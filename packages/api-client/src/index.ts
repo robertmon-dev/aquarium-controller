@@ -24,6 +24,8 @@ export {
   useProbeVoltages,
   useResetFlood,
   useSetLightingOverride,
+  useSetSumpLight,
+  useSumpLight,
   useTelemetry,
 } from "./queries";
 export { SseDecoder, streamTelemetry } from "./events";
