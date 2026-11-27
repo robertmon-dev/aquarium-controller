@@ -5,7 +5,7 @@ pub use hw::Mcp23017;
 mod hw {
     use std::sync::{Arc, Mutex};
 
-    use esp_idf_hal::sys::EspError;
+    use esp_idf_hal::sys::{EspError, ESP_ERR_INVALID_ARG};
 
     use super::super::shared::SharedI2c;
 
@@ -13,6 +13,8 @@ mod hw {
     const REG_GPPUA: u8 = 0x0C;
     const REG_GPIOA: u8 = 0x12;
     const REG_OLATA: u8 = 0x14;
+
+    const OUTPUT_ONLY_PINS: u16 = (1 << 7) | (1 << 15);
 
     struct Mcp23017State<'d> {
         i2c: SharedI2c<'d>,
@@ -41,6 +43,10 @@ mod hw {
             input_mask: u16,
             pullup_mask: u16,
         ) -> Result<Self, EspError> {
+            if input_mask & OUTPUT_ONLY_PINS != 0 {
+                return Err(EspError::from_infallible::<ESP_ERR_INVALID_ARG>());
+            }
+
             let [dir_a, dir_b] = input_mask.to_le_bytes();
             let [pu_a, pu_b] = pullup_mask.to_le_bytes();
 
