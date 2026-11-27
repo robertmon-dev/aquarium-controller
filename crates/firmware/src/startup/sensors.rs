@@ -23,7 +23,7 @@ use aquarium_controller::adapters::outbound::nvs_calibration::NvsCalibration;
 use aquarium_controller::adapters::outbound::temperature::TemperatureSource;
 use aquarium_controller::adapters::outbound::xkc_y25::Xkc25Adapter;
 
-use crate::board::{I2cBus, TemperaturePin};
+use crate::board::{I2cBus, TemperaturePin, LEVEL_SENSOR_PINS};
 use crate::SETTINGS;
 
 pub(super) fn temperature(pin: TemperaturePin) -> anyhow::Result<TemperatureSource<'static>> {
@@ -82,7 +82,7 @@ pub(super) fn levels(
 ) -> Option<impl Future<Output = ()>> {
     let components = &SETTINGS.components;
     let sampler = if components.water_level.is_initialized() {
-        let pins = Xkc25Adapter::new(expander, [0, 1, 2, 3, 4, 5, 6, 7]);
+        let pins = Xkc25Adapter::new(expander, LEVEL_SENSOR_PINS);
 
         Some(WaterLevelSampler::new(
             pins,
