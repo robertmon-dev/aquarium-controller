@@ -4,10 +4,10 @@ use serde::Deserialize;
 
 use crate::adapters::inbound::http::routes::LightingState;
 use crate::domain::lighting::{
-    LightingOverride, LightingPalette, LightingSchedule, LightingTarget,
+    LightingOverride, LightingPalette, LightingPalettePatch, LightingSchedule, LightingTarget,
 };
 use crate::domain::metrics::LightingScheduleDto;
-use crate::ports::inbound::LightingControl;
+use crate::ports::inbound::{LightingControl, LightingPaletteError};
 
 const PREVIEW_STEP_MINUTES: u16 = 5;
 
@@ -67,11 +67,42 @@ pub async fn clear<L: LightingControl>(
     (StatusCode::NO_CONTENT, NoContent)
 }
 
-pub async fn schedule(month: u8) -> Result<Json<LightingScheduleDto>, (StatusCode, &'static str)> {
+pub async fn schedule<L: LightingControl>(
+    month: u8,
+    State(LightingState(lighting)): State<LightingState<L>>,
+) -> Result<Json<LightingScheduleDto>, (StatusCode, &'static str)> {
     tracing::info!(month, "GET /api/lighting/schedule");
 
     LightingSchedule::new()
-        .try_preview(month, PREVIEW_STEP_MINUTES, &LightingPalette::DEFAULT)
+        .try_preview(month, PREVIEW_STEP_MINUTES, &lighting.palette())
         .map(Json)
         .ok_or((StatusCode::BAD_REQUEST, "month must be 1-12\n"))
+}
+
+pub async fn palette<L: LightingControl>(
+    State(LightingState(lighting)): State<LightingState<L>>,
+) -> Json<LightingPalette> {
+    tracing::info!("GET /api/lighting/palette");
+
+    Json(lighting.palette())
+}
+
+pub async fn patch_palette<L: LightingControl>(
+    State(LightingState(lighting)): State<LightingState<L>>,
+    Json(patch): Json<LightingPalettePatch>,
+) -> Result<Json<LightingPalette>, (StatusCode, &'static str)> {
+    match lighting.apply_palette(patch) {
+        Ok(updated) => {
+            tracing::info!("PATCH /api/lighting/palette");
+            Ok(Json(updated))
+        }
+        Err(LightingPaletteError::Invalid(reason)) => {
+            tracing::warn!(reason, "PATCH /api/lighting/palette rejected");
+            Err((StatusCode::BAD_REQUEST, reason))
+        }
+        Err(LightingPaletteError::NotPersisted(reason)) => {
+            tracing::error!(reason, "PATCH /api/lighting/palette was not stored");
+            Err((StatusCode::INTERNAL_SERVER_ERROR, reason))
+        }
+    }
 }

@@ -92,8 +92,12 @@ where
                 .delete(handlers::lighting::clear::<L>),
         )
         .route(
+            "/palette",
+            get(handlers::lighting::palette::<L>).patch(handlers::lighting::patch_palette::<L>),
+        )
+        .route(
             ("/schedule", parse_path_segment::<u8>()),
-            get(handlers::lighting::schedule),
+            get(handlers::lighting::schedule::<L>),
         )
         .layer(BoxLayer);
 
