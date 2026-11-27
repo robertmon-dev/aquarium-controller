@@ -31,6 +31,7 @@ impl State {
             on: self.applied.unwrap_or(false),
             expires_in_s: self
                 .expires_at
+                .filter(|_| self.applied == Some(true))
                 .map(|at| at.saturating_duration_since(now).as_millis().div_ceil(1000) as u32),
             available: self.applied.is_some(),
         }

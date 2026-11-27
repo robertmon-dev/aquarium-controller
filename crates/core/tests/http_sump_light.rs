@@ -39,7 +39,9 @@ async fn a_timed_on_request_is_accepted() {
             .await;
 
             assert!(response.starts_with("HTTP/1.1 200"), "got: {response}");
-            assert_eq!(json(&response)["expires_in_s"], 1800);
+            let status = json(&response);
+            assert_eq!(status["available"], false);
+            assert_eq!(status["expires_in_s"], Value::Null);
         })
         .await;
 }

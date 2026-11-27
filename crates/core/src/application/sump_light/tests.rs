@@ -55,6 +55,17 @@ fn status_is_unavailable_without_the_loop() {
 }
 
 #[test]
+fn a_timed_request_without_the_loop_reports_no_remaining_time() {
+    let service = SumpLightService::new();
+
+    let status = service.set(true, Some(1800)).unwrap();
+
+    assert!(!status.available);
+    assert!(!status.on);
+    assert_eq!(status.expires_in_s, None);
+}
+
+#[test]
 fn an_invalid_request_is_rejected() {
     let service = SumpLightService::new();
     assert!(service.set(false, Some(60)).is_err());
@@ -114,8 +125,9 @@ async fn a_timed_request_switches_off_on_time() {
             settle().await;
 
             let status = service.set(true, Some(1800)).unwrap();
-            assert_eq!(status.expires_in_s, Some(1800));
+            assert_eq!(status.expires_in_s, None, "not on yet");
             settle().await;
+            assert_eq!(service.status().expires_in_s, Some(1800));
 
             tokio::time::sleep(Duration::from_secs(1800)).await;
             settle().await;
@@ -137,12 +149,11 @@ async fn a_refused_write_is_retried_every_five_seconds() {
             settle().await;
 
             pin.fail(true);
-            service.set(true, None).unwrap();
+            service.set(true, Some(1800)).unwrap();
             settle().await;
-            assert!(
-                !service.status().on,
-                "status shows what the output really does"
-            );
+            let status = service.status();
+            assert!(!status.on, "status shows what the output really does");
+            assert_eq!(status.expires_in_s, None);
 
             pin.fail(false);
             tokio::time::sleep(Duration::from_secs(5)).await;
