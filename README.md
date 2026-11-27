@@ -559,7 +559,6 @@ Cancelling an idle or active fill returns `204`. If NVS cannot retire the marker
 │   │       └── device/          # config schema, secure storage, fetch seam, SSE hook
 │   └── web/                     # web client, served by Caddy (see docker/README.md)
 ├── docker/                      # InfluxDB + Caddy stack
-├── docs/                        # design specs and implementation plans (not committed)
 ├── Makefile                     # build, flash, monitor, test, lint, size, smoke, types
 └── package.json                 # yarn 4 workspace root
 ```
