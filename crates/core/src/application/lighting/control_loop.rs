@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Notify;
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::MissedTickBehavior;
 
 use super::super::sleep_until_some;
 use super::LightingService;
@@ -48,9 +48,7 @@ pub async fn lighting_loop<C, O, P>(
             republish.notify_one();
         }
 
-        let wake_at = active
-            .and_then(|over| over.expires_in_s)
-            .map(|secs| Instant::now() + Duration::from_secs(u64::from(secs)));
+        let wake_at = service.override_expiry();
 
         tokio::select! {
             biased;

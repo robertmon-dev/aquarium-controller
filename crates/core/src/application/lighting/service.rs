@@ -58,6 +58,15 @@ impl<P: LightingPersistence> LightingService<P> {
         changed
     }
 
+    pub fn override_expiry(&self) -> Option<Instant> {
+        let now = Instant::now();
+
+        self.lock()
+            .over
+            .and_then(|stored| stored.expires_at)
+            .filter(|&at| now < at)
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().expect("lighting mutex poisoned")
     }

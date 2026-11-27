@@ -183,6 +183,31 @@ async fn the_remaining_override_time_rounds_up() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn the_override_expiry_is_the_stored_deadline() {
+    let service = service();
+    assert_eq!(service.override_expiry(), None);
+
+    let set_at = tokio::time::Instant::now();
+    service.set_override(LightingTarget::Profile(LightingProfile::Off), Some(10));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        service.override_expiry(),
+        Some(set_at + Duration::from_secs(10))
+    );
+
+    tokio::time::sleep(Duration::from_millis(9_500)).await;
+    assert_eq!(service.override_expiry(), None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_override_without_a_duration_has_no_expiry() {
+    let service = service();
+    service.set_override(LightingTarget::Profile(LightingProfile::Off), None);
+
+    assert_eq!(service.override_expiry(), None);
+}
+
 async fn settle() {
     for _ in 0..10 {
         tokio::task::yield_now().await;
@@ -291,6 +316,37 @@ async fn a_timed_override_ends_on_time() {
             service.set_override(LightingTarget::Channels(MOON), Some(5));
             settle().await;
             tokio::time::sleep(Duration::from_secs(5)).await;
+            settle().await;
+
+            assert_eq!(
+                outputs.written().last(),
+                Some(&LightingPalette::DEFAULT.daylight)
+            );
+            assert!(!service.lighting_status().override_active);
+        })
+        .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timed_override_ends_on_time_after_a_mid_second_wake() {
+    LocalSet::new()
+        .run_until(async {
+            let service = service();
+            let outputs = RecordingOutputs::default();
+            spawn(&service, &outputs, &Arc::new(Notify::new()));
+            settle().await;
+
+            service.set_override(LightingTarget::Channels(MOON), Some(5));
+            settle().await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            service
+                .apply_palette(LightingPalettePatch {
+                    moonlight: Some(MOON),
+                    ..LightingPalettePatch::default()
+                })
+                .unwrap();
+            settle().await;
+            tokio::time::sleep(Duration::from_millis(4_500)).await;
             settle().await;
 
             assert_eq!(
